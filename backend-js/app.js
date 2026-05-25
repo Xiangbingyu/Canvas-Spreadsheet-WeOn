@@ -1,19 +1,23 @@
 const express = require('express');
 
+const healthRouter = require('./routes/health');
+const docsRouter = require('./routes/docs');
+
 const app = express();
 
 app.use(express.json());
 
 app.get('/', (req, res) => {
   res.json({
-    message: 'Express backend is running',
+    code: 0,
+    message: 'ok',
+    data: {
+      service: 'backend-js',
+    },
   });
 });
 
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-  });
-});
+app.use('/health', healthRouter);
+app.use('/docs', docsRouter);
 
 module.exports = app;
