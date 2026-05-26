@@ -80,6 +80,6 @@ export function addressToCoord(address: CellAddress): CellCoord {
     throw new Error(`Invalid cell address: ${address}`)
   }
   const col = columnIndex(match[1])
-  const row = parseInt(match[2], 1) - 1
+  const row = parseInt(match[2], 10) - 1
   return { row, col }
 }

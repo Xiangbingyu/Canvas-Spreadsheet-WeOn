@@ -2,7 +2,7 @@
 // 本文件由 Canvas 渲染同学实现，此处为框架和类型定义
 
 import type { FC, CanvasHTMLAttributes } from 'react'
-import type { CellCoord, SelectionRange, RenderConfig } from '../model/types'
+import type { CellCoord, SelectionRange, RenderConfig } from '../../spreadsheet/model/types'
 import type { InteractionCallbacks } from './interaction'
 
 export interface CanvasSpreadsheetProps {

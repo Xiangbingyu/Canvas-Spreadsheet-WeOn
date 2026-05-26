@@ -1,7 +1,7 @@
 // Interaction Engine 接口定义
 // 本模块定义 Canvas 渲染组件与交互逻辑之间的回调接口
 
-import type { CellCoord, SelectionRange } from '../model/types'
+import type { CellCoord, SelectionRange } from '../spreadsheet/model/types'
 
 // 单元格点击事件
 export interface CellClickEventArgs {
@@ -49,10 +49,28 @@ export interface CellEditCancelEventArgs {
   coord: CellCoord
 }
 
+// 输入框文字变化（用于 composition 事件）
+export interface CellInputChangeEventArgs {
+  coord: CellCoord
+  value: string
+}
+
+// 编辑完成事件（composition end 后提交）
+export interface CellEditCompleteEventArgs {
+  coord: CellCoord
+  value: string
+}
+
 // 键盘事件
 export interface KeyboardEventArgs {
   event: KeyboardEvent
   currentSelection: SelectionRange
+}
+
+// Composition 事件
+export interface CellCompositionEventArgs {
+  coord: CellCoord
+  event: CompositionEvent
 }
 
 // 选区变化事件
@@ -93,6 +111,15 @@ export interface InteractionCallbacks {
 
   // 选区变化
   onSelectionChange?: (args: SelectionChangeEventArgs) => void
+
+  // 输入框文字变化（composition 期间）
+  onCellInputChange?: (args: CellInputChangeEventArgs) => void
+
+  // Composition 开始（中文输入法开始）
+  onCellCompositionStart?: (args: CellCompositionEventArgs) => void
+
+  // Composition 结束（中文输入法完成，提交编辑）
+  onCellCompositionEnd?: (args: CellCompositionEventArgs) => void
 }
 
 // Canvas 渲染组件的 Props 接口

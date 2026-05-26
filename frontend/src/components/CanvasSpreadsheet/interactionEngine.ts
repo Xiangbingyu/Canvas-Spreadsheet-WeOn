@@ -1,7 +1,7 @@
 // Interaction Engine 实现
 // 负责处理所有编辑交互相关的逻辑
 
-import type { CellCoord, SelectionRange, RenderConfig } from '../model/types'
+import type { CellCoord, SelectionRange, RenderConfig } from '../../spreadsheet/model/types'
 import type {
   InteractionCallbacks,
   CanvasClickEventArgs,
@@ -14,6 +14,8 @@ import type {
   CellEditCancelEventArgs,
   KeyboardEventArgs,
   SelectionChangeEventArgs,
+  CellInputChangeEventArgs,
+  CellCompositionEventArgs,
 } from './interaction'
 
 // 计算单元格的像素坐标
@@ -64,12 +66,29 @@ interface InteractionEngineState {
   selectionStart?: CellCoord
 }
 
+// 仅包含回调接口，不包含 React 依赖
+interface EngineCallbacks {
+  onCellClick?: (args: CellClickEventArgs) => void
+  onCellDoubleClick?: (args: CellDoubleClickEventArgs) => void
+  onCellMouseDown?: (args: CellMouseDownEventArgs) => void
+  onCellMouseMove?: (args: CellMouseMoveEventArgs) => void
+  onCellMouseUp?: (args: CellMouseUpEventArgs) => void
+  onCanvasClick?: (args: CanvasClickEventArgs) => void
+  onCellEditSubmit?: (args: CellEditSubmitEventArgs) => void
+  onCellEditCancel?: (args: CellEditCancelEventArgs) => void
+  onKeyboard?: (args: KeyboardEventArgs) => void
+  onSelectionChange?: (args: SelectionChangeEventArgs) => void
+  onCellInputChange?: (args: CellInputChangeEventArgs) => void
+  onCellCompositionStart?: (args: CellCompositionEventArgs) => void
+  onCellCompositionEnd?: (args: CellCompositionEventArgs) => void
+}
+
 export class InteractionEngine {
   private state: InteractionEngineState
-  private callbacks: InteractionCallbacks
+  private callbacks: EngineCallbacks
   private config: Required<RenderConfig>
 
-  constructor(config: Required<RenderConfig>, callbacks: InteractionCallbacks) {
+  constructor(config: Required<RenderConfig>, callbacks: EngineCallbacks) {
     this.config = config
     this.callbacks = callbacks
     this.state = {
@@ -94,11 +113,10 @@ export class InteractionEngine {
   }
 
   // 更新选区并触发回调
-  private UpdateSelection(
+  private updateSelection(
     newSelection: SelectionRange,
     reason: SelectionChangeEventArgs['reason'] = 'mouse'
   ) {
-    const oldSelection = this.state.selection
     this.state.selection = newSelection
 
     if (this.callbacks.onSelectionChange) {
@@ -135,7 +153,7 @@ export class InteractionEngine {
       start: args.coord,
       end: args.coord,
     }
-    this.UpdateSelection(newSelection, 'mouse')
+    this.updateSelection(newSelection, 'mouse')
 
     // 触发原始回调
     if (this.callbacks.onCellClick) {
@@ -172,7 +190,7 @@ export class InteractionEngine {
         this.state.selectionStart,
         args.coord
       )
-      this.UpdateSelection(newSelection, 'mouse')
+      this.updateSelection(newSelection, 'mouse')
     }
 
     if (this.callbacks.onCellMouseMove) {
@@ -192,7 +210,7 @@ export class InteractionEngine {
         this.state.selection.start.col === this.state.selection.end.col
       ) {
         // 单击选中
-        this.UpdateSelection(
+        this.updateSelection(
           {
             start: this.state.selection.start,
             end: this.state.selection.start,
@@ -232,7 +250,7 @@ export class InteractionEngine {
             break
         }
 
-        this.UpdateSelection(
+        this.updateSelection(
           { start: selection.start, end: newEnd },
           'keyboard'
         )
@@ -254,7 +272,7 @@ export class InteractionEngine {
           start: { row: (selection.end.row + 1) % this.config.rowCount, col: selection.start.col },
           end: { row: (selection.end.row + 1) % this.config.rowCount, col: selection.end.col },
         }
-        this.UpdateSelection(newSelection, 'keyboard')
+        this.updateSelection(newSelection, 'keyboard')
       }
     }
 
@@ -278,7 +296,7 @@ export class InteractionEngine {
       const newCol = (selection.end.col + (event.shiftKey ? -1 : 1) + this.config.colCount) % this.config.colCount
       const newRow = event.shiftKey && newCol === selection.end.col ? (selection.end.row - 1 + this.config.rowCount) % this.config.rowCount : selection.end.row
 
-      this.UpdateSelection(
+      this.updateSelection(
         {
           start: { row: newRow, col: newCol },
           end: { row: newRow, col: newCol },
@@ -310,13 +328,13 @@ export class InteractionEngine {
 
       if (!event.shiftKey) {
         // 单击模式：移动起始位置
-        this.UpdateSelection(
+        this.updateSelection(
           { start: newCoord, end: newCoord },
           'keyboard'
         )
       } else {
         // Shift 模式：只移动结束位置
-        this.UpdateSelection(
+        this.updateSelection(
           { start: selection.start, end: newCoord },
           'keyboard'
         )
