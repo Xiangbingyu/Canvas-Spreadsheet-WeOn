@@ -1,6 +1,8 @@
 const { WebSocketServer } = require('ws');
 
 const dispatchMessage = require('./dispatcher');
+const wsConfig = require('../config/wsConfig');
+const { validateWsMessageShape } = require('../security/wsGuard');
 const { createWsError } = require('../utils/response');
 
 function sendToSocket(socket, payload) {
@@ -10,10 +12,13 @@ function sendToSocket(socket, payload) {
 }
 
 function createWebSocketServer(server) {
-  const wss = new WebSocketServer({ server });
+  const wss = new WebSocketServer({
+    server,
+    maxPayload: wsConfig.maxPayloadBytes,
+  });
 
   function broadcastToRoom(docId, payload) {
-    // TODO: read room sockets from roomSocketsStore and broadcast payload.
+    // TODO: read room sockets from roomSocketStore and broadcast payload.
     return { docId, payload };
   }
 
@@ -28,12 +33,17 @@ function createWebSocketServer(server) {
         return;
       }
 
+      if (!validateWsMessageShape(message)) {
+        sendToSocket(socket, createWsError(4000, 'Invalid WebSocket message'));
+        return;
+      }
+
       Promise.resolve(
         dispatchMessage({
-        socket,
-        message,
-        reply: (payload) => sendToSocket(socket, payload),
-        broadcastToRoom,
+          socket,
+          message,
+          reply: (payload) => sendToSocket(socket, payload),
+          broadcastToRoom,
         })
       ).catch((error) => {
         console.error('WebSocket dispatch error:', error);
@@ -56,3 +66,4 @@ function createWebSocketServer(server) {
 module.exports = {
   createWebSocketServer,
 };
+
