@@ -1,0 +1,35 @@
+{
+  "name": "canvas-spreadsheet-weon",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Canvas 协作试算表 — 前后端 monorepo",
+  "packageManager": "pnpm@10.33.4",
+  "engines": {
+    "node": "22.12.0",
+    "pnpm": ">=10"
+  },
+  "scripts": {
+    "dev": "concurrently -n fe,be -c cyan,magenta \"pnpm dev:fe\" \"pnpm dev:be\"",
+    "dev:fe": "pnpm --filter frontend dev",
+    "dev:be": "pnpm --filter backend-js dev",
+    "build": "pnpm --filter frontend build",
+    "lint": "pnpm --filter frontend lint",
+    "preview": "pnpm --filter frontend preview",
+    "start:be": "pnpm --filter backend-js start",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.0.5",
+    "prettier": "^3.8.3"
+  },
+  "lint-staged": {
+    "frontend/**/*.{ts,tsx,css,json,md}": [
+      "prettier --write"
+    ],
+    "frontend/**/*.{ts,tsx}": [
+      "pnpm --filter frontend exec eslint --fix"
+    ]
+  }
+}
