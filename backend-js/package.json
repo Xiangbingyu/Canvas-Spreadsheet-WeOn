@@ -9,7 +9,9 @@
   },
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "test": "node --test tests/**/*.test.js",
+    "check:docs-api": "powershell -ExecutionPolicy Bypass -File .\\scripts\\check-docs-api.ps1"
   },
   "dependencies": {
     "express": "^4.21.2",

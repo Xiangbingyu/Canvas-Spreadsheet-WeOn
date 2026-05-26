@@ -83,20 +83,26 @@ function createRoomUserMemoryStore() {
       .sort((left, right) => left.joinedAt.localeCompare(right.joinedAt));
   }
 
-  function remove(docId, clientId) {
+  function listRowsByClientId(clientId) {
+    return Array.from(rowsById.values())
+      .filter((row) => row.clientId === clientId)
+      .sort((left, right) => right.lastActiveAt.localeCompare(left.lastActiveAt));
+  }
+
+  function markOffline(docId, clientId) {
     const current = getStoredRow(docId, clientId);
 
     if (!current) {
       return false;
     }
 
-    rowsById.delete(current.id);
-    rowIdByDocClient.delete(getKey(docId, clientId));
-    rowIdsByDocId.set(
-      docId,
-      (rowIdsByDocId.get(docId) || []).filter((rowId) => rowId !== current.id)
-    );
-    return true;
+    const nextRow = createRoomUser({
+      ...current,
+      status: 'offline',
+    });
+
+    rowsById.set(current.id, nextRow);
+    return cloneRecord(nextRow);
   }
 
   return {
@@ -122,8 +128,12 @@ function createRoomUserMemoryStore() {
       return cloneRecords(listRowsByDocId(docId));
     },
 
+    async listByClientId(clientId) {
+      return cloneRecords(listRowsByClientId(clientId));
+    },
+
     async deleteByDocIdAndClientId(docId, clientId) {
-      return remove(docId, clientId);
+      return markOffline(docId, clientId);
     },
 
     async upsertRoomUser(docId, user) {
@@ -134,11 +144,11 @@ function createRoomUserMemoryStore() {
     },
 
     async getRoomUsers(docId) {
-      return cloneRecords(listRowsByDocId(docId));
+      return cloneRecords(listRowsByDocId(docId).filter((row) => row.status === 'online'));
     },
 
     async removeRoomUser(docId, clientId) {
-      return remove(docId, clientId);
+      return markOffline(docId, clientId);
     },
   };
 }

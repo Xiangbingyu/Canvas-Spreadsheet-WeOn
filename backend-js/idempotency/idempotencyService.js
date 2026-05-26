@@ -1,4 +1,4 @@
-﻿const eventIdStore = require('./eventIdStore');
+const eventIdStore = require('./eventIdStore');
 
 function isProcessed(eventId) {
   if (!eventId) {
@@ -6,6 +6,14 @@ function isProcessed(eventId) {
   }
 
   return eventIdStore.has(eventId);
+}
+
+function getRemembered(eventId) {
+  if (!eventId) {
+    return null;
+  }
+
+  return eventIdStore.get(eventId);
 }
 
 function remember(eventId, record) {
@@ -18,5 +26,6 @@ function remember(eventId, record) {
 
 module.exports = {
   isProcessed,
+  getRemembered,
   remember,
 };
