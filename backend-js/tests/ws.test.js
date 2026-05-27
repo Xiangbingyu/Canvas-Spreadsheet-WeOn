@@ -100,6 +100,18 @@ async function connect(wsUrl) {
   return { ws, received, send: (m) => ws.send(JSON.stringify(m)), waitFor, noMoreFor, close };
 }
 
+function assertSnapshotMatchesDocFormat(snapshot, expected) {
+  assert.equal(typeof snapshot, 'object');
+  assert.equal(snapshot.id, expected.id);
+  assert.equal(snapshot.name, expected.name);
+  assert.equal(snapshot.defaultRowHeight, expected.defaultRowHeight);
+  assert.equal(snapshot.defaultColWidth, expected.defaultColWidth);
+  assert.equal(snapshot.rowCount, expected.rowCount);
+  assert.equal(snapshot.colCount, expected.colCount);
+  assert.deepEqual(snapshot.styles, expected.styles);
+  assert.deepEqual(snapshot.cells, expected.cells);
+}
+
 // ==================== join — 基础成功路径 ====================
 
 test('join: join_ack 包含 snapshot 和 users', async () => {
@@ -142,14 +154,27 @@ test('join: 种子文档 doc_sys_001 快照正确', async () => {
     await c.waitFor(1);
 
     const snap = c.received[0].data.snapshot;
-    assert.equal(snap.rowCount, 3);
-    assert.equal(snap.colCount, 2);
-    assert.equal(snap.cells['1:1'].value, '姓名');
-    assert.equal(snap.cells['1:2'].value, '分数');
-    assert.equal(snap.cells['2:1'].value, '张三');
-    assert.equal(snap.cells['2:2'].value, '95');
-    assert.equal(snap.cells['3:1'].value, '李四');
-    assert.equal(snap.cells['3:2'].value, '87');
+    assert.equal(snap.id, 'sheet_20260527_001');
+    assert.equal(snap.name, '2026年销售数据表');
+    assert.equal(snap.defaultRowHeight, 25);
+    assert.equal(snap.defaultColWidth, 100);
+    assert.equal(snap.rowCount, 100);
+    assert.equal(snap.colCount, 26);
+    assert.equal(snap.cells['0:0'].value, '产品名称');
+    assert.equal(snap.cells['0:0'].row, 0);
+    assert.equal(snap.cells['0:0'].col, 0);
+    assert.equal(snap.cells['0:0'].styleId, 'style_header');
+    assert.equal(snap.cells['0:1'].value, '销售金额');
+    assert.equal(snap.cells['1:1'].value, '9999.00');
+    assert.equal(snap.cells['1:1'].styleId, 'style_currency');
+    assert.deepEqual(snap.styles.style_header, {
+      fontFamily: '微软雅黑',
+      fontSize: 14,
+      bold: true,
+      color: '#FFFFFF',
+      bgColor: '#4472C4',
+      hAlign: 'center',
+    });
   } finally {
     await c.close();
     await srv.close();
@@ -271,9 +296,9 @@ test('join: 并发重复 join 首次失败 — 等待中的请求收到相同 er
 test('join: 并发重复 join 在 joinRoom 后置阶段失败时，仍返回 join_ack 而非反向打成失败', async () => {
   const srv = await createTestServer();
   const c = await connect(srv.wsUrl);
-  const presenceService = require('../service/presenceService');
-  const originalGetPresence = presenceService.getPresence;
-  presenceService.getPresence = async () => {
+  const roomService = require('../service/roomService');
+  const originalGetRoomUsers = roomService.getRoomUsers;
+  roomService.getRoomUsers = async () => {
     throw new Error('presence unavailable');
   };
 
@@ -286,10 +311,10 @@ test('join: 并发重复 join 在 joinRoom 后置阶段失败时，仍返回 joi
     const joinAcks = c.received.filter((m) => m.type === 'join_ack');
     assert.ok(joinAcks.length >= 2, `both concurrent joins should receive join_ack, got ${JSON.stringify(c.received)}`);
     assert.ok(joinAcks.every((m) => m.code === 0));
-    assert.ok(joinAcks.every((m) => m.data.users.some((u) => u.clientId === 'u1')));
+    assert.ok(joinAcks.every((m) => Array.isArray(m.data.users)));
     assert.equal(c.received.filter((m) => m.type === 'error').length, 0);
   } finally {
-    presenceService.getPresence = originalGetPresence;
+    roomService.getRoomUsers = originalGetRoomUsers;
     await c.close();
     await srv.close();
   }
@@ -298,9 +323,9 @@ test('join: 并发重复 join 在 joinRoom 后置阶段失败时，仍返回 joi
 test('join: join_ack 发出后 audit 失败不再补发 500', async () => {
   const srv = await createTestServer();
   const c = await connect(srv.wsUrl);
-  const auditService = require('../service/auditService');
-  const originalRecord = auditService.recordOperationAudit;
-  auditService.recordOperationAudit = async () => {
+  const auditService = require('../audit/auditService');
+  const originalRecord = auditService.recordAuditEvent;
+  auditService.recordAuditEvent = async () => {
     throw new Error('audit unavailable');
   };
 
@@ -313,7 +338,7 @@ test('join: join_ack 发出后 audit 失败不再补发 500', async () => {
     assert.equal(c.received[1].type, 'presence');
     assert.equal(c.received.filter((m) => m.type === 'error').length, 0);
   } finally {
-    auditService.recordOperationAudit = originalRecord;
+    auditService.recordAuditEvent = originalRecord;
     await c.close();
     await srv.close();
   }
@@ -479,6 +504,30 @@ test('join: 同 clientId 最后一个 socket 断开才广播 leave', async () =>
   }
 });
 
+test('leave: 用户 fully offline 时清理 userOpState', async () => {
+  const srv = await createTestServer();
+  const c = await connect(srv.wsUrl);
+  try {
+    c.send({ type: 'join', docId: 'doc_sys_001', clientId: 'u_cleanup' });
+    await c.waitFor(2);
+    c.send({ type: 'set_cell', docId: 'doc_sys_001', clientId: 'u_cleanup', row: 1, col: 1, value: 'cleanup-me', style: null });
+    await c.waitFor(4);
+
+    const userOpStateStore = require('../store/userOpStateStore');
+    const beforeClose = await userOpStateStore.getState('doc_sys_001', 'u_cleanup');
+    assert.ok(beforeClose);
+    assert.equal(beforeClose.undoStackJson.length, 1);
+
+    await c.close();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const afterClose = await userOpStateStore.getState('doc_sys_001', 'u_cleanup');
+    assert.equal(afterClose, null);
+  } finally {
+    await srv.close();
+  }
+});
+
 test('join: 同一 socket 切换 clientId 不命中幂等，视为新 join', async () => {
   const srv = await createTestServer();
   const c = await connect(srv.wsUrl);
@@ -557,6 +606,34 @@ test('join: 同一 socket 切换文档后再次 join 旧文档，正常重新入
     assert.equal(acks.length, 3);
     assert.equal(acks[2].data.docId, 'doc_sys_001');
     assert.equal(acks[2].data.clientId, 'u1');
+  } finally {
+    await c.close();
+    await srv.close();
+  }
+});
+
+test('join: 同一 socket 切换文档导致旧房间 fully offline 时清理 userOpState', async () => {
+  const srv = await createTestServer();
+  const { createDoc } = require('../service/docsService');
+  const docB = await createDoc({ title: 'DocB-cleanup' });
+  const c = await connect(srv.wsUrl);
+
+  try {
+    c.send({ type: 'join', docId: 'doc_sys_001', clientId: 'u_switch_cleanup' });
+    await c.waitFor(2);
+    c.send({ type: 'set_cell', docId: 'doc_sys_001', clientId: 'u_switch_cleanup', row: 2, col: 2, value: 'cleanup-on-switch', style: null });
+    await c.waitFor(4);
+
+    const userOpStateStore = require('../store/userOpStateStore');
+    const beforeSwitch = await userOpStateStore.getState('doc_sys_001', 'u_switch_cleanup');
+    assert.ok(beforeSwitch);
+    assert.equal(beforeSwitch.undoStackJson.length, 1);
+
+    c.send({ type: 'join', docId: docB.docId, clientId: 'u_switch_cleanup' });
+    await c.waitFor(5);
+
+    const afterSwitch = await userOpStateStore.getState('doc_sys_001', 'u_switch_cleanup');
+    assert.equal(afterSwitch, null);
   } finally {
     await c.close();
     await srv.close();
@@ -1125,7 +1202,97 @@ test('set_cell: style 显式传 null 后再 join 快照中该 cell style 为 nul
     await c2.waitFor(1);
     const cellInSnap = c2.received[0].data.snapshot.cells['5:5'];
     assert.ok(cellInSnap, 'cell 5:5 should exist in snapshot');
-    assert.equal(cellInSnap.style, null);
+    assert.equal(cellInSnap.row, 5);
+    assert.equal(cellInSnap.col, 5);
+    assert.equal(cellInSnap.styleId, null);
+    await c2.close();
+  } finally {
+    await c.close();
+    await srv.close();
+  }
+});
+
+test('join: join_ack matches documented response format', async () => {
+  const srv = await createTestServer();
+  const c = await connect(srv.wsUrl);
+  try {
+    c.send({ type: 'join', docId: 'doc_sys_001', clientId: 'user_001', name: 'Alice', color: '#ff0000' });
+    await c.waitFor(1);
+
+    const ack = c.received[0];
+    assert.equal(ack.type, 'join_ack');
+    assert.equal(ack.code, 0);
+    assert.equal(ack.message, 'ok');
+    assert.equal(ack.data.docId, 'doc_sys_001');
+    assert.equal(ack.data.clientId, 'user_001');
+    assert.equal(ack.data.currentSeq, 0);
+    assertSnapshotMatchesDocFormat(ack.data.snapshot, {
+      id: 'sheet_20260527_001',
+      name: '2026年销售数据表',
+      defaultRowHeight: 25,
+      defaultColWidth: 100,
+      rowCount: 100,
+      colCount: 26,
+      styles: {
+        style_header: {
+          fontFamily: '微软雅黑',
+          fontSize: 14,
+          bold: true,
+          color: '#FFFFFF',
+          bgColor: '#4472C4',
+          hAlign: 'center',
+        },
+        style_currency: {
+          fontFamily: 'Arial',
+          fontSize: 12,
+          bold: false,
+          hAlign: 'right',
+        },
+      },
+      cells: {
+        '0:0': { row: 0, col: 0, value: '产品名称', styleId: 'style_header' },
+        '0:1': { row: 0, col: 1, value: '销售金额', styleId: 'style_header' },
+        '1:1': { row: 1, col: 1, value: '9999.00', styleId: 'style_currency' },
+      },
+    });
+    assert.ok(Array.isArray(ack.data.users));
+    assert.equal(ack.data.users.length, 1);
+    assert.deepEqual(ack.data.users[0], {
+      id: 1,
+      docId: 'doc_sys_001',
+      clientId: 'user_001',
+      name: 'Alice',
+      color: '#ff0000',
+      status: 'online',
+      joinedAt: ack.data.users[0].joinedAt,
+      lastActiveAt: ack.data.users[0].lastActiveAt,
+    });
+    assert.match(ack.data.users[0].joinedAt, /^\d{4}-\d{2}-\d{2}T/);
+    assert.match(ack.data.users[0].lastActiveAt, /^\d{4}-\d{2}-\d{2}T/);
+  } finally {
+    await c.close();
+    await srv.close();
+  }
+});
+
+test('set_cell: 已有样式时省略 style 也会清空样式', async () => {
+  const srv = await createTestServer();
+  const c = await connect(srv.wsUrl);
+  try {
+    c.send({ type: 'set_cell', docId: 'doc_sys_001', clientId: 'u1', row: 7, col: 7, value: 'styled', style: { bold: true, color: '#333333' } });
+    await c.waitFor(1);
+    assert.deepEqual(c.received[0].data.style, { bold: true, color: '#333333' });
+
+    c.send({ type: 'set_cell', docId: 'doc_sys_001', clientId: 'u1', row: 7, col: 7, value: 'unstyled' });
+    await c.waitFor(2);
+    assert.equal(c.received[1].data.style, null);
+
+    const c2 = await connect(srv.wsUrl);
+    c2.send({ type: 'join', docId: 'doc_sys_001', clientId: 'u2' });
+    await c2.waitFor(1);
+    const cellInSnap = c2.received[0].data.snapshot.cells['7:7'];
+    assert.ok(cellInSnap, 'cell 7:7 should exist in snapshot');
+    assert.equal(cellInSnap.styleId, null);
     await c2.close();
   } finally {
     await c.close();
@@ -1166,7 +1333,16 @@ test('import_sheet: 返回 sheet_imported，data 字段结构完整', async () =
   const srv = await createTestServer();
   const c = await connect(srv.wsUrl);
   try {
-    const snapshot = { cells: { '1:1': { value: 'A', style: {} } }, styles: {}, rowCount: 1, colCount: 1 };
+    const snapshot = {
+      id: 'sheet_import_001',
+      name: '导入表',
+      defaultRowHeight: 25,
+      defaultColWidth: 100,
+      cells: { '1:1': { row: 1, col: 1, value: 'A', styleId: 'style_001' } },
+      styles: { style_001: { bold: true } },
+      rowCount: 1,
+      colCount: 1,
+    };
     c.send({ type: 'import_sheet', docId: 'doc_sys_001', clientId: 'u1', snapshot });
     await c.waitFor(1);
     const msg = c.received[0];
@@ -1178,8 +1354,134 @@ test('import_sheet: 返回 sheet_imported，data 字段结构完整', async () =
     assert.equal(d.clientId, 'u1');
     assert.equal(typeof d.seq, 'number');
     assert.ok(d.seq >= 1);
+    assert.deepEqual(d.snapshot, {
+      id: 'sheet_import_001',
+      name: '导入表',
+      defaultRowHeight: 25,
+      defaultColWidth: 100,
+      cells: { '1:1': { row: 1, col: 1, value: 'A', styleId: 'style_001' } },
+      styles: { style_001: { bold: true } },
+      rowCount: 1,
+      colCount: 1,
+    });
     assert.equal(d.canUndo, false);
     assert.equal(d.canRedo, false);
+  } finally {
+    await c.close();
+    await srv.close();
+  }
+});
+
+test('set_cell: undo 栈超过上限时仅保留最近操作', async () => {
+  const previousLimit = process.env.USER_OP_STACK_LIMIT;
+  process.env.USER_OP_STACK_LIMIT = '3';
+  const srv = await createTestServer();
+  const c = await connect(srv.wsUrl);
+
+  try {
+    for (let row = 1; row <= 5; row += 1) {
+      c.send({ type: 'set_cell', docId: 'doc_sys_001', clientId: 'u_stack_limit', row, col: 1, value: `v${row}`, style: null });
+      await c.waitFor(row);
+    }
+
+    const userOpStateStore = require('../store/userOpStateStore');
+    const state = await userOpStateStore.getState('doc_sys_001', 'u_stack_limit');
+    assert.equal(state.undoStackJson.length, 3);
+    assert.deepEqual(
+      state.undoStackJson.map((entry) => entry.row),
+      [3, 4, 5]
+    );
+  } finally {
+    if (previousLimit === undefined) {
+      delete process.env.USER_OP_STACK_LIMIT;
+    } else {
+      process.env.USER_OP_STACK_LIMIT = previousLimit;
+    }
+    await c.close();
+    await srv.close();
+  }
+});
+
+test('userOpState: TTL 过期后按读取惰性清理', async () => {
+  const previousTtl = process.env.USER_OP_STATE_TTL_MS;
+  process.env.USER_OP_STATE_TTL_MS = '10';
+  clearBackendRequireCache();
+
+  const userOpStateStore = require('../store/userOpStateStore');
+
+  try {
+    await userOpStateStore.saveState({
+      docId: 'doc_ttl_001',
+      clientId: 'u_ttl_cleanup',
+      undoStackJson: [{ row: 1 }],
+      redoStackJson: [],
+      updatedAt: new Date(Date.now() - 1000).toISOString(),
+    });
+
+    const state = await userOpStateStore.getState('doc_ttl_001', 'u_ttl_cleanup');
+    assert.equal(state, null);
+  } finally {
+    if (previousTtl === undefined) {
+      delete process.env.USER_OP_STATE_TTL_MS;
+    } else {
+      process.env.USER_OP_STATE_TTL_MS = previousTtl;
+    }
+  }
+});
+
+test('import_sheet: matches documented request and response format', async () => {
+  const srv = await createTestServer();
+  const c = await connect(srv.wsUrl);
+  try {
+    const snapshot = {
+      id: 'sheet_20260527_001',
+      name: '2026年销售数据表',
+      defaultRowHeight: 25,
+      defaultColWidth: 100,
+      rowCount: 100,
+      colCount: 26,
+      styles: {
+        style_header: {
+          fontFamily: '微软雅黑',
+          fontSize: 14,
+          bold: true,
+          color: '#FFFFFF',
+          bgColor: '#4472C4',
+          hAlign: 'center',
+        },
+        style_currency: {
+          fontFamily: 'Arial',
+          fontSize: 12,
+          bold: false,
+          hAlign: 'right',
+        },
+      },
+      cells: {
+        '0:0': { row: 0, col: 0, value: '产品名称', styleId: 'style_header' },
+        '0:1': { row: 0, col: 1, value: '销售金额', styleId: 'style_header' },
+        '1:1': { row: 1, col: 1, value: '9999.00', styleId: 'style_currency' },
+      },
+    };
+
+    c.send({
+      type: 'import_sheet',
+      docId: 'doc_sys_001',
+      clientId: 'user_001',
+      snapshot,
+    });
+    await c.waitFor(1);
+
+    const msg = c.received[0];
+    assert.equal(msg.type, 'sheet_imported');
+    assert.equal(msg.code, 0);
+    assert.equal(msg.message, 'ok');
+    assert.deepEqual(Object.keys(msg.data).sort(), ['canRedo', 'canUndo', 'clientId', 'docId', 'seq', 'snapshot']);
+    assert.equal(msg.data.docId, 'doc_sys_001');
+    assert.equal(msg.data.clientId, 'user_001');
+    assert.equal(typeof msg.data.seq, 'number');
+    assert.deepEqual(msg.data.snapshot, snapshot);
+    assert.equal(msg.data.canUndo, false);
+    assert.equal(msg.data.canRedo, false);
   } finally {
     await c.close();
     await srv.close();
@@ -1198,7 +1500,16 @@ test('import_sheet: 发送方收 2 条（reply + broadcast），其他成员收 
 
     const baseS = sender.received.length;
     const baseO = other.received.length;
-    const snapshot = { cells: { '1:1': { value: 'X', style: {} } }, styles: {}, rowCount: 1, colCount: 1 };
+    const snapshot = {
+      id: 'sheet_import_002',
+      name: '导入表',
+      defaultRowHeight: 25,
+      defaultColWidth: 100,
+      cells: { '1:1': { row: 1, col: 1, value: 'X', styleId: 'style_001' } },
+      styles: { style_001: { bold: true } },
+      rowCount: 1,
+      colCount: 1,
+    };
     sender.send({ type: 'import_sheet', docId: 'doc_sys_001', clientId: 'u1', snapshot });
     await Promise.all([sender.waitFor(baseS + 2), other.waitFor(baseO + 1)]);
 
@@ -1207,6 +1518,8 @@ test('import_sheet: 发送方收 2 条（reply + broadcast），其他成员收 
     assert.equal(senderMsgs.filter((m) => m.type === 'sheet_imported').length, 2);
     assert.equal(otherMsgs.filter((m) => m.type === 'sheet_imported').length, 1);
     assert.deepEqual(senderMsgs[0].data, senderMsgs[1].data);
+    assert.deepEqual(senderMsgs[0].data.snapshot, snapshot);
+    assert.deepEqual(otherMsgs[0].data.snapshot, snapshot);
   } finally {
     await sender.close();
     await other.close();
@@ -1222,7 +1535,7 @@ test('import_sheet: seq 在 set_cell 之后继续递增（后写覆盖）', asyn
     await c.waitFor(1);
     const seq1 = c.received[0].data.seq;
 
-    const snapshot = { cells: {}, styles: {}, rowCount: 0, colCount: 0 };
+    const snapshot = { id: 'sheet_import_003', name: '空表', defaultRowHeight: 25, defaultColWidth: 100, cells: {}, styles: {}, rowCount: 0, colCount: 0 };
     c.send({ type: 'import_sheet', docId: 'doc_sys_001', clientId: 'u1', snapshot });
     await c.waitFor(2);
     const seq2 = c.received[1].data.seq;
@@ -1238,7 +1551,16 @@ test('import_sheet: import 后 set_cell seq 继续递增（后写覆盖）', asy
   const srv = await createTestServer();
   const c = await connect(srv.wsUrl);
   try {
-    const snapshot = { cells: { '1:1': { value: 'imported', style: {} } }, styles: {}, rowCount: 1, colCount: 1 };
+    const snapshot = {
+      id: 'sheet_import_004',
+      name: '导入表',
+      defaultRowHeight: 25,
+      defaultColWidth: 100,
+      cells: { '1:1': { row: 1, col: 1, value: 'imported', styleId: 'style_001' } },
+      styles: { style_001: { bold: true } },
+      rowCount: 1,
+      colCount: 1,
+    };
     c.send({ type: 'import_sheet', docId: 'doc_sys_001', clientId: 'u1', snapshot });
     await c.waitFor(1);
     const seq1 = c.received[0].data.seq;
@@ -1255,45 +1577,11 @@ test('import_sheet: import 后 set_cell seq 继续递增（后写覆盖）', asy
   }
 });
 
-test('import_sheet: eventId 幂等 — 重试只 reply 不 broadcast，seq 相同', async () => {
-  const srv = await createTestServer();
-  const sender = await connect(srv.wsUrl);
-  const other = await connect(srv.wsUrl);
-  try {
-    sender.send({ type: 'join', docId: 'doc_sys_001', clientId: 'u1' });
-    await sender.waitFor(2);
-    other.send({ type: 'join', docId: 'doc_sys_001', clientId: 'u2' });
-    await Promise.all([other.waitFor(2), sender.waitFor(3)]);
-
-    const snapshot = { cells: { '1:1': { value: 'idp', style: {} } }, styles: {}, rowCount: 1, colCount: 1 };
-    const baseS = sender.received.length;
-    const baseO = other.received.length;
-
-    sender.send({ type: 'import_sheet', docId: 'doc_sys_001', clientId: 'u1', eventId: 'evt_imp_001', snapshot });
-    await Promise.all([sender.waitFor(baseS + 2), other.waitFor(baseO + 1)]);
-    const firstSeq = sender.received.slice(baseS).find((m) => m.type === 'sheet_imported').data.seq;
-
-    const baseS2 = sender.received.length;
-    const baseO2 = other.received.length;
-    sender.send({ type: 'import_sheet', docId: 'doc_sys_001', clientId: 'u1', eventId: 'evt_imp_001', snapshot });
-    await sender.waitFor(baseS2 + 1);
-    await other.noMoreFor(150);
-
-    const retryMsg = sender.received.slice(baseS2).find((m) => m.type === 'sheet_imported');
-    assert.equal(retryMsg.data.seq, firstSeq);
-    assert.equal(other.received.length, baseO2);
-  } finally {
-    await sender.close();
-    await other.close();
-    await srv.close();
-  }
-});
-
-test('import_sheet: 无 eventId 两次均执行写入，seq 不同', async () => {
+test('import_sheet: 两次重复发送均执行写入，seq 递增', async () => {
   const srv = await createTestServer();
   const c = await connect(srv.wsUrl);
   try {
-    const snapshot = { cells: {}, styles: {}, rowCount: 0, colCount: 0 };
+    const snapshot = { id: 'sheet_import_006', name: '空表', defaultRowHeight: 25, defaultColWidth: 100, cells: {}, styles: {}, rowCount: 0, colCount: 0 };
     c.send({ type: 'import_sheet', docId: 'doc_sys_001', clientId: 'u1', snapshot });
     await c.waitFor(1);
     const seq1 = c.received[0].data.seq;
@@ -1329,11 +1617,50 @@ test('import_sheet: 缺少 snapshot 或 snapshot 非对象返回 4000', async ()
   }
 });
 
+test('import_sheet: snapshot 内部字段类型不合法时仍按弱校验导入成功', async () => {
+  const srv = await createTestServer();
+  const c = await connect(srv.wsUrl);
+  try {
+    c.send({
+      type: 'import_sheet',
+      docId: 'doc_sys_001',
+      clientId: 'u1',
+      snapshot: {
+        id: 123,
+        name: false,
+        defaultRowHeight: 'bad',
+        defaultColWidth: null,
+        rowCount: 'bad',
+        colCount: {},
+        styles: 1,
+        cells: {
+          '0:0': { row: 'bad', col: null, value: 'A', styleId: 123 },
+        },
+      },
+    });
+    await c.waitFor(1);
+
+    assert.equal(c.received[0].type, 'sheet_imported');
+    assert.equal(c.received[0].code, 0);
+    assert.equal(c.received[0].data.snapshot.id, 'sheet_new_001');
+    assert.equal(c.received[0].data.snapshot.name, 'Sheet1');
+    assert.equal(c.received[0].data.snapshot.defaultRowHeight, 25);
+    assert.equal(c.received[0].data.snapshot.defaultColWidth, 100);
+    assert.equal(c.received[0].data.snapshot.rowCount, 0);
+    assert.equal(c.received[0].data.snapshot.colCount, 0);
+    assert.deepEqual(c.received[0].data.snapshot.styles, {});
+    assert.deepEqual(c.received[0].data.snapshot.cells['0:0'], { row: 0, col: 0, value: 'A', styleId: null });
+  } finally {
+    await c.close();
+    await srv.close();
+  }
+});
+
 test('import_sheet: 缺少 clientId 返回 4000', async () => {
   const srv = await createTestServer();
   const c = await connect(srv.wsUrl);
   try {
-    c.send({ type: 'import_sheet', docId: 'doc_sys_001', snapshot: { cells: {}, styles: {}, rowCount: 0, colCount: 0 } });
+    c.send({ type: 'import_sheet', docId: 'doc_sys_001', snapshot: { id: 'sheet_import_007', name: '空表', defaultRowHeight: 25, defaultColWidth: 100, cells: {}, styles: {}, rowCount: 0, colCount: 0 } });
     await c.waitFor(1);
     assert.equal(c.received[0].type, 'error');
     assert.equal(c.received[0].code, 4000);
@@ -1347,7 +1674,7 @@ test('import_sheet: docId 为数字类型返回 4000', async () => {
   const srv = await createTestServer();
   const c = await connect(srv.wsUrl);
   try {
-    c.send({ type: 'import_sheet', docId: 999, clientId: 'u1', snapshot: { cells: {}, styles: {}, rowCount: 0, colCount: 0 } });
+    c.send({ type: 'import_sheet', docId: 999, clientId: 'u1', snapshot: { id: 'sheet_import_008', name: '空表', defaultRowHeight: 25, defaultColWidth: 100, cells: {}, styles: {}, rowCount: 0, colCount: 0 } });
     await c.waitFor(1);
     assert.equal(c.received[0].type, 'error');
     assert.equal(c.received[0].code, 4000);
@@ -1361,7 +1688,7 @@ test('import_sheet: clientId 为空字符串返回 4000', async () => {
   const srv = await createTestServer();
   const c = await connect(srv.wsUrl);
   try {
-    c.send({ type: 'import_sheet', docId: 'doc_sys_001', clientId: '', snapshot: { cells: {}, styles: {}, rowCount: 0, colCount: 0 } });
+    c.send({ type: 'import_sheet', docId: 'doc_sys_001', clientId: '', snapshot: { id: 'sheet_import_009', name: '空表', defaultRowHeight: 25, defaultColWidth: 100, cells: {}, styles: {}, rowCount: 0, colCount: 0 } });
     await c.waitFor(1);
     assert.equal(c.received[0].type, 'error');
     assert.equal(c.received[0].code, 4000);
@@ -1375,7 +1702,7 @@ test('import_sheet: 文档不存在返回 4004', async () => {
   const srv = await createTestServer();
   const c = await connect(srv.wsUrl);
   try {
-    c.send({ type: 'import_sheet', docId: 'doc_nonexistent', clientId: 'u1', snapshot: { cells: {}, styles: {}, rowCount: 0, colCount: 0 } });
+    c.send({ type: 'import_sheet', docId: 'doc_nonexistent', clientId: 'u1', snapshot: { id: 'sheet_import_010', name: '空表', defaultRowHeight: 25, defaultColWidth: 100, cells: {}, styles: {}, rowCount: 0, colCount: 0 } });
     await c.waitFor(1);
     assert.equal(c.received[0].type, 'error');
     assert.equal(c.received[0].code, 4004);
@@ -1390,7 +1717,7 @@ test('import_sheet: 写入 audit 日志', async () => {
   const srv = await createTestServer();
   const c = await connect(srv.wsUrl);
   try {
-    c.send({ type: 'import_sheet', docId: 'doc_sys_001', clientId: 'u_imp_audit', snapshot: { cells: {}, styles: {}, rowCount: 0, colCount: 0 } });
+    c.send({ type: 'import_sheet', docId: 'doc_sys_001', clientId: 'u_imp_audit', snapshot: { id: 'sheet_import_011', name: '空表', defaultRowHeight: 25, defaultColWidth: 100, cells: {}, styles: {}, rowCount: 0, colCount: 0 } });
     await c.waitFor(1);
     await new Promise((r) => setImmediate(r));
     const auditLogStore = require('../store/auditLogStore');
@@ -1404,19 +1731,19 @@ test('import_sheet: 写入 audit 日志', async () => {
   }
 });
 
-test('import_sheet: 幂等重试不写 audit', async () => {
+test('import_sheet: 两次重复发送会写入两条 audit 日志', async () => {
   const srv = await createTestServer();
   const c = await connect(srv.wsUrl);
   try {
-    const snapshot = { cells: {}, styles: {}, rowCount: 0, colCount: 0 };
-    c.send({ type: 'import_sheet', docId: 'doc_sys_001', clientId: 'u1', eventId: 'evt_audit_idp', snapshot });
+    const snapshot = { id: 'sheet_import_012', name: '空表', defaultRowHeight: 25, defaultColWidth: 100, cells: {}, styles: {}, rowCount: 0, colCount: 0 };
+    c.send({ type: 'import_sheet', docId: 'doc_sys_001', clientId: 'u1', snapshot });
     await c.waitFor(1);
-    c.send({ type: 'import_sheet', docId: 'doc_sys_001', clientId: 'u1', eventId: 'evt_audit_idp', snapshot });
+    c.send({ type: 'import_sheet', docId: 'doc_sys_001', clientId: 'u1', snapshot });
     await c.waitFor(2);
     await new Promise((r) => setImmediate(r));
     const auditLogStore = require('../store/auditLogStore');
     const logs = await auditLogStore.listByEventType('import_sheet');
-    assert.equal(logs.length, 1);
+    assert.equal(logs.length, 2);
   } finally {
     await c.close();
     await srv.close();
@@ -1431,7 +1758,16 @@ test('set_cell 后 import_sheet 清空 undo 栈，canUndo 恒为 false', async (
     await c.waitFor(1);
     assert.equal(c.received[0].data.canUndo, true);
 
-    const snapshot = { cells: { '1:1': { value: 'imported', style: {} } }, styles: {}, rowCount: 1, colCount: 1 };
+    const snapshot = {
+      id: 'sheet_import_013',
+      name: '导入表',
+      defaultRowHeight: 25,
+      defaultColWidth: 100,
+      cells: { '1:1': { row: 1, col: 1, value: 'imported', styleId: 'style_001' } },
+      styles: { style_001: { bold: true } },
+      rowCount: 1,
+      colCount: 1,
+    };
     c.send({ type: 'import_sheet', docId: 'doc_sys_001', clientId: 'u1', snapshot });
     await c.waitFor(2);
     assert.equal(c.received[1].data.canUndo, false);
@@ -1442,128 +1778,6 @@ test('set_cell 后 import_sheet 清空 undo 栈，canUndo 恒为 false', async (
   }
 });
 
-test('import_sheet: 相同 eventId + 相同内容 — 幂等重试返回首次结果', async () => {
-  const srv = await createTestServer();
-  const c = await connect(srv.wsUrl);
-  try {
-    c.send({ type: 'join', docId: 'doc_sys_001', clientId: 'u1' });
-    await c.waitFor(2); // join_ack + self-presence
-
-    const snapshot = { cells: { '1:1': { value: 'idempotent', style: null } }, styles: {}, rowCount: 1, colCount: 1 };
-    c.send({ type: 'import_sheet', docId: 'doc_sys_001', clientId: 'u1', eventId: 'evt_fp_001', snapshot });
-    await c.waitFor(4); // +reply +broadcast（第 3、4 条）
-
-    const seq1 = c.received.find((m) => m.type === 'sheet_imported').data.seq;
-
-    // 相同 eventId + 相同内容：幂等重试，应返回首次 seq（只 reply，不 broadcast，所以只多 1 条）
-    c.send({ type: 'import_sheet', docId: 'doc_sys_001', clientId: 'u1', eventId: 'evt_fp_001', snapshot });
-    await c.waitFor(5);
-
-    const retryMsg = c.received.filter((m) => m.type === 'sheet_imported')[1];
-    assert.ok(retryMsg, 'retry should receive sheet_imported');
-    assert.equal(retryMsg.data.seq, seq1, 'retry seq should match first seq');
-  } finally {
-    await c.close();
-    await srv.close();
-  }
-});
-
-test('import_sheet: 相同 eventId + 不同内容 — 返回 4000 而非重放旧结果', async () => {
-  const srv = await createTestServer();
-  const c = await connect(srv.wsUrl);
-  try {
-    c.send({ type: 'join', docId: 'doc_sys_001', clientId: 'u1' });
-    await c.waitFor(2); // join_ack + self-presence
-
-    const snapshot1 = { cells: { '1:1': { value: 'first', style: null } }, styles: {}, rowCount: 1, colCount: 1 };
-    c.send({ type: 'import_sheet', docId: 'doc_sys_001', clientId: 'u1', eventId: 'evt_fp_002', snapshot: snapshot1 });
-    await c.waitFor(4); // +reply +broadcast（第 3、4 条）
-
-    // 相同 eventId + 不同 snapshot → 应返回 4000
-    const snapshot2 = { cells: { '1:1': { value: 'different', style: null } }, styles: {}, rowCount: 1, colCount: 1 };
-    c.send({ type: 'import_sheet', docId: 'doc_sys_001', clientId: 'u1', eventId: 'evt_fp_002', snapshot: snapshot2 });
-    await c.waitFor(5);
-
-    const err = c.received.find((m) => m.type === 'error');
-    assert.ok(err, 'should receive an error');
-    assert.equal(err.code, 4000);
-    assert.match(err.message, /eventId already used with different request content/);
-  } finally {
-    await c.close();
-    await srv.close();
-  }
-});
-
-test('import_sheet: 并发相同 eventId 首次失败 — 等待中的重复请求收到相同 error 而非静默吞掉', async () => {
-  const srv = await createTestServer();
-  const c1 = await connect(srv.wsUrl);
-  const c2 = await connect(srv.wsUrl);
-  try {
-    // 两个 socket 同时发出相同 eventId，但 docId 不存在 → 首次请求走失败分支
-    const snapshot = { cells: {}, styles: {}, rowCount: 0, colCount: 0 };
-    c1.send({ type: 'import_sheet', docId: 'doc_nonexistent', clientId: 'u1', eventId: 'evt_fail_001', snapshot });
-    c2.send({ type: 'import_sheet', docId: 'doc_nonexistent', clientId: 'u1', eventId: 'evt_fail_001', snapshot });
-
-    await new Promise((r) => setTimeout(r, 300));
-
-    // 两条请求都应该收到 error（4004），而非静默吞掉
-    const c1Errors = c1.received.filter((m) => m.type === 'error' && m.code === 4004);
-    const c2Errors = c2.received.filter((m) => m.type === 'error' && m.code === 4004);
-    assert.ok(c1Errors.length >= 1, 'c1 should receive 4004 error');
-    assert.ok(c2Errors.length >= 1, 'c2 should receive 4004 error');
-  } finally {
-    await c1.close();
-    await c2.close();
-    await srv.close();
-  }
-});
-
-test('import_sheet: 并发相同 eventId — 两条请求都收到 reply，seq 相同，只 broadcast 一次', async () => {
-  const srv = await createTestServer();
-  const c1 = await connect(srv.wsUrl);
-  const c2 = await connect(srv.wsUrl);
-  const observer = await connect(srv.wsUrl);
-  try {
-    c1.send({ type: 'join', docId: 'doc_sys_001', clientId: 'u1' });
-    await c1.waitFor(2);
-    c2.send({ type: 'join', docId: 'doc_sys_001', clientId: 'u1' });
-    await c2.waitFor(1);
-    observer.send({ type: 'join', docId: 'doc_sys_001', clientId: 'obs' });
-    await observer.waitFor(1);
-
-    const baseObs = observer.received.length;
-    const snapshot = { cells: { '1:1': { value: 'concurrent', style: {} } }, styles: {}, rowCount: 1, colCount: 1 };
-
-    // 两个 socket 同时发出相同 eventId
-    c1.send({ type: 'import_sheet', docId: 'doc_sys_001', clientId: 'u1', eventId: 'evt_concurrent_002', snapshot });
-    c2.send({ type: 'import_sheet', docId: 'doc_sys_001', clientId: 'u1', eventId: 'evt_concurrent_002', snapshot });
-
-    await new Promise((r) => setTimeout(r, 300));
-
-    const allMsgs = [...c1.received, ...c2.received];
-    const errors = allMsgs.filter((m) => m.type === 'error');
-    assert.equal(errors.length, 0, `unexpected errors: ${JSON.stringify(errors)}`);
-
-    // 两条请求各自都收到了 sheet_imported reply（不再静默丢弃）
-    const c1Imported = c1.received.filter((m) => m.type === 'sheet_imported');
-    const c2Imported = c2.received.filter((m) => m.type === 'sheet_imported');
-    assert.ok(c1Imported.length >= 1, 'c1 should receive sheet_imported');
-    assert.ok(c2Imported.length >= 1, 'c2 should receive sheet_imported');
-
-    // 两条回复的 seq 相同（幂等）
-    const seqs = [...c1Imported, ...c2Imported].map((m) => m.data.seq);
-    assert.ok(seqs.every((s) => s === seqs[0]), `seqs should all be equal: ${seqs}`);
-
-    // observer 只收到一次 broadcast（幂等重试不触发 broadcastToRoom）
-    const obsImported = observer.received.slice(baseObs).filter((m) => m.type === 'sheet_imported');
-    assert.equal(obsImported.length, 1, 'observer should receive exactly one broadcast');
-  } finally {
-    await c1.close();
-    await c2.close();
-    await observer.close();
-    await srv.close();
-  }
-});
 
 // ==================== undo ====================
 
@@ -1585,7 +1799,7 @@ test('undo: set_cell 후 undo 하면 값이 복원되고 undo_applied 반환', a
     assert.equal(undo.code, 0);
     assert.equal(undo.data.row, 1);
     assert.equal(undo.data.col, 1);
-    assert.equal(undo.data.value, '姓名'); // 종전 값으로 복원
+    assert.equal(undo.data.value, '9999.00');
     assert.equal(undo.data.canUndo, false);
     assert.equal(undo.data.canRedo, true);
     assert.equal(typeof undo.data.seq, 'number');
@@ -1800,9 +2014,9 @@ test('redo: 未 join 或 clientId 与当前 socket 身份不一致时返回 4003
 test('redo: applySetCell 成功后 audit 失败仍返回 redo_applied，不补发 500', async () => {
   const srv = await createTestServer();
   const c = await connect(srv.wsUrl);
-  const auditService = require('../service/auditService');
-  const originalRecord = auditService.recordOperationAudit;
-  auditService.recordOperationAudit = async (entry) => {
+  const auditService = require('../audit/auditService');
+  const originalRecord = auditService.recordAuditEvent;
+  auditService.recordAuditEvent = async (entry) => {
     if (entry.type === 'redo') {
       throw new Error('audit unavailable');
     }
@@ -1825,7 +2039,7 @@ test('redo: applySetCell 成功后 audit 失败仍返回 redo_applied，不补�
     assert.equal(redoMsgs.length, 2);
     assert.equal(c.received.filter((m) => m.type === 'error').length, 0);
   } finally {
-    auditService.recordOperationAudit = originalRecord;
+    auditService.recordAuditEvent = originalRecord;
     await c.close();
     await srv.close();
   }

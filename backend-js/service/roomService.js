@@ -1,5 +1,6 @@
 const roomUserStore = require('../store/roomUserStore');
 const roomSocketStore = require('../store/roomSocketStore');
+const userOpStateStore = require('../store/userOpStateStore');
 
 async function joinRoom(docId, socket, { clientId, name, color }) {
   // 先注册 socket 到新房间，同时取得前一个 (docId, clientId) 信息。
@@ -14,6 +15,7 @@ async function joinRoom(docId, socket, { clientId, name, color }) {
     const isFullyOffline = activeRemaining.length === 0;
     if (isFullyOffline) {
       await roomUserStore.removeRoomUser(previousEntry.docId, previousEntry.clientId);
+      await userOpStateStore.deleteByDocIdAndClientId(previousEntry.docId, previousEntry.clientId);
     }
     previousLeave = { ...previousEntry, isFullyOffline };
   }
@@ -47,6 +49,7 @@ async function leaveRoom(socket) {
 
   if (isFullyOffline) {
     await roomUserStore.removeRoomUser(docId, clientId);
+    await userOpStateStore.deleteByDocIdAndClientId(docId, clientId);
   }
 
   return { docId, clientId, isFullyOffline };
@@ -61,8 +64,13 @@ async function getRoomSockets(docId) {
 }
 
 async function isSocketInRoom(docId, socket) {
-  const sockets = await roomSocketStore.getRoomSockets(docId);
-  return sockets.includes(socket);
+  const membership = await roomSocketStore.findBySocket(socket);
+
+  return Boolean(
+    membership
+    && membership.status === 'connected'
+    && membership.docId === docId
+  );
 }
 
 async function getSocketMembership(socket) {

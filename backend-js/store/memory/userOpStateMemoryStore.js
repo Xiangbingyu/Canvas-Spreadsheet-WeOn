@@ -1,5 +1,6 @@
 const { createUserOpState } = require('../../domain/entities/userOpState');
 const { deepClone } = require('../../utils/clone');
+const collabConfig = require('../../config/collabConfig');
 
 function createAutoIncrement(start = 0) {
   let current = start;
@@ -26,6 +27,12 @@ function createCompositeKey(...parts) {
   return parts.map((part) => String(part ?? '')).join(':');
 }
 
+function getRetentionTtlMs() {
+  return Number.isInteger(collabConfig.userOpStateTtlMs) && collabConfig.userOpStateTtlMs > 0
+    ? collabConfig.userOpStateTtlMs
+    : 30 * 60 * 1000;
+}
+
 function createUserOpStateMemoryStore() {
   const rowsById = new Map();
   const rowIdByDocClient = new Map();
@@ -38,6 +45,36 @@ function createUserOpStateMemoryStore() {
   function getStoredRow(docId, clientId) {
     const rowId = rowIdByDocClient.get(getKey(docId, clientId));
     return rowId ? rowsById.get(rowId) || null : null;
+  }
+
+  function deleteStoredRow(docId, clientId) {
+    const key = getKey(docId, clientId);
+    const rowId = rowIdByDocClient.get(key);
+
+    if (!rowId) {
+      return false;
+    }
+
+    rowIdByDocClient.delete(key);
+    rowsById.delete(rowId);
+    return true;
+  }
+
+  function purgeExpiredRows() {
+    const ttlMs = getRetentionTtlMs();
+    const now = Date.now();
+
+    for (const row of rowsById.values()) {
+      const updatedAtMs = Date.parse(row.updatedAt);
+
+      if (Number.isNaN(updatedAtMs)) {
+        continue;
+      }
+
+      if (now - updatedAtMs > ttlMs) {
+        deleteStoredRow(row.docId, row.clientId);
+      }
+    }
   }
 
   function upsert(rowInput = {}) {
@@ -81,19 +118,33 @@ function createUserOpStateMemoryStore() {
     },
 
     async findByDocIdAndClientId(docId, clientId) {
+      purgeExpiredRows();
       return cloneRecord(getStoredRow(docId, clientId));
     },
 
     async list() {
+      purgeExpiredRows();
       return cloneRecords(Array.from(rowsById.values()));
     },
 
     async getState(docId, clientId) {
+      purgeExpiredRows();
       return cloneRecord(getStoredRow(docId, clientId));
     },
 
     async saveState(state) {
+      purgeExpiredRows();
       return upsert(state);
+    },
+
+    async deleteByDocIdAndClientId(docId, clientId) {
+      purgeExpiredRows();
+      return deleteStoredRow(docId, clientId);
+    },
+
+    async purgeExpired() {
+      purgeExpiredRows();
+      return cloneRecords(Array.from(rowsById.values()));
     },
   };
 }

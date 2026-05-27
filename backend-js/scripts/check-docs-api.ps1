@@ -21,6 +21,14 @@ function Assert-True($condition, $message) {
   }
 }
 
+function Get-ObjectPropertyCount($value) {
+  if ($null -eq $value) {
+    return 0
+  }
+
+  return @($value.PSObject.Properties).Count
+}
+
 function Invoke-CurlJson {
   param(
     [Parameter(Mandatory = $true)]
@@ -113,6 +121,14 @@ Assert-Equal $createResponse.Json.data.currentSeq 0 "Initial currentSeq should b
 Assert-True ($null -ne $createResponse.Json.data.snapshot) "Snapshot should exist."
 $createdDocId = $createResponse.Json.data.docId
 Assert-True (-not [string]::IsNullOrWhiteSpace($createdDocId)) "docId should not be empty."
+Assert-Equal $createResponse.Json.data.snapshot.id "sheet_${createdDocId}_001" "Initial snapshot id mismatch."
+Assert-Equal $createResponse.Json.data.snapshot.name "Sheet1" "Initial snapshot name mismatch."
+Assert-Equal $createResponse.Json.data.snapshot.defaultRowHeight 25 "Initial snapshot defaultRowHeight mismatch."
+Assert-Equal $createResponse.Json.data.snapshot.defaultColWidth 100 "Initial snapshot defaultColWidth mismatch."
+Assert-Equal $createResponse.Json.data.snapshot.rowCount 0 "Initial snapshot rowCount should be 0."
+Assert-Equal $createResponse.Json.data.snapshot.colCount 0 "Initial snapshot colCount should be 0."
+Assert-Equal (Get-ObjectPropertyCount $createResponse.Json.data.snapshot.styles) 0 "Initial snapshot styles should be empty."
+Assert-Equal (Get-ObjectPropertyCount $createResponse.Json.data.snapshot.cells) 0 "Initial snapshot cells should be empty."
 Write-Host "PASS POST /docs => HTTP 201, docId=$createdDocId" -ForegroundColor Green
 
 Write-Step "GET /docs/:docId should return the created document"
@@ -121,6 +137,7 @@ $getDocResponse = Invoke-CurlJson -Method "GET" -Path "/docs/$createdDocId"
 Assert-Equal $getDocResponse.StatusCode 200 "GET /docs/:docId should return HTTP 200."
 Assert-Equal $getDocResponse.Json.code 0 "GET /docs/:docId should return business code 0."
 Assert-Equal $getDocResponse.Json.data.docId $createdDocId "GET /docs/:docId returned wrong docId."
+Assert-Equal $getDocResponse.Json.data.snapshot.id "sheet_${createdDocId}_001" "GET /docs/:docId snapshot id mismatch."
 Write-Host "PASS GET /docs/$createdDocId => HTTP 200" -ForegroundColor Green
 
 Write-Step "GET /docs should list created docs for the user"

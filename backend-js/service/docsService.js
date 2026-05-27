@@ -6,7 +6,7 @@ const { ERROR_CODES } = require('../protocol/errorCodes');
 const { isNonEmptyString, isPositiveInteger } = require('../protocol/validators');
 const docStore = require('../store/docStore');
 const roomUserStore = require('../store/roomUserStore');
-const auditService = require('./auditService');
+const auditService = require('../audit/auditService');
 
 // ==================== 公共方法 ====================
 
@@ -143,7 +143,7 @@ async function createDoc(input = {}) {
 
   docsCache.set(docStateKey(createdDoc.docId), docView);
 
-  await auditService.recordOperationAudit({
+  await auditService.recordAuditEvent({
     type: 'doc_created',
     docId: createdDoc.docId,
     createdBy: createdDoc.createdBy,

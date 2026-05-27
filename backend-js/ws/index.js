@@ -5,8 +5,7 @@ const wsConfig = require('../config/wsConfig');
 const { validateWsMessageShape } = require('../security/wsGuard');
 const { createWsSuccess, createWsError } = require('../utils/response');
 const roomService = require('../service/roomService');
-const presenceService = require('../service/presenceService');
-const auditService = require('../service/auditService');
+const auditService = require('../audit/auditService');
 
 let nextConnId = 0;
 
@@ -68,11 +67,11 @@ function createWebSocketServer(server) {
         }
 
         const { docId } = result;
-        const { users } = await presenceService.getPresence(docId);
+        const users = await roomService.getRoomUsers(docId);
 
         await broadcastToRoom(docId, createWsSuccess('presence', { docId, users }));
 
-        await auditService.recordOperationAudit({
+        await auditService.recordAuditEvent({
           type: 'leave',
           docId,
           clientId: result.clientId,
