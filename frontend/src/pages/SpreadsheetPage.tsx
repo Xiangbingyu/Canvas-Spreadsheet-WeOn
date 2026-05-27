@@ -7,14 +7,11 @@ import { Toolbar } from '@/components/Toolbar/Toolbar'
 import GrideCanvas from '@/components/grideCanvas/GrideCanvas'
 
 export function SpreadsheetPage() {
-  const activeCellAddress = useAppSelector(selectActiveCellAddress)
-  const activeCellValue = useAppSelector(selectActiveCellValue)
-
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-white font-[Roboto,Arial,sans-serif]">
       <Menubar />
       <Toolbar />
-      <FormulaBar cellAddress={activeCellAddress} value={activeCellValue} />
+      <FormulaBar cellAddress="A1" value="" />
 
       <div className="relative min-h-0 flex-1 overflow-hidden">
         <GrideCanvas />

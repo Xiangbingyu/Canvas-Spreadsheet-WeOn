@@ -6,7 +6,7 @@ import { Provider } from 'react-redux'
 import 'antd/dist/reset.css'
 import App from '@/App.tsx'
 import '@/index.css'
-import { store } from '@/spreadsheet/store/store'
+import { store } from '@/spreadsheet/store'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
