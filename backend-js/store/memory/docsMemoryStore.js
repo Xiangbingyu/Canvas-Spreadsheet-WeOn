@@ -10,12 +10,12 @@ function createMemoryDocsStore() {
   // Future database mapping:
   // - docs current state -> sheet_docs
   // - docs.history -> sheet_doc_history
-  const docs = new Map();
-  let docCounter = 0;
+  const docs = new Map()
+  let docCounter = 0
 
   function nextDocId() {
-    docCounter += 1;
-    return `doc_${String(docCounter).padStart(3, '0')}`;
+    docCounter += 1
+    return `doc_${String(docCounter).padStart(3, '0')}`
   }
 
   return {
@@ -26,12 +26,12 @@ function createMemoryDocsStore() {
       // TODO: create a full SheetDoc and write it into docs.
       return {
         docId: nextDocId(),
-      };
+      }
     },
 
     async getDocState(docId) {
       // TODO: return the current document snapshot, seq and history.
-      return docs.get(docId) || null;
+      return docs.get(docId) || null
     },
 
     async applySetCell(command) {
@@ -42,7 +42,7 @@ function createMemoryDocsStore() {
         row: command.row,
         col: command.col,
         value: command.value ?? '',
-      };
+      }
     },
 
     async applyImportSheet(command) {
@@ -51,9 +51,9 @@ function createMemoryDocsStore() {
         docId: command.docId,
         clientId: command.clientId,
         snapshot: command.snapshot ?? null,
-      };
+      }
     },
-  };
+  }
 }
 
-module.exports = createMemoryDocsStore;
+module.exports = createMemoryDocsStore
