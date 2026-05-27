@@ -262,6 +262,10 @@ try {
   Assert-Equal $joinAck.Json.data.docId $createdDocId "join_ack returned wrong docId."
   Assert-Equal $joinAck.Json.data.clientId $clientId "join_ack returned wrong clientId."
   Assert-True ($null -ne $joinAck.Json.data.snapshot) "join_ack should include snapshot."
+  Assert-Equal $joinAck.Json.data.snapshot.id "sheet_${createdDocId}_001" "join_ack returned wrong initial snapshot id."
+  Assert-Equal $joinAck.Json.data.snapshot.name "Sheet1" "join_ack returned wrong initial snapshot name."
+  Assert-Equal $joinAck.Json.data.snapshot.defaultRowHeight 25 "join_ack returned wrong defaultRowHeight."
+  Assert-Equal $joinAck.Json.data.snapshot.defaultColWidth 100 "join_ack returned wrong defaultColWidth."
   Assert-True ($joinAck.Json.data.users.Count -ge 1) "join_ack should include at least one user."
 
   $joinPresence = Receive-WsType -Client $ws -ExpectedType "presence"
@@ -347,24 +351,46 @@ try {
     clientId = $clientId
     eventId = "evt_import_$suffix"
     snapshot = @{
+      id = "sheet_imported_$suffix"
+      name = "Imported Sheet"
+      defaultRowHeight = 28
+      defaultColWidth = 120
       rowCount = 2
       colCount = 2
+      styles = @{
+        style_header = @{
+          bold = $true
+          color = "#ffffff"
+          bgColor = "#2563eb"
+        }
+        style_value = @{
+          hAlign = "right"
+        }
+      }
       cells = @{
         "1:1" = @{
+          row = 1
+          col = 1
           value = "Name"
-          style = $null
+          styleId = "style_header"
         }
         "1:2" = @{
+          row = 1
+          col = 2
           value = "Score"
-          style = $null
+          styleId = "style_header"
         }
         "2:1" = @{
+          row = 2
+          col = 1
           value = "Alice"
-          style = $null
+          styleId = $null
         }
         "2:2" = @{
+          row = 2
+          col = 2
           value = "99"
-          style = $null
+          styleId = "style_value"
         }
       }
     }
@@ -374,6 +400,12 @@ try {
   $importBroadcast = Receive-WsType -Client $ws -ExpectedType "sheet_imported"
   Assert-Equal $importReply.Json.code 0 "import_sheet reply should return code 0."
   Assert-True ($importReply.Json.data.seq -gt $redoSeq) "import_sheet seq should be greater than redo seq."
+  Assert-Equal $importReply.Json.data.snapshot.id "sheet_imported_$suffix" "import_sheet reply snapshot id mismatch."
+  Assert-Equal $importReply.Json.data.snapshot.name "Imported Sheet" "import_sheet reply snapshot name mismatch."
+  Assert-Equal $importReply.Json.data.snapshot.defaultRowHeight 28 "import_sheet reply snapshot defaultRowHeight mismatch."
+  Assert-Equal $importReply.Json.data.snapshot.defaultColWidth 120 "import_sheet reply snapshot defaultColWidth mismatch."
+  Assert-Equal $importReply.Json.data.snapshot.cells.'1:1'.value "Name" "import_sheet reply snapshot cell 1:1 mismatch."
+  Assert-Equal $importBroadcast.Json.data.snapshot.id $importReply.Json.data.snapshot.id "import_sheet reply and broadcast snapshot id should match."
   Assert-Equal $importReply.Json.data.canUndo $false "import_sheet should clear undo state."
   Assert-Equal $importReply.Json.data.seq $importBroadcast.Json.data.seq "import_sheet reply and broadcast seq should match."
   Write-Host "PASS WS import_sheet => reply + broadcast, seq=$($importReply.Json.data.seq)" -ForegroundColor Green
@@ -393,10 +425,20 @@ try {
   $verifyJoinAck = Receive-WsType -Client $wsVerifier -ExpectedType "join_ack"
   $verifyPresence = Receive-WsType -Client $wsVerifier -ExpectedType "presence"
   Assert-Equal $verifyJoinAck.Json.code 0 "Verifier join_ack should return code 0."
+  Assert-Equal $verifyJoinAck.Json.data.snapshot.id "sheet_imported_$suffix" "Imported snapshot id mismatch."
+  Assert-Equal $verifyJoinAck.Json.data.snapshot.name "Imported Sheet" "Imported snapshot name mismatch."
+  Assert-Equal $verifyJoinAck.Json.data.snapshot.defaultRowHeight 28 "Imported snapshot defaultRowHeight mismatch."
+  Assert-Equal $verifyJoinAck.Json.data.snapshot.defaultColWidth 120 "Imported snapshot defaultColWidth mismatch."
   Assert-Equal $verifyJoinAck.Json.data.snapshot.rowCount 2 "Imported snapshot rowCount mismatch."
   Assert-Equal $verifyJoinAck.Json.data.snapshot.colCount 2 "Imported snapshot colCount mismatch."
+  Assert-Equal $verifyJoinAck.Json.data.snapshot.cells.'1:1'.row 1 "Imported snapshot cell 1:1 row mismatch."
+  Assert-Equal $verifyJoinAck.Json.data.snapshot.cells.'1:1'.col 1 "Imported snapshot cell 1:1 col mismatch."
   Assert-Equal $verifyJoinAck.Json.data.snapshot.cells.'1:1'.value "Name" "Imported snapshot cell 1:1 mismatch."
+  Assert-Equal $verifyJoinAck.Json.data.snapshot.cells.'1:1'.styleId "style_header" "Imported snapshot cell 1:1 styleId mismatch."
   Assert-Equal $verifyJoinAck.Json.data.snapshot.cells.'2:2'.value "99" "Imported snapshot cell 2:2 mismatch."
+  Assert-Equal $verifyJoinAck.Json.data.snapshot.cells.'2:2'.styleId "style_value" "Imported snapshot cell 2:2 styleId mismatch."
+  Assert-Equal $verifyJoinAck.Json.data.snapshot.styles.style_header.bgColor "#2563eb" "Imported snapshot style_header mismatch."
+  Assert-Equal $verifyJoinAck.Json.data.snapshot.styles.style_value.hAlign "right" "Imported snapshot style_value mismatch."
   Assert-Equal $verifyPresence.Json.code 0 "Verifier presence should return code 0."
   Write-Host "PASS WS rejoin => imported snapshot visible" -ForegroundColor Green
 

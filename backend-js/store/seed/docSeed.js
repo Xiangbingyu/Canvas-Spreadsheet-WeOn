@@ -1,21 +1,37 @@
 const DOC_SEEDS = [
   {
     docId: 'doc_sys_001',
-    title: '示例表格',
+    title: '2026年销售数据表',
     createdBy: 'system',
     currentSeq: 0,
     snapshot: {
+      id: 'sheet_20260527_001',
+      name: '2026年销售数据表',
+      defaultRowHeight: 25,
+      defaultColWidth: 100,
       cells: {
-        '1:1': { value: '姓名', style: {} },
-        '1:2': { value: '分数', style: {} },
-        '2:1': { value: '张三', style: {} },
-        '2:2': { value: '95',   style: {} },
-        '3:1': { value: '李四', style: {} },
-        '3:2': { value: '87',   style: {} },
+        '0:0': { row: 0, col: 0, value: '产品名称', styleId: 'style_header' },
+        '0:1': { row: 0, col: 1, value: '销售金额', styleId: 'style_header' },
+        '1:1': { row: 1, col: 1, value: '9999.00', styleId: 'style_currency' },
       },
-      styles: {},
-      rowCount: 3,
-      colCount: 2,
+      styles: {
+        style_header: {
+          fontFamily: '微软雅黑',
+          fontSize: 14,
+          bold: true,
+          color: '#FFFFFF',
+          bgColor: '#4472C4',
+          hAlign: 'center',
+        },
+        style_currency: {
+          fontFamily: 'Arial',
+          fontSize: 12,
+          bold: false,
+          hAlign: 'right',
+        },
+      },
+      rowCount: 100,
+      colCount: 26,
     },
   },
 ];

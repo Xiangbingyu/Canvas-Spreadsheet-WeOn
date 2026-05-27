@@ -1,8 +1,7 @@
 const { createWsSuccess, createWsError } = require('../../utils/response');
 const { ERROR_CODES } = require('../../protocol/errorCodes');
-const presenceService = require('../../service/presenceService');
 const roomService = require('../../service/roomService');
-const auditService = require('../../service/auditService');
+const auditService = require('../../audit/auditService');
 const { isNonEmptyString } = require('../../protocol/validators');
 
 async function handlePresence({ socket, message, reply, broadcastToRoom }) {
@@ -19,13 +18,13 @@ async function handlePresence({ socket, message, reply, broadcastToRoom }) {
     return;
   }
 
-  const { users } = await presenceService.getPresence(docId);
+  const users = await roomService.getRoomUsers(docId);
   const payload = createWsSuccess('presence', { docId, users });
 
   reply(payload);
   await broadcastToRoom(docId, payload);
 
-  await auditService.recordOperationAudit({ type: 'presence', docId });
+  await auditService.recordAuditEvent({ type: 'presence', docId });
 }
 
 module.exports = handlePresence;

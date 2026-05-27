@@ -1,6 +1,55 @@
 const { createDoc, normalizeDocSnapshot } = require('../../domain/entities/doc');
 const { deepClone } = require('../../utils/clone');
 
+function stableStringify(value) {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(',')}]`;
+  }
+
+  if (value && typeof value === 'object') {
+    const keys = Object.keys(value).sort();
+    return `{${keys.map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
+  }
+
+  return JSON.stringify(value);
+}
+
+function createStyleKey(style) {
+  return stableStringify(style);
+}
+
+function nextStyleId(snapshot) {
+  const existingIds = Object.keys(snapshot.styles || {});
+  let maxStyleNumber = 0;
+
+  for (const id of existingIds) {
+    const match = /^style_(\d+)$/.exec(id);
+    if (match) {
+      maxStyleNumber = Math.max(maxStyleNumber, Number(match[1]));
+    }
+  }
+
+  return `style_${String(maxStyleNumber + 1).padStart(3, '0')}`;
+}
+
+function findOrCreateStyleId(snapshot, style) {
+  if (!style || typeof style !== 'object' || Array.isArray(style)) {
+    return null;
+  }
+
+  const styleKey = createStyleKey(style);
+
+  for (const [styleId, styleValue] of Object.entries(snapshot.styles || {})) {
+    if (createStyleKey(styleValue) === styleKey) {
+      return styleId;
+    }
+  }
+
+  const styleId = nextStyleId(snapshot);
+  snapshot.styles[styleId] = deepClone(style);
+  return styleId;
+}
+
 function createAutoIncrement(start = 0) {
   let current = start;
 
@@ -152,12 +201,18 @@ function createDocMemoryStore() {
       const cellKey = `${command.row}:${command.col}`;
       const previousCell = nextSnapshot.cells[cellKey] || {};
       const oldValue = previousCell.value ?? '';
-      const oldStyle = previousCell.style ?? null;
+      const oldStyleId = typeof previousCell.styleId === 'string' ? previousCell.styleId : null;
+      const oldStyle = oldStyleId ? deepClone(nextSnapshot.styles[oldStyleId] || null) : null;
+      const nextStyleIdValue = command.style !== undefined
+        ? findOrCreateStyleId(nextSnapshot, command.style)
+        : null;
 
       nextSnapshot.cells[cellKey] = {
+        row: command.row,
+        col: command.col,
         value: command.value ?? '',
-        // style 显式传 null 表示清除样式；未传（undefined）时保留旧样式。
-        style: command.style !== undefined ? command.style : (previousCell.style ?? null),
+        // style 显式传 null 或未传（undefined）都表示清除样式。
+        styleId: nextStyleIdValue,
       };
 
       if (command.row > nextSnapshot.rowCount) {

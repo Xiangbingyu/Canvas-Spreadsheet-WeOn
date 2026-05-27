@@ -60,6 +60,18 @@ async function getJson(baseUrl, pathname) {
   };
 }
 
+function assertSnapshotMatchesDocFormat(snapshot, expected) {
+  assert.equal(typeof snapshot, 'object');
+  assert.equal(snapshot.id, expected.id);
+  assert.equal(snapshot.name, expected.name);
+  assert.equal(snapshot.defaultRowHeight, expected.defaultRowHeight);
+  assert.equal(snapshot.defaultColWidth, expected.defaultColWidth);
+  assert.equal(snapshot.rowCount, expected.rowCount);
+  assert.equal(snapshot.colCount, expected.colCount);
+  assert.deepEqual(snapshot.styles, expected.styles);
+  assert.deepEqual(snapshot.cells, expected.cells);
+}
+
 // ==================== POST /docs：创建文档并校验初始状态与审计日志 ====================
 test('POST /docs creates a new online sheet with initial snapshot', async () => {
   const server = await createTestServer();
@@ -78,6 +90,10 @@ test('POST /docs creates a new online sheet with initial snapshot', async () => 
     assert.equal(response.json.data.currentSeq, 0);
     assert.equal(response.json.data.createdBy, 'user_001');
     assert.deepEqual(response.json.data.snapshot, {
+      id: 'sheet_doc_001_001',
+      name: 'Sheet1',
+      defaultRowHeight: 25,
+      defaultColWidth: 100,
       cells: {},
       styles: {},
       rowCount: 0,
@@ -92,6 +108,41 @@ test('POST /docs creates a new online sheet with initial snapshot', async () => 
     assert.equal(auditLogs[0].clientId, 'user_001');
     assert.equal(auditLogs[0].requestId, 'evt_create_doc_001');
     assert.equal(auditLogs[0].payloadJson.title, 'test-sheet');
+  } finally {
+    await server.close();
+  }
+});
+
+test('POST /docs matches documented response format', async () => {
+  const server = await createTestServer();
+
+  try {
+    const response = await postJson(server.baseUrl, '/docs', {
+      title: '季度报表',
+      createdBy: 'user_001',
+      eventId: 'evt_create_doc_format_001',
+    });
+
+    assert.equal(response.status, 201);
+    assert.deepEqual(Object.keys(response.json).sort(), ['code', 'data', 'message']);
+    assert.equal(response.json.code, 0);
+    assert.equal(response.json.message, 'ok');
+    assert.equal(response.json.data.docId, 'doc_001');
+    assert.equal(response.json.data.title, '季度报表');
+    assert.equal(response.json.data.currentSeq, 0);
+    assert.equal(response.json.data.createdBy, 'user_001');
+    assert.match(response.json.data.createdAt, /^\d{4}-\d{2}-\d{2}T/);
+    assert.match(response.json.data.updatedAt, /^\d{4}-\d{2}-\d{2}T/);
+    assertSnapshotMatchesDocFormat(response.json.data.snapshot, {
+      id: 'sheet_doc_001_001',
+      name: 'Sheet1',
+      defaultRowHeight: 25,
+      defaultColWidth: 100,
+      rowCount: 0,
+      colCount: 0,
+      styles: {},
+      cells: {},
+    });
   } finally {
     await server.close();
   }
@@ -138,6 +189,8 @@ test('POST /docs creates different documents when eventId is missing', async () 
     assert.equal(firstResponse.status, 201);
     assert.equal(secondResponse.status, 201);
     assert.notEqual(firstResponse.json.data.docId, secondResponse.json.data.docId);
+    assert.equal(firstResponse.json.data.snapshot.id, `sheet_${firstResponse.json.data.docId}_001`);
+    assert.equal(secondResponse.json.data.snapshot.id, `sheet_${secondResponse.json.data.docId}_001`);
   } finally {
     await server.close();
   }
@@ -477,6 +530,56 @@ test('GET /docs/:docId returns current document state from cache', async () => {
     assert.equal(response.status, 200);
     assert.equal(response.json.code, 0);
     assert.deepEqual(response.json.data, createdResponse.json.data);
+  } finally {
+    await server.close();
+  }
+});
+
+test('GET /docs/:docId matches documented response format', async () => {
+  const server = await createTestServer();
+
+  try {
+    const response = await getJson(server.baseUrl, '/docs/doc_sys_001');
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(Object.keys(response.json).sort(), ['code', 'data', 'message']);
+    assert.equal(response.json.code, 0);
+    assert.equal(response.json.message, 'ok');
+    assert.equal(response.json.data.docId, 'doc_sys_001');
+    assert.equal(response.json.data.title, '2026年销售数据表');
+    assert.equal(response.json.data.currentSeq, 0);
+    assert.equal(response.json.data.createdBy, 'system');
+    assert.match(response.json.data.createdAt, /^\d{4}-\d{2}-\d{2}T/);
+    assert.match(response.json.data.updatedAt, /^\d{4}-\d{2}-\d{2}T/);
+    assertSnapshotMatchesDocFormat(response.json.data.snapshot, {
+      id: 'sheet_20260527_001',
+      name: '2026年销售数据表',
+      defaultRowHeight: 25,
+      defaultColWidth: 100,
+      rowCount: 100,
+      colCount: 26,
+      styles: {
+        style_header: {
+          fontFamily: '微软雅黑',
+          fontSize: 14,
+          bold: true,
+          color: '#FFFFFF',
+          bgColor: '#4472C4',
+          hAlign: 'center',
+        },
+        style_currency: {
+          fontFamily: 'Arial',
+          fontSize: 12,
+          bold: false,
+          hAlign: 'right',
+        },
+      },
+      cells: {
+        '0:0': { row: 0, col: 0, value: '产品名称', styleId: 'style_header' },
+        '0:1': { row: 0, col: 1, value: '销售金额', styleId: 'style_header' },
+        '1:1': { row: 1, col: 1, value: '9999.00', styleId: 'style_currency' },
+      },
+    });
   } finally {
     await server.close();
   }
