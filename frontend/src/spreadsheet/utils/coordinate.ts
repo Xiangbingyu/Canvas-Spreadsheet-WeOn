@@ -1,4 +1,5 @@
 // Coordinate hit-testing utilities shared by canvas event adapters.
+// Input: canvas point and viewport state; output: cell coordinate or sheet hit target.
 import type { CellCoord, RenderConfig, ViewportState } from '@/spreadsheet/model/types'
 
 export type SheetHitTarget =

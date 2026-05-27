@@ -1,5 +1,6 @@
 // Pure Canvas 2D renderer for grids, cell backgrounds, text, headers, and selection overlays.
 // This module does not mutate state or handle editing, websocket, undo, or redo logic.
+// Input: RenderSpreadsheetOptions; output: pixels drawn on the provided canvas context.
 import {
   cellKey,
   columnLabel,

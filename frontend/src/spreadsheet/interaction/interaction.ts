@@ -1,4 +1,5 @@
 // Shared interaction contracts between CanvasSpreadsheet and the editing interaction module.
+// Input: normalized canvas event payloads; output: callback types for interaction owners.
 import type { CSSProperties } from 'react'
 import type { Cell, CellCoord, RenderConfig, SelectionRange } from '@/spreadsheet/model/types'
 

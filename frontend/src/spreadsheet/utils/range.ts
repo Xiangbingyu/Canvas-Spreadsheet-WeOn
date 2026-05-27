@@ -1,4 +1,5 @@
 // Selection range utilities shared by renderer, store, and interaction code.
+// Input: selection ranges and coordinates; output: normalized ranges or containment.
 import type { CellCoord, SelectionRange } from '@/spreadsheet/model/types'
 
 export function normalizeRange(range: SelectionRange): SelectionRange {

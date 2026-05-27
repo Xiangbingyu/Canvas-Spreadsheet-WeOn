@@ -1,4 +1,5 @@
 // Tracks a container element size with ResizeObserver for responsive canvas layout.
+// Input: HTMLElement ref; output: current logical pixel width and height.
 import { useLayoutEffect, useState, type RefObject } from 'react'
 
 export interface CanvasSize {

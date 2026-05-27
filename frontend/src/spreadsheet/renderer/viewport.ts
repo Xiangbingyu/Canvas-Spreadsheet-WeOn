@@ -1,4 +1,5 @@
 // Viewport math for total sheet size and visible row/column ranges.
+// Input: sheet dimensions and viewport state; output: total size or visible range.
 import type { RenderConfig, ViewportState } from '@/spreadsheet/model/types'
 
 export interface VisibleRange {

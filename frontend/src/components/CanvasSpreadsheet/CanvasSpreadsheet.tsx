@@ -1,5 +1,6 @@
 // React shell for the spreadsheet canvas; adapts DOM events to interaction callbacks.
 // Rendering is delegated to spreadsheet/renderer and data comes from the page/store layer.
+// Input: CanvasSpreadsheetProps; output: canvas rendering plus interaction callback events.
 import {
   useCallback,
   useEffect,

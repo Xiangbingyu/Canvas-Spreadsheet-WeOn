@@ -1,4 +1,5 @@
 // Core spreadsheet data types shared by renderer, store, and interaction modules.
+// Input: imported worksheet and UI data shapes; output: shared TypeScript contracts.
 export type CellAddress = string
 export type CellKey = `${number}:${number}`
 
@@ -53,18 +54,14 @@ export interface WorksheetSnapshot {
   styles?: Record<string, Style>
 }
 
-export interface Worksheet {
+export interface WorksheetData {
   id: string
   name: string
-  rowCount?: number
-  colCount?: number
   defaultRowHeight: number
   defaultColWidth: number
-  styles: Map<string, Style>
-  cells: Map<string, Cell>
+  styles: Record<string, Style>
+  cells: Record<string, Cell>
 }
-
-export type WorksheetInput = Worksheet | WorksheetSnapshot
 
 export const DEFAULT_CONFIG: Required<RenderConfig> = {
   rowHeight: 26,

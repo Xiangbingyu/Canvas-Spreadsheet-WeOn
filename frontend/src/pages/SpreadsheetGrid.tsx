@@ -1,4 +1,5 @@
 // Page-level adapter that binds Redux spreadsheet state to the CanvasSpreadsheet component.
+// Input: workSheet and spreadsheet Redux state; output: CanvasSpreadsheet props.
 import { useCallback, useMemo } from 'react'
 import { CanvasSpreadsheet } from '@/components/CanvasSpreadsheet'
 import type { InteractionCallbacks } from '@/spreadsheet/interaction/interaction'
@@ -11,10 +12,14 @@ import {
   setViewport,
 } from '@/spreadsheet/store/spreadsheetSlice'
 import { useAppDispatch, useAppSelector } from '@/spreadsheet/store/store'
+import { selectWorksheet } from '@/spreadsheet/store/workSheetSlice'
+import { worksheetDataToSnapshot } from '@/spreadsheet/utils/worksheetAdapter'
 
 export function SpreadsheetGrid() {
   const dispatch = useAppDispatch()
-  const spreadsheet = useAppSelector(selectSpreadsheet)
+  const spreadsheetUi = useAppSelector(selectSpreadsheet)
+  const worksheet = useAppSelector(selectWorksheet)
+  const snapshot = useMemo(() => worksheetDataToSnapshot(worksheet), [worksheet])
   const handleViewportChange = useCallback(
     (viewport: ViewportState) => {
       dispatch(setViewport(viewport))
@@ -44,12 +49,16 @@ export function SpreadsheetGrid() {
 
   return (
     <CanvasSpreadsheet
-      rowCount={spreadsheet.rowCount}
-      colCount={spreadsheet.colCount}
-      cells={spreadsheet.cells}
-      styles={spreadsheet.styles}
-      selection={spreadsheet.selection}
-      editingCell={spreadsheet.editingCell}
+      rowCount={snapshot.rowCount}
+      colCount={snapshot.colCount}
+      cells={snapshot.cells}
+      styles={snapshot.styles}
+      selection={spreadsheetUi.selection}
+      editingCell={spreadsheetUi.editingCell}
+      config={{
+        rowHeight: worksheet.defaultRowHeight,
+        colWidth: worksheet.defaultColWidth,
+      }}
       callbacks={callbacks}
       onViewportChange={handleViewportChange}
     />

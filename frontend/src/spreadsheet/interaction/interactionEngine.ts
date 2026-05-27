@@ -1,5 +1,6 @@
 // Basic interaction engine helpers for selection, keyboard movement, and edit callbacks.
 // Canvas rendering can use these contracts without owning editing state.
+// Input: cell and keyboard events; output: selection/edit callback notifications.
 import type { CellCoord, RenderConfig, SelectionRange } from '@/spreadsheet/model/types'
 import type { InteractionCallbacks, SelectionChangeEventArgs } from './interaction'
 
