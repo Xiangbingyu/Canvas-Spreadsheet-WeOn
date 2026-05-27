@@ -1,3 +1,5 @@
+//工作表数据管理store
+
 import { configureStore, createSlice, type PayloadAction } from '@reduxjs/toolkit'
 import type { WorksheetData } from '@/spreadsheet/model/types'
 
@@ -7,8 +9,8 @@ const initialWorksheet: WorksheetData = {
   name: 'Sheet1',
   defaultRowHeight: 25,
   defaultColWidth: 100,
-  rowCount: 20,
-  colCount: 10,
+  rowCount: 1000,
+  colCount: 1000,
   styles: {},
   cells: {},
 }

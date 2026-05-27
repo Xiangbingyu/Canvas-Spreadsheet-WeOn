@@ -4,7 +4,7 @@ import { Menubar } from '@/components/Menubar/Menubar'
 import { SheetTabs } from '@/components/sheetTabs/SheetTabs'
 import { StatusBar } from '@/components/statusBar/StatusBar'
 import { Toolbar } from '@/components/Toolbar/Toolbar'
-import { SpreadsheetGrid } from '@/pages/SpreadsheetGrid'
+import GrideCanvas from '@/components/grideCanvas/GrideCanvas'
 
 export function SpreadsheetPage() {
   return (
@@ -13,8 +13,8 @@ export function SpreadsheetPage() {
       <Toolbar />
       <FormulaBar cellAddress="A1" value="" />
 
-      <div className="relative min-h-0 flex-1">
-        <SpreadsheetGrid activeCell="A1" />
+      <div className="relative min-h-0 flex-1 overflow-hidden">
+        <GrideCanvas />
         <Loading visible={false} />
       </div>
 

@@ -1,3 +1,5 @@
+//解析Excel单元格地址
+
 type RowCol = { row: number; col: number }
 
 function colLettersToNumber(letters: string): number {
