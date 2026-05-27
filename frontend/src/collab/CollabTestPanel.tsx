@@ -23,7 +23,6 @@ export function CollabTestPanel() {
       addLog(`${name}: online: ${users.map((u) => u.name).join(', ')}`),
     onError: (code, msg) => addLog(`${name}: ERROR ${code} - ${msg}`),
     onConnectionChange: (s) => addLog(`${name}: ${s}`),
-    generateStyleId: (s) => serverRef.current?.genStyleId(s) ?? '',
   })
 
   const startTest = () => {

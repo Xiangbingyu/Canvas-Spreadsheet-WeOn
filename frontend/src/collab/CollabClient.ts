@@ -6,7 +6,6 @@ import type {
   RedoApplied,
   UserInfo,
   Snapshot,
-  CellStyle,
 } from './protocol'
 
 // ===== 回调接口 =====
@@ -28,21 +27,6 @@ export interface CollabCallbacks {
   onError: (code: number, message: string) => void
   /** 连接状态变化 */
   onConnectionChange: (status: 'connected' | 'disconnected' | 'reconnecting') => void
-  /** 将内联 style 对象转为 styleId，写入 styles 表 */
-  generateStyleId: (style: CellStyle) => string
-}
-
-// ===== 默认样式ID生成器 (来自堵世轩 FE Owner 的定义) =====
-
-export function defaultGenerateStyleId(style: CellStyle): string {
-  const sorted = Object.keys(style)
-    .sort()
-    .reduce<Record<string, unknown>>((obj, key) => {
-      obj[key] = style[key as keyof CellStyle]
-      return obj
-    }, {})
-  const raw = JSON.stringify(sorted)
-  return `s_${btoa(encodeURIComponent(raw))}`
 }
 
 // ===== CollabClient =====

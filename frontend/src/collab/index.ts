@@ -1,6 +1,5 @@
 export { CollabClient } from './CollabClient'
 export type { CollabCallbacks, CollabClientOptions } from './CollabClient'
-export { defaultGenerateStyleId } from './CollabClient'
 export type {
   Snapshot,
   Cell,
@@ -18,3 +17,4 @@ export type {
 } from './protocol'
 export { ERROR_CODES } from './protocol'
 export { convertCellUpdatedToCell, convertSnapshotToCells } from './snapshotConverter'
+export { useCollab } from './useCollab'

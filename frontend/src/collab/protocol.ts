@@ -1,5 +1,13 @@
 // ===== 消息类型 =====
-// 参考: ignore_协同实现/接口文档.md v1
+// 消息字段对齐: docs/接口文档.md v1
+// 数据结构对齐: @/spreadsheet/model/types.ts
+
+import type { Cell, Style, WorksheetData } from '@/spreadsheet/model/types'
+
+// 类型别名，保持 WS 消息定义可读
+export type Snapshot = WorksheetData
+export type CellStyle = Style
+export type { Cell }
 
 export type ClientMessageType = 'join' | 'set_cell' | 'import_sheet' | 'presence' | 'undo' | 'redo'
 
@@ -154,36 +162,7 @@ export type WsResponse =
   | RedoApplied
   | ErrorMessage
 
-// ===== 数据结构 =====
-
-export interface Snapshot {
-  id: string
-  name: string
-  defaultRowHeight: number
-  defaultColWidth: number
-  rowCount: number
-  colCount: number
-  styles: Record<string, CellStyle>
-  cells: Record<string, Cell> // key: "row:col" 0-indexed
-}
-
-export interface Cell {
-  row: number // 0-indexed
-  col: number // 0-indexed
-  value: string
-  styleId: string | null
-}
-
-export interface CellStyle {
-  fontFamily?: string
-  fontSize?: number
-  bold?: boolean
-  italic?: boolean
-  underline?: boolean
-  color?: string
-  bgColor?: string
-  hAlign?: 'left' | 'center' | 'right'
-}
+// ===== 用户信息（collab 专用） =====
 
 export interface UserInfo {
   id: number

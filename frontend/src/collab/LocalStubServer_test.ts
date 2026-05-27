@@ -14,7 +14,6 @@ import { CollabClient } from './CollabClient'
 import type { CollabCallbacks } from './CollabClient'
 import type {
   Snapshot,
-  CellStyle,
   UserInfo,
   JoinRequest,
   SetCellRequest,
@@ -23,6 +22,8 @@ import type {
   RedoRequest,
   WsResponse,
 } from './protocol'
+import type { Style } from '@/spreadsheet/model/types'
+import { findOrCreateStyleId } from '@/spreadsheet/utils/generateStyleId'
 
 // ============================================================
 //  类型
@@ -98,16 +99,6 @@ export class LocalStubServer {
     return client
   }
 
-  genStyleId(style: CellStyle): string {
-    const sorted = Object.keys(style)
-      .sort()
-      .reduce<Record<string, unknown>>((obj, key) => {
-        obj[key] = style[key as keyof CellStyle]
-        return obj
-      }, {})
-    return `s_${btoa(encodeURIComponent(JSON.stringify(sorted)))}`
-  }
-
   // ---- 消息路由 ----
 
   private handleMessage(connId: string, msg: Record<string, unknown>): void {
@@ -162,10 +153,7 @@ export class LocalStubServer {
     // style → styleId
     let styleId: string | null = null
     if (msg.style) {
-      styleId = this.genStyleId(msg.style as CellStyle)
-      if (!(styleId in this.snapshot.styles)) {
-        this.snapshot.styles[styleId] = msg.style as CellStyle
-      }
+      styleId = findOrCreateStyleId(this.snapshot.styles, msg.style as Style)
     }
 
     this.snapshot.cells[cellKey] = {
@@ -248,10 +236,7 @@ export class LocalStubServer {
     const cellKey = `${entry.row - 1}:${entry.col - 1}`
     let styleId: string | null = null
     if (entry.oldStyle) {
-      styleId = this.genStyleId(entry.oldStyle as CellStyle)
-      if (!(styleId in this.snapshot.styles)) {
-        this.snapshot.styles[styleId] = entry.oldStyle as CellStyle
-      }
+      styleId = findOrCreateStyleId(this.snapshot.styles, entry.oldStyle as Style)
     }
     this.snapshot.cells[cellKey] = {
       row: entry.row - 1,
@@ -300,10 +285,7 @@ export class LocalStubServer {
     const cellKey = `${entry.row - 1}:${entry.col - 1}`
     let styleId: string | null = null
     if (entry.newStyle) {
-      styleId = this.genStyleId(entry.newStyle as CellStyle)
-      if (!(styleId in this.snapshot.styles)) {
-        this.snapshot.styles[styleId] = entry.newStyle as CellStyle
-      }
+      styleId = findOrCreateStyleId(this.snapshot.styles, entry.newStyle as Style)
     }
     this.snapshot.cells[cellKey] = {
       row: entry.row - 1,
@@ -412,7 +394,6 @@ if (typeof window !== 'undefined') {
       onPresence: (users) => p(`[${name}] online: ${users.map((u) => u.name).join(', ')}`),
       onError: (code, msg) => p(`[${name}] ERROR ${code}: ${msg}`),
       onConnectionChange: (s) => p(`[${name}] ${s}`),
-      generateStyleId: (style) => s.genStyleId(style),
     })
 
     const alice = s.createClient('u1', 'Alice', '#f00', cb('Alice'))
