@@ -50,6 +50,7 @@ export function ImportExcelModal({ open, onClose }: ImportExcelModalProps) {
     }
     dispatch(setWorksheet(result))
     message.success('导入成功')
+    console.log(result)
     setFileList([])
     onClose()
   }

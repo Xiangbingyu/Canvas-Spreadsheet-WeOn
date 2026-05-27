@@ -7,6 +7,8 @@ const initialWorksheet: WorksheetData = {
   name: 'Sheet1',
   defaultRowHeight: 25,
   defaultColWidth: 100,
+  rowCount: 20,
+  colCount: 10,
   styles: {},
   cells: {},
 }

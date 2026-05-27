@@ -23,6 +23,8 @@ export function parseExcelFromArrayBuffer(buffer: ArrayBuffer): ParseExcelResult
   }
 
   const cells: WorksheetData['cells'] = {}
+  let maxRow = 0
+  let maxCol = 0
 
   for (const key of Object.keys(worksheet)) {
     if (key.startsWith('!')) continue
@@ -34,15 +36,38 @@ export function parseExcelFromArrayBuffer(buffer: ArrayBuffer): ParseExcelResult
     const value = raw == null ? '' : String(raw)
     if (value === '') continue
 
+    maxRow = Math.max(maxRow, rc.row)
+    maxCol = Math.max(maxCol, rc.col)
+
     const mapKey = `${rc.row}:${rc.col}`
     cells[mapKey] = { row: rc.row, col: rc.col, value }
   }
+
+  const DEFAULT_ROW_COUNT = 20
+  const DEFAULT_COL_COUNT = 10
+
+  let parsedRow = 0
+  let parsedCol = 0
+  const ref = worksheet['!ref']
+  if (ref) {
+    const range = XLSX.utils.decode_range(ref)
+    parsedRow = range.e.r - range.s.r + 1
+    parsedCol = range.e.c - range.s.c + 1
+  } else if (maxRow > 0 && maxCol > 0) {
+    parsedRow = maxRow
+    parsedCol = maxCol
+  }
+
+  const rowCount = Math.max(DEFAULT_ROW_COUNT, parsedRow)
+  const colCount = Math.max(DEFAULT_COL_COUNT, parsedCol)
 
   return {
     id: '01',
     name: firstSheetName ?? 'Sheet1',
     defaultRowHeight: 25,
     defaultColWidth: 100,
+    rowCount,
+    colCount,
     styles: {},
     cells,
   }
