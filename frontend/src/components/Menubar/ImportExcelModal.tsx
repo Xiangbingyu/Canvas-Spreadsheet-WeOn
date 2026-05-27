@@ -1,7 +1,9 @@
 import { useState } from 'react'
+import { useDispatch } from 'react-redux'
 import { Modal, Typography, Upload, message } from 'antd'
 import type { UploadFile, UploadProps } from 'antd'
 import { parseExcelFromArrayBuffer } from '@/spreadsheet/excel/excelImport'
+import { setWorksheet, store } from '@/spreadsheet/store'
 
 type ImportExcelModalProps = {
   open: boolean
@@ -9,6 +11,7 @@ type ImportExcelModalProps = {
 }
 
 export function ImportExcelModal({ open, onClose }: ImportExcelModalProps) {
+  const dispatch = useDispatch<typeof store.dispatch>()
   const [fileList, setFileList] = useState<UploadFile[]>([])
   const uploadProps: UploadProps = {
     accept: '.xlsx,.xls,.csv',
@@ -45,8 +48,8 @@ export function ImportExcelModal({ open, onClose }: ImportExcelModalProps) {
       message.warning('未解析到工作表')
       return
     }
-    console.log(result)
-
+    dispatch(setWorksheet(result))
+    message.success('导入成功')
     setFileList([])
     onClose()
   }
