@@ -4,12 +4,7 @@ import { Menubar } from '@/components/Menubar/Menubar'
 import { SheetTabs } from '@/components/sheetTabs/SheetTabs'
 import { StatusBar } from '@/components/statusBar/StatusBar'
 import { Toolbar } from '@/components/Toolbar/Toolbar'
-import { SpreadsheetGrid } from '@/pages/SpreadsheetGrid'
-import {
-  selectActiveCellAddress,
-  selectActiveCellValue,
-} from '@/spreadsheet/store/spreadsheetSlice'
-import { useAppSelector } from '@/spreadsheet/store/store'
+import GrideCanvas from '@/components/grideCanvas/GrideCanvas'
 
 export function SpreadsheetPage() {
   const activeCellAddress = useAppSelector(selectActiveCellAddress)
@@ -21,8 +16,8 @@ export function SpreadsheetPage() {
       <Toolbar />
       <FormulaBar cellAddress={activeCellAddress} value={activeCellValue} />
 
-      <div className="relative min-h-0 flex-1">
-        <SpreadsheetGrid />
+      <div className="relative min-h-0 flex-1 overflow-hidden">
+        <GrideCanvas />
         <Loading visible={false} />
       </div>
 
