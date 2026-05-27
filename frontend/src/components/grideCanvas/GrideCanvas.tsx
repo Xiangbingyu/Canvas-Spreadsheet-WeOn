@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useSelector } from 'react-redux'
+import { useDispatch, useSelector, useStore } from 'react-redux'
+import { attachCellSelectInteraction } from '@/spreadsheet/interaction/selectCell'
 import { renderGrid } from '@/spreadsheet/render/gridRenderer'
 import {
   clampScroll,
@@ -171,7 +172,10 @@ function GridScrollBar({
 }
 
 function GrideCanvas() {
+  const dispatch = useDispatch()
+  const reduxStore = useStore<RootState>()
   const worksheet = useSelector((s: RootState) => s.workSheet)
+  const selection = useSelector((s: RootState) => s.selection)
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const viewportRef = useRef<Viewport>(createViewport())
@@ -203,27 +207,25 @@ function GrideCanvas() {
     })
   }, [worksheet])
 
-  const paint = useCallback(() => {
-    const canvas = canvasRef.current
-    const ctx = canvas?.getContext('2d')
-    if (!canvas || !ctx) return
-
-    renderGrid(ctx, {
-      worksheet,
-      viewport: viewportRef.current,
-      selection: { row: 1, col: 1 },
-    })
-  }, [worksheet])
-
+  // 绘制时从 store 读取最新数据，避免 selection 变化导致回调重建并触发 syncLayout
   const scheduleRender = useCallback(() => {
     if (rafRef.current !== null) {
       cancelAnimationFrame(rafRef.current)
     }
     rafRef.current = requestAnimationFrame(() => {
       rafRef.current = null
-      paint()
+      const canvas = canvasRef.current
+      const ctx = canvas?.getContext('2d')
+      if (!canvas || !ctx) return
+
+      const state = reduxStore.getState()
+      renderGrid(ctx, {
+        worksheet: state.workSheet,
+        viewport: viewportRef.current,
+        selection: { row: state.selection.row, col: state.selection.col },
+      })
     })
-  }, [paint])
+  }, [reduxStore])
 
   const applyScroll = useCallback(
     (nextX: number, nextY: number) => {
@@ -310,6 +312,25 @@ function GrideCanvas() {
   useEffect(() => {
     if (syncLayout()) scheduleRender()
   }, [worksheet, syncLayout, scheduleRender])
+
+  // 仅选中变化时重绘，不重复 syncLayout（避免 canvas 尺寸重置导致闪烁）
+  useEffect(() => {
+    scheduleRender()
+  }, [selection.row, selection.col, scheduleRender])
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+
+    const detach = attachCellSelectInteraction(canvas, {
+      getViewport: () => viewportRef.current,
+      getWorksheet: () => reduxStore.getState().workSheet,
+      dispatch,
+      getState: () => reduxStore.getState(),
+    })
+
+    return detach
+  }, [dispatch, reduxStore])
 
   useEffect(() => {
     const el = containerRef.current

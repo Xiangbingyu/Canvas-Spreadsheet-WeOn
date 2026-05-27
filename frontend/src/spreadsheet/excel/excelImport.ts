@@ -43,8 +43,8 @@ export function parseExcelFromArrayBuffer(buffer: ArrayBuffer): ParseExcelResult
     cells[mapKey] = { row: rc.row, col: rc.col, value }
   }
 
-  const DEFAULT_ROW_COUNT = 20
-  const DEFAULT_COL_COUNT = 10
+  const DEFAULT_ROW_COUNT = 1000
+  const DEFAULT_COL_COUNT = 1000
 
   let parsedRow = 0
   let parsedCol = 0
