@@ -1,14 +1,12 @@
 const roomUserStore = require('../store/roomUserStore');
 
 function getPresence(docId) {
-  return {
+  return roomUserStore.getRoomUsers(docId).then((users) => ({
     docId,
-    users: roomUserStore.getRoomUsers(docId),
-  };
+    users,
+  }));
 }
 
 module.exports = {
   getPresence,
 };
-
-

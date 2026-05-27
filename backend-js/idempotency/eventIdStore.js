@@ -21,6 +21,10 @@
       processedEvents.set(eventId, record);
     },
 
+    delete(eventId) {
+      processedEvents.delete(eventId);
+    },
+
     // TODO: 后续补充过期幂等记录的清理入口。
     // 可以考虑两种方向：
     // 1. 在读写时顺带清理过期记录

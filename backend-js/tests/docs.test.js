@@ -207,9 +207,10 @@ test('POST /docs does not create duplicate docStore records for duplicate eventI
     });
 
     const docs = await docStore.list();
+    const createdDocs = docs.filter((doc) => doc.docId !== 'doc_sys_001');
 
-    assert.equal(docs.length, 1);
-    assert.equal(docs[0].title, 'store-idempotent-doc');
+    assert.equal(createdDocs.length, 1);
+    assert.equal(createdDocs[0].title, 'store-idempotent-doc');
   } finally {
     await server.close();
   }

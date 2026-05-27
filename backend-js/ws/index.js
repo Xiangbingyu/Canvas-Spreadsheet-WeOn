@@ -3,7 +3,12 @@ const { WebSocketServer } = require('ws');
 const dispatchMessage = require('./dispatcher');
 const wsConfig = require('../config/wsConfig');
 const { validateWsMessageShape } = require('../security/wsGuard');
-const { createWsError } = require('../utils/response');
+const { createWsSuccess, createWsError } = require('../utils/response');
+const roomService = require('../service/roomService');
+const presenceService = require('../service/presenceService');
+const auditService = require('../service/auditService');
+
+let nextConnId = 0;
 
 function sendToSocket(socket, payload) {
   if (socket.readyState === 1) {
@@ -17,12 +22,17 @@ function createWebSocketServer(server) {
     maxPayload: wsConfig.maxPayloadBytes,
   });
 
-  function broadcastToRoom(docId, payload) {
-    // TODO: read room sockets from roomSocketStore and broadcast payload.
-    return { docId, payload };
+  async function broadcastToRoom(docId, payload) {
+    const sockets = await roomService.getRoomSockets(docId);
+    for (const s of sockets) {
+      sendToSocket(s, payload);
+    }
   }
 
   wss.on('connection', (socket) => {
+    // 每个连接分配唯一 ID，供 join 幂等控制使用
+    socket._connId = ++nextConnId;
+
     socket.on('message', (rawMessage) => {
       let message;
 
@@ -52,7 +62,24 @@ function createWebSocketServer(server) {
     });
 
     socket.on('close', () => {
-      // TODO: remove socket from runtime room state and broadcast latest presence.
+      roomService.leaveRoom(socket).then(async (result) => {
+        if (!result || !result.isFullyOffline) {
+          return;
+        }
+
+        const { docId } = result;
+        const { users } = await presenceService.getPresence(docId);
+
+        await broadcastToRoom(docId, createWsSuccess('presence', { docId, users }));
+
+        await auditService.recordOperationAudit({
+          type: 'leave',
+          docId,
+          clientId: result.clientId,
+        });
+      }).catch((error) => {
+        console.error('WebSocket close handler error:', error);
+      });
     });
 
     socket.on('error', (error) => {
@@ -66,4 +93,3 @@ function createWebSocketServer(server) {
 module.exports = {
   createWebSocketServer,
 };
-

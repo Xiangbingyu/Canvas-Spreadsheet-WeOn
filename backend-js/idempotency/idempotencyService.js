@@ -24,8 +24,17 @@ function remember(eventId, record) {
   eventIdStore.set(eventId, record);
 }
 
+function forget(eventId) {
+  if (!eventId) {
+    return;
+  }
+
+  eventIdStore.delete(eventId);
+}
+
 module.exports = {
   isProcessed,
   getRemembered,
   remember,
+  forget,
 };

@@ -1,8 +1,10 @@
 const createMemoryDocStore = require('./memory/docMemoryStore');
+const { DOC_SEEDS } = require('./seed/docSeed');
 
 function createDocStore() {
-  // Scaffold entry: first phase wires doc store to memory implementation.
-  return createMemoryDocStore();
+  const store = createMemoryDocStore();
+  store.seedSync(DOC_SEEDS);
+  return store;
 }
 
 module.exports = createDocStore();

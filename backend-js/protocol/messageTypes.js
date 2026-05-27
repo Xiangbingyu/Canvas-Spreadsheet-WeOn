@@ -6,6 +6,10 @@
   CELL_UPDATED: 'cell_updated',
   IMPORT_SHEET: 'import_sheet',
   SHEET_IMPORTED: 'sheet_imported',
+  UNDO: 'undo',
+  UNDO_APPLIED: 'undo_applied',
+  REDO: 'redo',
+  REDO_APPLIED: 'redo_applied',
   ERROR: 'error',
 };
 

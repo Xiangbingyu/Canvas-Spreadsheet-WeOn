@@ -116,6 +116,14 @@ function createRoomSocketMemoryStore() {
       return cloneRecord(getStoredRowByConnectionId(connectionId));
     },
 
+    async findBySocket(socket) {
+      const connectionId = runtimeConnectionIdBySocket.get(socket);
+      if (!connectionId) {
+        return null;
+      }
+      return cloneRecord(getStoredRowByConnectionId(connectionId));
+    },
+
     async listByDocId(docId) {
       return cloneRecords(listRowsByDocId(docId));
     },
@@ -151,7 +159,26 @@ function createRoomSocketMemoryStore() {
     },
 
     async addSocketToRoom(docId, socket, clientId, metadata = {}) {
+      const existingConnId = runtimeConnectionIdBySocket.get(socket);
+      let previousEntry = null;
+
+      if (existingConnId) {
+        const existingRow = getStoredRowByConnectionId(existingConnId);
+        if (existingRow) {
+          // 记录前一个 (docId, clientId)，供调用方执行旧身份的 leave 逻辑。
+          if (existingRow.docId !== docId || existingRow.clientId !== clientId) {
+            previousEntry = { docId: existingRow.docId, clientId: existingRow.clientId };
+          }
+          // 从旧房间的 runtime 映射中移除，避免断开时遗留脏连接。
+          const oldRoom = runtimeSocketsByDocId.get(existingRow.docId);
+          if (oldRoom) {
+            oldRoom.delete(existingConnId);
+          }
+        }
+      }
+
       const row = upsert({
+        connectionId: existingConnId || undefined,
         docId,
         clientId,
         status: 'connected',
@@ -161,7 +188,7 @@ function createRoomSocketMemoryStore() {
 
       runtimeRoom.set(row.connectionId, socket);
       runtimeConnectionIdBySocket.set(socket, row.connectionId);
-      return row;
+      return { row, previousEntry };
     },
 
     async getRoomSockets(docId) {

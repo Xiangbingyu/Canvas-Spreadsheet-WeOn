@@ -300,13 +300,19 @@ async function getDocState(docId) {
 }
 
 async function applySetCell(command) {
-  // TODO: 后续补齐 seq 分配、history 追加、幂等控制和缓存更新。
-  return docStore.applySetCell(command);
+  const updatedDoc = await docStore.applySetCell(command);
+  if (updatedDoc) {
+    docsCache.set(docStateKey(command.docId), toDocView(updatedDoc));
+  }
+  return updatedDoc;
 }
 
 async function applyImportSheet(command) {
-  // TODO: 后续补齐整表替换流程、history 追加和缓存更新。
-  return docStore.applyImportSheet(command);
+  const updatedDoc = await docStore.applyImportSheet(command);
+  if (updatedDoc) {
+    docsCache.set(docStateKey(command.docId), toDocView(updatedDoc));
+  }
+  return updatedDoc;
 }
 
 module.exports = {

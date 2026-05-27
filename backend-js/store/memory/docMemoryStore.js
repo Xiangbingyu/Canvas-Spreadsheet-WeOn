@@ -151,10 +151,13 @@ function createDocMemoryStore() {
       const nextSnapshot = normalizeDocSnapshot(current.snapshotJson);
       const cellKey = `${command.row}:${command.col}`;
       const previousCell = nextSnapshot.cells[cellKey] || {};
+      const oldValue = previousCell.value ?? '';
+      const oldStyle = previousCell.style ?? null;
 
       nextSnapshot.cells[cellKey] = {
         value: command.value ?? '',
-        style: command.style ?? previousCell.style ?? {},
+        // style 显式传 null 表示清除样式；未传（undefined）时保留旧样式。
+        style: command.style !== undefined ? command.style : (previousCell.style ?? null),
       };
 
       if (command.row > nextSnapshot.rowCount) {
@@ -165,10 +168,14 @@ function createDocMemoryStore() {
         nextSnapshot.colCount = command.col;
       }
 
-      return updateByDocId(command.docId, {
+      const updatedDoc = updateByDocId(command.docId, {
         snapshotJson: nextSnapshot,
         currentSeq: Number.isInteger(command.seq) ? command.seq : current.currentSeq + 1,
       });
+
+      if (!updatedDoc) return null;
+
+      return { ...updatedDoc, _before: { value: oldValue, style: oldStyle } };
     },
 
     async applyImportSheet(command) {
@@ -182,6 +189,14 @@ function createDocMemoryStore() {
         snapshotJson: normalizeDocSnapshot(command.snapshotJson || command.snapshot),
         currentSeq: Number.isInteger(command.seq) ? command.seq : current.currentSeq + 1,
       });
+    },
+
+    // 同步批量写入种子数据，仅供 store 初始化时调用。
+    // 种子使用固定 docId，不经过 nextDocId()，不影响自增计数器。
+    seedSync(rows = []) {
+      for (const row of rows) {
+        insert(row);
+      }
     },
   };
 }
