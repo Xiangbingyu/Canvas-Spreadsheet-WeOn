@@ -1,20 +1,27 @@
-const { createWsSuccess, createWsError } = require('../../utils/response');
+const { createWsError } = require('../../utils/response');
+const { ERROR_CODES } = require('../../protocol/errorCodes');
+const joinService = require('../../service/joinService');
 
 async function handleJoin({ socket, message, reply, broadcastToRoom }) {
-  if (!message.docId || !message.clientId) {
-    reply(createWsError(4000, 'docId and clientId are required'));
-    return;
-  }
+  try {
+    const result = await joinService.handleJoin({ socket, message });
 
-  // TODO: validate document, register socket and user, then broadcast presence.
-  reply(
-    createWsSuccess('join_ack', {
-      docId: message.docId,
-      clientId: message.clientId,
-      snapshot: null,
-      users: [],
-    }, 'join placeholder')
-  );
+    if (result.replyPayload) {
+      reply(result.replyPayload);
+    }
+
+    if (!result.replayOnly) {
+      for (const broadcast of result.broadcasts) {
+        try {
+          await broadcastToRoom(broadcast.docId, broadcast.payload);
+        } catch (error) {
+          console.error(`${broadcast.label}:`, error);
+        }
+      }
+    }
+  } catch (err) {
+    reply(createWsError(err.code || ERROR_CODES.INTERNAL_ERROR, err.message, err.details || null));
+  }
 }
 
 module.exports = handleJoin;
