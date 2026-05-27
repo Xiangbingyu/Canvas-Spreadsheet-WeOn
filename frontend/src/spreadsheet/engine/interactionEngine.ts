@@ -1,7 +1,7 @@
 // Interaction Engine 实现
 // 负责处理所有编辑交互相关的逻辑
 
-import type { CellCoord, SelectionRange, RenderConfig } from '../../spreadsheet/model/types'
+import type { CellCoord, SelectionRange, RenderConfig } from '../model/types'
 import type {
   InteractionCallbacks,
   CanvasClickEventArgs,
@@ -16,7 +16,7 @@ import type {
   SelectionChangeEventArgs,
   CellInputChangeEventArgs,
   CellCompositionEventArgs,
-} from './interaction'
+} from '../interaction/interaction'
 
 // 计算单元格的像素坐标
 export function getCellRect(
@@ -64,6 +64,7 @@ interface InteractionEngineState {
   editingCoord?: CellCoord
   isSelecting: boolean
   selectionStart?: CellCoord
+  isDragging: boolean // 区分点击和拖拽
 }
 
 // 仅包含回调接口，不包含 React 依赖
@@ -95,6 +96,7 @@ export class InteractionEngine {
       selection: { start: { row: 0, col: 0 }, end: { row: 0, col: 0 } },
       isEditing: false,
       isSelecting: false,
+      isDragging: false,
     }
   }
 
@@ -175,8 +177,10 @@ export class InteractionEngine {
   // 处理鼠标按下（开始拖拽选区）
   handleCellMouseDown(args: CellMouseDownEventArgs) {
     this.state.isSelecting = true
-    this.state.selectionStart = args.coord
+    this.state.isDragging = true
+    this.state.selectionStart = { ...args.coord }
 
+    // 保存选区起始位置
     if (this.callbacks.onCellMouseDown) {
       this.callbacks.onCellMouseDown(args)
     }
@@ -200,25 +204,18 @@ export class InteractionEngine {
 
   // 处理鼠标抬起
   handleCellMouseUp(args: CellMouseUpEventArgs) {
-    if (this.state.isSelecting) {
-      this.state.isSelecting = false
-      this.state.selectionStart = undefined
-
-      // 确保至少选中一个单元格
-      if (
-        this.state.selection.start.row === this.state.selection.end.row &&
-        this.state.selection.start.col === this.state.selection.end.col
-      ) {
-        // 单击选中
-        this.updateSelection(
-          {
-            start: this.state.selection.start,
-            end: this.state.selection.start,
-          },
-          'mouse'
-        )
-      }
+    // 保存最终的选区
+    if (this.state.isSelecting && this.state.selectionStart) {
+      const finalSelection = this.normalizeSelection(
+        this.state.selectionStart,
+        args.coord
+      )
+      this.updateSelection(finalSelection, 'mouse')
     }
+
+    this.state.isSelecting = false
+    this.state.isDragging = false
+    this.state.selectionStart = undefined
 
     if (this.callbacks.onCellMouseUp) {
       this.callbacks.onCellMouseUp(args)
@@ -227,7 +224,7 @@ export class InteractionEngine {
 
   // 处理键盘事件
   handleKeyboard(event: KeyboardEvent) {
-    const { selection } = this.state
+    const { selection, isEditing } = this.state
 
     // 拦截组合键
     if (event.ctrlKey || event.metaKey || event.shiftKey) {
@@ -261,24 +258,25 @@ export class InteractionEngine {
 
     // 处理 Enter：提交编辑或向下移动
     if (event.key === 'Enter') {
-      if (this.state.isEditing) {
+      if (isEditing) {
         // 在 textarea 中处理提交
         event.preventDefault()
         return
       } else {
-        // 提交当前编辑或移动到下一行
+        // 向下移动选区
         event.preventDefault()
         const newSelection = {
           start: { row: (selection.end.row + 1) % this.config.rowCount, col: selection.start.col },
           end: { row: (selection.end.row + 1) % this.config.rowCount, col: selection.end.col },
         }
         this.updateSelection(newSelection, 'keyboard')
+        return
       }
     }
 
     // 处理 ESC：取消编辑
     if (event.key === 'Escape') {
-      if (this.state.isEditing && this.state.editingCoord) {
+      if (isEditing && this.state.editingCoord) {
         if (this.callbacks.onCellEditCancel) {
           this.callbacks.onCellEditCancel({
             coord: this.state.editingCoord,

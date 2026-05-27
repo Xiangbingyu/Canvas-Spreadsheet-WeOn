@@ -1,4 +1,4 @@
-// 交互引擎导出
-export { InteractionEngine } from './interactionEngine'
-export type { InteractionCallbacks } from './interaction'
-export { CompositionHandler } from './completionHandler'
+// Canvas 渲染组件
+// 负责绘制表格网格、单元格、选区等视觉元素
+
+export { CanvasSpreadsheet } from './CanvasSpreadsheet'

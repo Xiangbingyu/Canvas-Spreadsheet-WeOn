@@ -1,19 +1,17 @@
 // 中文输入法处理 - Composition Handler
 // 负责处理中文输入法的 compositionstart/end 事件
 
-import type { CellCoord } from '../../spreadsheet/model/types'
+import type { CellCoord } from '../model/types'
 import type {
   CellCompositionEventArgs,
   CellInputChangeEventArgs,
-  CellEditCompleteEventArgs,
-} from './interaction'
+} from '../interaction/interaction'
 
-// InteractionEngine 的接口声明（简化版）
-interface InteractionEngineCallbacks {
+// 仅包含 CompositionHandler 需要的接口
+interface EngineCallbacks {
   onCellInputChange?: (args: CellInputChangeEventArgs) => void
   onCellCompositionStart?: (args: CellCompositionEventArgs) => void
   onCellCompositionEnd?: (args: CellCompositionEventArgs) => void
-  onCellEditSubmit?: (args: { coord: CellCoord; value: string }) => void
 }
 
 interface SelectionRange {
@@ -21,8 +19,8 @@ interface SelectionRange {
   end: CellCoord
 }
 
-interface InteractionEngine {
-  callbacks: InteractionEngineCallbacks
+interface CompositionEngine {
+  callbacks: EngineCallbacks
   rowCount: number
   colCount: number
   selection: SelectionRange
@@ -31,12 +29,12 @@ interface InteractionEngine {
 }
 
 export class CompositionHandler {
-  private engine: InteractionEngine
+  private engine: CompositionEngine
   private isComposing: boolean = false
   private currentEditingCoord?: CellCoord
   private tempValue: string = ''
 
-  constructor(engine: InteractionEngine) {
+  constructor(engine: CompositionEngine) {
     this.engine = engine
   }
 
@@ -78,16 +76,9 @@ export class CompositionHandler {
 
     this.isComposing = false
 
-    // 提交最终文本
+    // 提交最终文本（CompositionHandler 不直接提交，只更新值）
+    // 实际提交由父组件在CompositionEnd后处理
     const finalValue = event.data || this.tempValue
-
-    // 触发编辑提交回调
-    if (this.engine.callbacks.onCellEditSubmit) {
-      this.engine.callbacks.onCellEditSubmit({
-        coord: this.currentEditingCoord,
-        value: finalValue,
-      })
-    }
 
     // 触发 composition 结束回调
     if (this.engine.callbacks.onCellCompositionEnd) {
@@ -109,6 +100,11 @@ export class CompositionHandler {
 
   // 获取当前 composition 的临时值
   getTempValue(): string {
+    return this.tempValue
+  }
+
+  // 获取最终值
+  getFinalValue(): string {
     return this.tempValue
   }
 }
