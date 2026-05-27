@@ -1,30 +1,16 @@
 const { createWsSuccess, createWsError } = require('../../utils/response');
-
-function isValidCellPosition(value) {
-  return Number.isInteger(value) && value >= 1;
-}
+const { ERROR_CODES } = require('../../protocol/errorCodes');
+const cellService = require('../../service/cellService');
 
 async function handleSetCell({ message, reply, broadcastToRoom }) {
-  if (
-    !message.docId ||
-    !message.clientId ||
-    !isValidCellPosition(message.row) ||
-    !isValidCellPosition(message.col)
-  ) {
-    reply(createWsError(4000, 'docId, clientId, row and col are required'));
-    return;
+  try {
+    const responseData = await cellService.applySetCell(message);
+    const payload = createWsSuccess('cell_updated', responseData);
+    reply(payload);
+    await broadcastToRoom(responseData.docId, payload);
+  } catch (err) {
+    reply(createWsError(err.code || ERROR_CODES.INTERNAL_ERROR, err.message, err.details || null));
   }
-
-  // TODO: apply cell change into docs store and broadcast cell_updated.
-  reply(
-    createWsSuccess('cell_updated', {
-      docId: message.docId,
-      clientId: message.clientId,
-      row: message.row,
-      col: message.col,
-      value: message.value ?? '',
-    }, 'set_cell placeholder')
-  );
 }
 
 module.exports = handleSetCell;
