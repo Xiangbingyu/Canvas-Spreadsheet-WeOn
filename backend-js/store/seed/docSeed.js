@@ -10,9 +10,9 @@ const DOC_SEEDS = [
       defaultRowHeight: 25,
       defaultColWidth: 100,
       cells: {
-        '0:0': { row: 0, col: 0, value: '产品名称', styleId: 'style_header' },
-        '0:1': { row: 0, col: 1, value: '销售金额', styleId: 'style_header' },
-        '1:1': { row: 1, col: 1, value: '9999.00', styleId: 'style_currency' },
+        '0:0': { row: 1, col: 1, value: '产品名称', styleId: 'style_header' },
+        '0:1': { row: 1, col: 2, value: '销售金额', styleId: 'style_header' },
+        '1:1': { row: 2, col: 2, value: '9999.00', styleId: 'style_currency' },
       },
       styles: {
         style_header: {
@@ -34,6 +34,6 @@ const DOC_SEEDS = [
       colCount: 26,
     },
   },
-];
+]
 
-module.exports = { DOC_SEEDS };
+module.exports = { DOC_SEEDS }
