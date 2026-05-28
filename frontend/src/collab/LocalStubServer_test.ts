@@ -145,7 +145,7 @@ export class LocalStubServer {
   private handleSetCell(connId: string, msg: SetCellRequest): void {
     this.seq++
 
-    const cellKey = `${msg.row - 1}:${msg.col - 1}`
+    const cellKey = `${msg.row}:${msg.col}`
     const oldCell = this.snapshot.cells[cellKey]
     const oldValue = oldCell?.value ?? ''
     const oldStyle = oldCell?.styleId ? this.snapshot.styles[oldCell.styleId] : null
@@ -157,8 +157,8 @@ export class LocalStubServer {
     }
 
     this.snapshot.cells[cellKey] = {
-      row: msg.row - 1,
-      col: msg.col - 1,
+      row: msg.row,
+      col: msg.col,
       value: msg.value ?? '',
       styleId,
     }
@@ -233,14 +233,14 @@ export class LocalStubServer {
     const entry = undoStack.pop()!
     this.seq++
 
-    const cellKey = `${entry.row - 1}:${entry.col - 1}`
+    const cellKey = `${entry.row}:${entry.col}`
     let styleId: string | null = null
     if (entry.oldStyle) {
       styleId = findOrCreateStyleId(this.snapshot.styles, entry.oldStyle as Style)
     }
     this.snapshot.cells[cellKey] = {
-      row: entry.row - 1,
-      col: entry.col - 1,
+      row: entry.row,
+      col: entry.col,
       value: entry.oldValue,
       styleId,
     }
@@ -282,14 +282,14 @@ export class LocalStubServer {
     const entry = redoStack.pop()!
     this.seq++
 
-    const cellKey = `${entry.row - 1}:${entry.col - 1}`
+    const cellKey = `${entry.row}:${entry.col}`
     let styleId: string | null = null
     if (entry.newStyle) {
       styleId = findOrCreateStyleId(this.snapshot.styles, entry.newStyle as Style)
     }
     this.snapshot.cells[cellKey] = {
-      row: entry.row - 1,
-      col: entry.col - 1,
+      row: entry.row,
+      col: entry.col,
       value: entry.newValue,
       styleId,
     }

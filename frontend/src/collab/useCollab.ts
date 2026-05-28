@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from 'react'
+import { useEffect, useRef, useCallback, useMemo } from 'react'
 import { useDispatch } from 'react-redux'
 import { CollabClient } from './CollabClient'
 import type { CollabCallbacks } from './CollabClient'
@@ -10,6 +10,7 @@ import {
   setCurrentSeq,
   setConnectionStatus,
 } from '@/spreadsheet/store'
+import { fromServerSnapshot } from '@/spreadsheet/utils/fromServerSnapshot'
 import type { Style } from '@/spreadsheet/model/types'
 
 interface UseCollabOptions {
@@ -24,71 +25,74 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
   const dispatch = useDispatch()
   const clientRef = useRef<CollabClient | null>(null)
 
-  const callbacks: CollabCallbacks = {
-    onSnapshot(snapshot: Snapshot, currentSeq: number) {
-      dispatch(setWorksheet(snapshot))
-      dispatch(setCurrentSeq(currentSeq))
-    },
+  const callbacks = useMemo<CollabCallbacks>(
+    () => ({
+      onSnapshot(snapshot: Snapshot, currentSeq: number) {
+        dispatch(setWorksheet(fromServerSnapshot(snapshot)))
+        dispatch(setCurrentSeq(currentSeq))
+      },
 
-    onCellUpdated(data: CellUpdated['data']) {
-      dispatch(
-        updateCell({
-          row: data.row,
-          col: data.col,
-          value: data.value,
-          style: data.style as Style | undefined,
-        })
-      )
-      dispatch(setCurrentSeq(data.seq))
-    },
+      onCellUpdated(data: CellUpdated['data']) {
+        dispatch(
+          updateCell({
+            row: data.row,
+            col: data.col,
+            value: data.value,
+            style: data.style ? (data.style as Style) : undefined,
+          })
+        )
+        dispatch(setCurrentSeq(data.seq))
+      },
 
-    onSheetImported(data: SheetImported['data']) {
-      dispatch(setCurrentSeq(data.seq))
-    },
+      onSheetImported(data: SheetImported['data']) {
+        dispatch(setCurrentSeq(data.seq))
+      },
 
-    onUndoApplied(data) {
-      dispatch(
-        updateCell({
-          row: data.row,
-          col: data.col,
-          value: data.value,
-          style: data.style as Style | undefined,
-        })
-      )
-      dispatch(setCurrentSeq(data.seq))
-    },
+      onUndoApplied(data) {
+        dispatch(
+          updateCell({
+            row: data.row,
+            col: data.col,
+            value: data.value,
+            style: data.style ? (data.style as Style) : undefined,
+          })
+        )
+        dispatch(setCurrentSeq(data.seq))
+      },
 
-    onRedoApplied(data) {
-      dispatch(
-        updateCell({
-          row: data.row,
-          col: data.col,
-          value: data.value,
-          style: data.style as Style | undefined,
-        })
-      )
-      dispatch(setCurrentSeq(data.seq))
-    },
+      onRedoApplied(data) {
+        dispatch(
+          updateCell({
+            row: data.row,
+            col: data.col,
+            value: data.value,
+            style: data.style ? (data.style as Style) : undefined,
+          })
+        )
+        dispatch(setCurrentSeq(data.seq))
+      },
 
-    onPresence(users) {
-      dispatch(setOnlineUsers(users))
-    },
+      onPresence(users) {
+        dispatch(setOnlineUsers(users))
+      },
 
-    onError(code, message) {
-      console.error(`[Collab] ${code}: ${message}`)
-    },
+      onError(code, message) {
+        console.error(`[Collab] ${code}: ${message}`)
+      },
 
-    onConnectionChange(status) {
-      dispatch(setConnectionStatus(status))
-    },
-  }
+      onConnectionChange(status) {
+        dispatch(setConnectionStatus(status))
+      },
+    }),
+    [dispatch]
+  )
 
   const connect = useCallback(() => {
     if (clientRef.current) return
     const client = new CollabClient({ url, docId, clientId, userName, userColor, callbacks })
     clientRef.current = client
     client.connect()
-  }, [url, docId, clientId, userName, userColor])
+  }, [url, docId, clientId, userName, userColor, callbacks])
 
   const disconnect = useCallback(() => {
     clientRef.current?.disconnect()

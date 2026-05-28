@@ -16,5 +16,5 @@ export type {
   ErrorMessage,
 } from './protocol'
 export { ERROR_CODES } from './protocol'
-export { convertCellUpdatedToCell, convertSnapshotToCells } from './snapshotConverter'
+export { convertSnapshotToCells } from './snapshotConverter'
 export { useCollab } from './useCollab'
