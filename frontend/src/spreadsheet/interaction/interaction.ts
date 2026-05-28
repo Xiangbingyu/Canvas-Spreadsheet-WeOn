@@ -6,36 +6,36 @@ import type { CellCoord, SelectionRange } from '../model/types'
 // 单元格点击事件
 export interface CellClickEventArgs {
   coord: CellCoord
-  event: MouseEvent
+  event: React.MouseEvent
 }
 
 // 单元格双击事件
 export interface CellDoubleClickEventArgs {
   coord: CellCoord
-  event: MouseEvent
+  event: React.MouseEvent
 }
 
 // 单元格鼠标按下（开始拖拽选区）
 export interface CellMouseDownEventArgs {
   coord: CellCoord
-  event: MouseEvent
+  event: React.MouseEvent
 }
 
 // 单元格鼠标移动
 export interface CellMouseMoveEventArgs {
   coord: CellCoord
-  event: MouseEvent
+  event: React.MouseEvent
 }
 
 // 单元格鼠标抬起
 export interface CellMouseUpEventArgs {
   coord: CellCoord
-  event: MouseEvent
+  event: React.MouseEvent
 }
 
 // Canvas 整体点击（点击空白区域）
 export interface CanvasClickEventArgs {
-  event: MouseEvent
+  event: React.MouseEvent
 }
 
 // 编辑提交事件
