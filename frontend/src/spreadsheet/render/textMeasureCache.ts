@@ -6,6 +6,11 @@ const ELLIPSIS = '...'
 
 const widthCache = new Map<string, number>()
 
+/**
+ * 作用：生成文本测量缓存 key，区分不同字体下的相同文本。
+ * 传入参数：font 为 Canvas 当前字体字符串，text 为待测量文本。
+ * 返回结果：返回可用于 Map 查询的字符串 key。
+ */
 function getCacheKey(font: string, text: string): string {
   return `${font}::${text}`
 }

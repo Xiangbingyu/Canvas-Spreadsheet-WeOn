@@ -93,6 +93,11 @@ function GridScrollBar({
   )
 
   const scrollFromPointer = useCallback(
+    /**
+     * 作用：将滚动条轨道上的指针位置转换为实际 scroll 值。
+     * 传入参数：pointer 为指针在轨道内的坐标。
+     * 返回结果：无返回值，通过 onScroll 通知调用方。
+     */
     (pointer: number) => {
       if (maxScroll <= 0) {
         return
@@ -111,6 +116,11 @@ function GridScrollBar({
     [contentSize, maxScroll, onScroll, scroll, viewportSize]
   )
 
+  /**
+   * 作用：处理轨道点击，跳转到点击位置对应的滚动偏移。
+   * 传入参数：event 为 React pointer 事件。
+   * 返回结果：无返回值，通过 scrollFromPointer 间接触发 onScroll。
+   */
   const onTrackPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (maxScroll <= 0) {
       return
@@ -126,6 +136,11 @@ function GridScrollBar({
     scrollFromPointer(pointer)
   }
 
+  /**
+   * 作用：开始拖拽滚动条滑块，并记录初始指针和滚动位置。
+   * 传入参数：event 为 React pointer 事件。
+   * 返回结果：无返回值，内部写入 dragRef。
+   */
   const onThumbPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (maxScroll <= 0) {
       return
@@ -139,6 +154,11 @@ function GridScrollBar({
     event.currentTarget.setPointerCapture(event.pointerId)
   }
 
+  /**
+   * 作用：拖拽滑块时根据指针位移计算下一次滚动值。
+   * 传入参数：event 为 React pointer 事件。
+   * 返回结果：无返回值，通过 onScroll 通知调用方。
+   */
   const onThumbPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
     const drag = dragRef.current
     if (!drag || maxScroll <= 0) {
@@ -158,6 +178,11 @@ function GridScrollBar({
     onScroll(nextScroll)
   }
 
+  /**
+   * 作用：结束滚动条拖拽并释放 pointer capture。
+   * 传入参数：event 为 React pointer 事件。
+   * 返回结果：无返回值，内部清空 dragRef。
+   */
   const onThumbPointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
     dragRef.current = null
     event.currentTarget.releasePointerCapture(event.pointerId)
@@ -269,6 +294,11 @@ function GrideCanvas() {
   }, [layout.colCount, layout.colWidth, layout.rowCount, layout.rowHeight])
 
   const applyScroll = useCallback(
+    /**
+     * 作用：应用横向/纵向滚动，限制边界后触发全层重绘。
+     * 传入参数：nextX/nextY 为待应用的滚动偏移。
+     * 返回结果：无返回值，更新 viewportRef 和滚动条 UI。
+     */
     (nextX: number, nextY: number) => {
       const viewport = viewportRef.current
       const sheet = getSheetSize(
@@ -306,6 +336,11 @@ function GrideCanvas() {
   const getWorksheet = useCallback(() => reduxStore.getState().workSheet, [reduxStore])
   const getState = useCallback(() => reduxStore.getState(), [reduxStore])
   const onWheelScroll = useCallback(
+    /**
+     * 作用：将滚轮增量转换为 Canvas 视口滚动。
+     * 传入参数：deltaX/deltaY 为浏览器滚轮事件提供的滚动增量。
+     * 返回结果：无返回值，通过 applyScroll 更新视口。
+     */
     (deltaX: number, deltaY: number) => {
       const viewport = viewportRef.current
       applyScroll(viewport.scrollX + deltaX, viewport.scrollY + deltaY)
