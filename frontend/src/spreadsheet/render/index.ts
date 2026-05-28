@@ -1,5 +1,13 @@
 export { GRID_CHROME, colNumberToLetters } from './chrome'
-export { renderGrid, type GridSelection, type RenderGridOptions } from './gridRenderer'
+export {
+  renderContentLayer,
+  renderGrid,
+  renderGridLayer,
+  renderOverlayLayer,
+  type GridSelection,
+  type RenderGridOptions,
+} from './gridRenderer'
+export { fitTextToWidth, measureTextCached } from './textMeasureCache'
 export {
   clampScroll,
   createViewport,
