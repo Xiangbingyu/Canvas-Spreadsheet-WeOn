@@ -56,8 +56,6 @@ function selectCellAt(row: number, col: number, dispatch: AppDispatch, getState:
       style,
     })
   )
-
-  console.log('selection', getState().selection)
 }
 
 /**

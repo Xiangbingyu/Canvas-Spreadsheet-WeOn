@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useDispatch, useSelector, useStore } from 'react-redux'
 import { attachCellSelectInteraction } from '@/spreadsheet/interaction/selectCell'
 import { renderGrid } from '@/spreadsheet/render/gridRenderer'
+import { canvasPerf } from '@/spreadsheet/render/perfMonitor'
 import {
   clampScroll,
   createViewport,
@@ -219,11 +220,13 @@ function GrideCanvas() {
       if (!canvas || !ctx) return
 
       const state = reduxStore.getState()
+      const renderStart = performance.now()
       renderGrid(ctx, {
         worksheet: state.workSheet,
         viewport: viewportRef.current,
         selection: { row: state.selection.row, col: state.selection.col },
       })
+      canvasPerf.recordRender(performance.now() - renderStart)
     })
   }, [reduxStore])
 
