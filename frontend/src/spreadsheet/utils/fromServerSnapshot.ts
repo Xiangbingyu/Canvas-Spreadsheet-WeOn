@@ -1,5 +1,9 @@
 import type { WorksheetData } from '@/spreadsheet/model/types'
 
+/** 与 workSheetStore 初始态一致：后端新建文档 snapshot 常为 rowCount/colCount=0，需补全才能绘制网格 */
+const DEFAULT_ROW_COUNT = 1000
+const DEFAULT_COL_COUNT = 1000
+
 /**
  * 将后端返回的文档快照规范化为前端 WorksheetData。
  *
@@ -23,5 +27,7 @@ export function fromServerSnapshot(snapshot: WorksheetData): WorksheetData {
   return {
     ...snapshot,
     cells,
+    rowCount: snapshot.rowCount > 0 ? snapshot.rowCount : DEFAULT_ROW_COUNT,
+    colCount: snapshot.colCount > 0 ? snapshot.colCount : DEFAULT_COL_COUNT,
   }
 }

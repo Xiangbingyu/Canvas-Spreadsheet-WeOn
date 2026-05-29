@@ -2,8 +2,9 @@ import { Button, Spin, Table, Typography, message } from 'antd'
 import { useEffect, useMemo, useState } from 'react'
 import type { ColumnsType } from 'antd/es/table'
 import { useDispatch } from 'react-redux'
+import { CreateBlankSheetModal } from '@/components/startUI/CreateBlankSheetModal'
 import API, { ApiError } from '@/services/httpAPI'
-import type { DocListItem } from '@/services/httpType'
+import type { DocDetail, DocListItem } from '@/services/httpType'
 import { setWorksheet } from '@/spreadsheet/store'
 import { setDocSession } from '@/spreadsheet/store/userStore'
 import { fromServerSnapshot } from '@/spreadsheet/utils/fromServerSnapshot'
@@ -29,6 +30,20 @@ export function StartPage({ userId, onEnterSheet }: StartPageProps) {
   const [docs, setDocs] = useState<DocListItem[]>([])
   const [loading, setLoading] = useState(true)
   const [openingDocId, setOpeningDocId] = useState<string | null>(null)
+  const [createModalOpen, setCreateModalOpen] = useState(false)
+  const [creating, setCreating] = useState(false)
+
+  function enterSheetFromDoc(doc: DocDetail) {
+    const worksheet = fromServerSnapshot(doc.snapshot)
+    dispatch(
+      setWorksheet({
+        ...worksheet,
+        name: doc.title?.trim() || worksheet.name,
+      })
+    )
+    dispatch(setDocSession({ docId: doc.docId, clientId: userId }))
+    onEnterSheet()
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -67,9 +82,7 @@ export function StartPage({ userId, onEnterSheet }: StartPageProps) {
     try {
       const doc = await API.getDoc(docId)
       console.log('[GET /docs/:docId]', doc)
-      dispatch(setWorksheet(fromServerSnapshot(doc.snapshot)))
-      dispatch(setDocSession({ docId: doc.docId, clientId: userId }))
-      onEnterSheet()
+      enterSheetFromDoc(doc)
     } catch (error) {
       console.log('[GET /docs/:docId] error', error)
       const text =
@@ -77,6 +90,23 @@ export function StartPage({ userId, onEnterSheet }: StartPageProps) {
       message.error(text)
     } finally {
       setOpeningDocId(null)
+    }
+  }
+
+  async function handleCreateBlankSheet(title: string) {
+    setCreating(true)
+    try {
+      const doc = await API.createDoc({ title, createdBy: userId })
+      console.log('[POST /docs]', doc)
+      setCreateModalOpen(false)
+      enterSheetFromDoc(doc)
+    } catch (error) {
+      console.log('[POST /docs] error', error)
+      const text =
+        error instanceof ApiError ? `${error.message} (code ${error.code})` : '创建文档失败'
+      message.error(text)
+    } finally {
+      setCreating(false)
     }
   }
 
@@ -123,14 +153,18 @@ export function StartPage({ userId, onEnterSheet }: StartPageProps) {
     },
   ]
 
+  const listBusy = openingDocId !== null || creating
+
   return (
     <div className="flex min-h-screen items-start justify-center bg-[#f5f7fb] px-6 py-12">
       <div className="w-full max-w-4xl rounded-xl border border-[#e5e7eb] bg-white p-6 shadow-sm">
-        <div className="mb-4 flex items-center justify-between">
+        <div className="mb-4 flex items-center justify-between gap-4">
           <Typography.Title level={4} style={{ margin: 0 }}>
             文档列表
           </Typography.Title>
-          <Typography.Text type="secondary">点击文档进入表格</Typography.Text>
+          <Button type="primary" disabled={listBusy} onClick={() => setCreateModalOpen(true)}>
+            新建空白表
+          </Button>
         </div>
 
         <Spin spinning={loading}>
@@ -143,6 +177,13 @@ export function StartPage({ userId, onEnterSheet }: StartPageProps) {
           />
         </Spin>
       </div>
+
+      <CreateBlankSheetModal
+        open={createModalOpen}
+        loading={creating}
+        onClose={() => setCreateModalOpen(false)}
+        onConfirm={(title) => void handleCreateBlankSheet(title)}
+      />
     </div>
   )
 }

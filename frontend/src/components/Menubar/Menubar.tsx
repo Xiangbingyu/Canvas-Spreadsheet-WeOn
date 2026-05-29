@@ -1,18 +1,27 @@
 import { useState } from 'react'
+import { useSelector } from 'react-redux'
 import { ExportExcelModal } from './ExportExcelModal'
 import { ImportExcelModal } from './ImportExcelModal'
+import type { RootState } from '@/spreadsheet/store'
 
 type MenubarProps = {
-  initialTitle?: string
   userInitial?: string
 }
 
 const menuBtnClass = 'rounded px-2 py-0.5 text-[13px] leading-6 text-[#202124] hover:bg-[#f1f3f4]'
 
-export function Menubar({ initialTitle = '未命名电子表格', userInitial = 'd' }: MenubarProps) {
-  const [title, setTitle] = useState(initialTitle)
+export function Menubar({ userInitial = 'd' }: MenubarProps) {
+  /** 文档标题：来自 workSheetStore.name，打开文档时由 StartPage 写入 */
+  const docTitle = useSelector((s: RootState) => s.workSheet.name)
+  const [title, setTitle] = useState(docTitle)
+  const [prevDocTitle, setPrevDocTitle] = useState(docTitle)
   const [importOpen, setImportOpen] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
+
+  if (docTitle !== prevDocTitle) {
+    setPrevDocTitle(docTitle)
+    setTitle(docTitle)
+  }
 
   return (
     <header className="shrink-0 border-b border-[#dadce0] bg-white">
