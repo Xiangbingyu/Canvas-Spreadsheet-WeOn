@@ -17,4 +17,4 @@ export type {
 } from './protocol'
 export { ERROR_CODES } from './protocol'
 export { convertSnapshotToCells } from './snapshotConverter'
-export { useCollab } from './useCollab'
+export { useCollab } from '../../hooks/useCollab'

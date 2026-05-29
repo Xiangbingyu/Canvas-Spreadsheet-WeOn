@@ -1,8 +1,8 @@
 import { useEffect, useRef, useCallback, useMemo } from 'react'
 import { useDispatch } from 'react-redux'
-import { CollabClient } from './CollabClient'
-import type { CollabCallbacks } from './CollabClient'
-import type { Snapshot, CellUpdated, SheetImported } from './protocol'
+import { CollabClient } from '../spreadsheet/collab/CollabClient'
+import type { CollabCallbacks } from '../spreadsheet/collab/CollabClient'
+import type { Snapshot, CellUpdated, SheetImported } from '../spreadsheet/collab/protocol'
 import {
   setWorksheet,
   updateCell,
