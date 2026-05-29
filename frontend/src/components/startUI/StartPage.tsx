@@ -1,11 +1,16 @@
 import { Button, Spin, Table, Typography, message } from 'antd'
 import { useEffect, useMemo, useState } from 'react'
 import type { ColumnsType } from 'antd/es/table'
+import { useDispatch } from 'react-redux'
 import API, { ApiError } from '@/services/httpAPI'
 import type { DocListItem } from '@/services/httpType'
+import { setWorksheet } from '@/spreadsheet/store'
+import { setDocSession } from '@/spreadsheet/store/userStore'
+import { fromServerSnapshot } from '@/spreadsheet/utils/fromServerSnapshot'
 
 type StartPageProps = {
-  onOpenDoc: (docId: string) => void
+  userId: string
+  onEnterSheet: () => void
 }
 
 function formatCreatedAt(value: string) {
@@ -19,9 +24,11 @@ function formatCreatedAt(value: string) {
   ).padStart(2, '0')}`
 }
 
-export function StartPage({ onOpenDoc }: StartPageProps) {
+export function StartPage({ userId, onEnterSheet }: StartPageProps) {
+  const dispatch = useDispatch()
   const [docs, setDocs] = useState<DocListItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [openingDocId, setOpeningDocId] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -30,14 +37,15 @@ export function StartPage({ onOpenDoc }: StartPageProps) {
       setLoading(true)
       try {
         const data = await API.listDocs({
-          userId: 'system', //后续会分配id的！！
+          userId,
           scope: 'all',
           page: 1,
           pageSize: 50,
         })
-        console.log(data)
+        console.log('[GET /docs]', data)
         if (!cancelled) setDocs(data.list)
       } catch (error) {
+        console.log('[GET /docs] error', error)
         if (!cancelled) {
           const text =
             error instanceof ApiError ? `${error.message} (code ${error.code})` : '加载文档列表失败'
@@ -52,7 +60,25 @@ export function StartPage({ onOpenDoc }: StartPageProps) {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [userId])
+
+  async function handleOpenDoc(docId: string) {
+    setOpeningDocId(docId)
+    try {
+      const doc = await API.getDoc(docId)
+      console.log('[GET /docs/:docId]', doc)
+      dispatch(setWorksheet(fromServerSnapshot(doc.snapshot)))
+      dispatch(setDocSession({ docId: doc.docId, clientId: userId }))
+      onEnterSheet()
+    } catch (error) {
+      console.log('[GET /docs/:docId] error', error)
+      const text =
+        error instanceof ApiError ? `${error.message} (code ${error.code})` : '加载文档失败'
+      message.error(text)
+    } finally {
+      setOpeningDocId(null)
+    }
+  }
 
   const dataSource = useMemo(() => {
     return [...docs].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
@@ -85,7 +111,12 @@ export function StartPage({ onOpenDoc }: StartPageProps) {
       key: 'action',
       width: 90,
       render: (_, record) => (
-        <Button type="link" onClick={() => onOpenDoc(record.docId)}>
+        <Button
+          type="link"
+          loading={openingDocId === record.docId}
+          disabled={openingDocId !== null && openingDocId !== record.docId}
+          onClick={() => void handleOpenDoc(record.docId)}
+        >
           打开
         </Button>
       ),
