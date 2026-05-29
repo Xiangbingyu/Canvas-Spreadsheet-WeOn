@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿﻿﻿const ERROR_CODES = {
+﻿﻿const ERROR_CODES = {
   OK: 0,
   INVALID_PARAMS: 4000,
   UNSUPPORTED_MESSAGE_TYPE: 4001,
