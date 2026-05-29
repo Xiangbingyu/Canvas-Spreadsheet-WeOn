@@ -5,6 +5,7 @@ const wsConfig = require('../config/wsConfig');
 const { validateWsMessageShape } = require('../security/wsGuard');
 const { createWsSuccess, createWsError } = require('../utils/response');
 const roomService = require('../service/roomService');
+const { createCollabBroadcastService } = require('../service/collabBroadcastService');
 const auditService = require('../audit/auditService');
 
 let nextConnId = 0;
@@ -21,11 +22,35 @@ function createWebSocketServer(server) {
     maxPayload: wsConfig.maxPayloadBytes,
   });
 
-  async function broadcastToRoom(docId, payload) {
+  async function broadcastLocallyToRoom(docId, payload) {
     const sockets = await roomService.getRoomSockets(docId);
     for (const s of sockets) {
       sendToSocket(s, payload);
     }
+  }
+
+  const collabBroadcastService = createCollabBroadcastService({
+    broadcastLocallyToRoom,
+  });
+  const readyPromise = collabBroadcastService.start().catch((error) => {
+    console.error('collab broadcast service start failed:', error);
+  });
+  let resourceClosePromise = null;
+  let isShuttingDown = false;
+
+  async function closeResources() {
+    if (!resourceClosePromise) {
+      resourceClosePromise = Promise.all([
+        collabBroadcastService.close().catch((error) => {
+          console.error('collab broadcast service close failed:', error);
+        }),
+        roomService.closeRuntimeState().catch((error) => {
+          console.error('room runtime close failed:', error);
+        }),
+      ]);
+    }
+
+    await resourceClosePromise;
   }
 
   wss.on('connection', (socket) => {
@@ -52,7 +77,7 @@ function createWebSocketServer(server) {
           socket,
           message,
           reply: (payload) => sendToSocket(socket, payload),
-          broadcastToRoom,
+          broadcastToRoom: (docId, payload) => collabBroadcastService.broadcastToRoom(docId, payload),
         })
       ).catch((error) => {
         console.error('WebSocket dispatch error:', error);
@@ -62,14 +87,14 @@ function createWebSocketServer(server) {
 
     socket.on('close', () => {
       roomService.leaveRoom(socket).then(async (result) => {
-        if (!result || !result.isFullyOffline) {
+        if (!result || !result.isFullyOffline || isShuttingDown) {
           return;
         }
 
         const { docId } = result;
         const users = await roomService.getRoomUsers(docId);
 
-        await broadcastToRoom(docId, createWsSuccess('presence', { docId, users }));
+        await collabBroadcastService.broadcastToRoom(docId, createWsSuccess('presence', { docId, users }));
 
         await auditService.recordAuditEvent({
           type: 'leave',
@@ -85,6 +110,27 @@ function createWebSocketServer(server) {
       console.error('WebSocket connection error:', error);
     });
   });
+
+  wss.on('close', () => {
+    void closeResources();
+  });
+
+  wss.ready = readyPromise;
+  wss.shutdown = async () => {
+    await readyPromise.catch(() => {});
+    isShuttingDown = true;
+
+    for (const client of wss.clients) {
+      if (client.readyState === 0 || client.readyState === 1) {
+        client.terminate();
+      }
+    }
+
+    await new Promise((resolve) => {
+      wss.close(() => resolve());
+    });
+    await closeResources();
+  };
 
   return wss;
 }

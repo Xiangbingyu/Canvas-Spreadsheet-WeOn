@@ -2,14 +2,65 @@ const assert = require('node:assert/strict');
 const { once } = require('node:events');
 const path = require('node:path');
 const test = require('node:test');
+const { resetMysqlDatabase } = require('../scripts/dbReset');
 
 const projectRoot = path.resolve(__dirname, '..');
 
+async function resetTestStore() {
+  if (process.env.STORE_DRIVER !== 'mysql') {
+    return;
+  }
+
+  await resetMysqlDatabase({
+    closePoolAfterReset: false,
+    silent: true,
+  });
+}
+
+async function teardownTestStore() {
+  if (process.env.STORE_DRIVER !== 'mysql') {
+    return;
+  }
+
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  const { closePool } = require('../db/mysql');
+  await closePool();
+}
+
+async function closeProjectResources() {
+  const cacheModulePath = path.join(projectRoot, 'cache', 'index.js');
+  const roomServiceModulePath = path.join(projectRoot, 'service', 'roomService.js');
+  const idempotencyServiceModulePath = path.join(projectRoot, 'idempotency', 'idempotencyService.js');
+  const lockModulePath = path.join(projectRoot, 'infra', 'redis', 'lock.js');
+
+  if (require.cache[cacheModulePath]) {
+    await require(cacheModulePath).close();
+  }
+
+  if (require.cache[roomServiceModulePath]) {
+    await require(roomServiceModulePath).closeRuntimeState();
+  }
+
+  if (require.cache[idempotencyServiceModulePath]) {
+    await require(idempotencyServiceModulePath).close();
+  }
+
+  if (require.cache[lockModulePath]) {
+    await require(lockModulePath).close();
+  }
+}
+
 function clearBackendRequireCache() {
   for (const modulePath of Object.keys(require.cache)) {
+    const keepMysqlModules = process.env.STORE_DRIVER === 'mysql'
+      && modulePath.includes(`${path.sep}db${path.sep}mysql${path.sep}`);
+
     if (
       modulePath.startsWith(projectRoot) &&
       !modulePath.includes(`${path.sep}node_modules${path.sep}`) &&
+      !keepMysqlModules &&
       modulePath !== __filename
     ) {
       delete require.cache[modulePath];
@@ -17,9 +68,19 @@ function clearBackendRequireCache() {
   }
 }
 
-async function createTestServer() {
+test.beforeEach(async () => {
+  await resetTestStore();
+  await closeProjectResources();
   clearBackendRequireCache();
+});
 
+test.after(async () => {
+  await closeProjectResources();
+  await teardownTestStore();
+  clearBackendRequireCache();
+});
+
+async function createTestServer() {
   const app = require('../app');
   const server = app.listen(0);
 
@@ -260,7 +321,7 @@ test('POST /docs does not create duplicate docStore records for duplicate eventI
     });
 
     const docs = await docStore.list();
-    const createdDocs = docs.filter((doc) => doc.docId !== 'doc_sys_001');
+    const createdDocs = docs.filter((doc) => !doc.docId.startsWith('doc_sys_'));
 
     assert.equal(createdDocs.length, 1);
     assert.equal(createdDocs[0].title, 'store-idempotent-doc');
@@ -595,20 +656,60 @@ test('GET /docs/:docId falls back to docStore and repopulates cache on cache mis
       createdBy: 'user_003',
       eventId: 'evt_create_doc_004',
     });
-    const docsCache = require('../cache/docsCache');
-    const { docStateKey } = require('../cache/cacheKeys');
+    const docSnapshotCache = require('../cache/docSnapshotCache');
     const docId = createdResponse.json.data.docId;
-    const cacheKey = docStateKey(docId);
 
-    docsCache.delete(cacheKey);
-    assert.equal(docsCache.get(cacheKey), undefined);
+    await docSnapshotCache.invalidate(docId);
+    assert.equal(await docSnapshotCache.get(docId), null);
 
     const response = await getJson(server.baseUrl, `/docs/${docId}`);
 
     assert.equal(response.status, 200);
     assert.equal(response.json.code, 0);
     assert.equal(response.json.data.docId, docId);
-    assert.deepEqual(docsCache.get(cacheKey), response.json.data);
+    assert.deepEqual(await docSnapshotCache.get(docId), response.json.data);
+  } finally {
+    await server.close();
+  }
+});
+
+test('GET /docs caches list result and invalidates it after create', async () => {
+  const server = await createTestServer();
+
+  try {
+    const userId = 'user_docs_cache_list';
+    const userDocsListCache = require('../cache/userDocsListCache');
+    const cacheParams = {
+      userId,
+      scope: 'created',
+      page: 1,
+      pageSize: 10,
+    };
+
+    await userDocsListCache.invalidateByUserId(userId);
+    assert.equal(await userDocsListCache.get(cacheParams), null);
+
+    await postJson(server.baseUrl, '/docs', {
+      title: 'cached-list-doc-1',
+      createdBy: userId,
+      eventId: 'evt_docs_cache_list_001',
+    });
+
+    const firstResponse = await getJson(
+      server.baseUrl,
+      `/docs?userId=${userId}&scope=created&page=1&pageSize=10`
+    );
+
+    assert.equal(firstResponse.status, 200);
+    assert.deepEqual(await userDocsListCache.get(cacheParams), firstResponse.json.data);
+
+    await postJson(server.baseUrl, '/docs', {
+      title: 'cached-list-doc-2',
+      createdBy: userId,
+      eventId: 'evt_docs_cache_list_002',
+    });
+
+    assert.equal(await userDocsListCache.get(cacheParams), null);
   } finally {
     await server.close();
   }

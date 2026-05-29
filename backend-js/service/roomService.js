@@ -77,6 +77,16 @@ async function getSocketMembership(socket) {
   return roomSocketStore.findBySocket(socket);
 }
 
+async function closeRuntimeState() {
+  if (typeof roomSocketStore.close === 'function') {
+    await roomSocketStore.close();
+  }
+
+  if (typeof roomUserStore.close === 'function') {
+    await roomUserStore.close();
+  }
+}
+
 module.exports = {
   joinRoom,
   leaveRoom,
@@ -84,4 +94,5 @@ module.exports = {
   getRoomSockets,
   isSocketInRoom,
   getSocketMembership,
+  closeRuntimeState,
 };

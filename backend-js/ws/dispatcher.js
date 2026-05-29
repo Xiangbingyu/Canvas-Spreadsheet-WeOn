@@ -1,6 +1,7 @@
-﻿const handleJoin = require('./handlers/join');
+const handleJoin = require('./handlers/join');
 const handlePresence = require('./handlers/presence');
 const handleSetCell = require('./handlers/setCell');
+const handleSetTitle = require('./handlers/setTitle');
 const handleImportSheet = require('./handlers/importSheet');
 const handleUndo = require('./handlers/undo');
 const handleRedo = require('./handlers/redo');
@@ -12,6 +13,7 @@ const handlers = {
   [WS_MESSAGE_TYPES.JOIN]: handleJoin,
   [WS_MESSAGE_TYPES.PRESENCE]: handlePresence,
   [WS_MESSAGE_TYPES.SET_CELL]: handleSetCell,
+  [WS_MESSAGE_TYPES.SET_TITLE]: handleSetTitle,
   [WS_MESSAGE_TYPES.IMPORT_SHEET]: handleImportSheet,
   [WS_MESSAGE_TYPES.UNDO]: handleUndo,
   [WS_MESSAGE_TYPES.REDO]: handleRedo,

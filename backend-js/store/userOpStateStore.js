@@ -1,8 +1,11 @@
+const storeConfig = require('../config/storeConfig');
 const createMemoryUserOpStateStore = require('./memory/userOpStateMemoryStore');
+const createUserOpStateMysqlStore = require('./mysql/userOpStateMysqlStore');
 
 function createUserOpStateStore() {
-  // Scaffold entry: first phase wires user operation state store to memory implementation.
-  return createMemoryUserOpStateStore();
+  return storeConfig.driver === 'mysql'
+    ? createUserOpStateMysqlStore()
+    : createMemoryUserOpStateStore();
 }
 
 module.exports = createUserOpStateStore();

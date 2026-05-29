@@ -1,8 +1,11 @@
+const runtimeConfig = require('../config/runtimeConfig');
 const createMemoryRoomSocketStore = require('./memory/roomSocketMemoryStore');
+const createRoomSocketRedisStore = require('./redis/roomSocketRedisStore');
 
 function createRoomSocketStore() {
-  // Scaffold entry: first phase wires room socket store to memory implementation.
-  return createMemoryRoomSocketStore();
+  return runtimeConfig.driver === 'redis'
+    ? createRoomSocketRedisStore()
+    : createMemoryRoomSocketStore();
 }
 
 module.exports = createRoomSocketStore();

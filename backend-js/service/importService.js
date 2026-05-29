@@ -1,4 +1,7 @@
 const { ERROR_CODES } = require('../protocol/errorCodes');
+const storeConfig = require('../config/storeConfig');
+const { withTransaction } = require('../db/mysql');
+const docLock = require('../infra/redis/lock');
 const docsService = require('./docsService');
 const historyStore = require('../store/historyStore');
 const userOpStateStore = require('../store/userOpStateStore');
@@ -32,48 +35,65 @@ function normalizeImportSheetCommand(command = {}) {
 }
 
 async function executeImportSheet(normalizedCommand) {
-  const updatedDoc = await docsService.applyImportSheet({
-    docId: normalizedCommand.docId,
-    snapshotJson: normalizedCommand.snapshot,
+  return docLock.withDocLock(normalizedCommand.docId, async () => {
+    let updatedDoc = null;
+    let seq = 0;
+
+    const executeMutation = async (connection = null) => {
+      updatedDoc = await docsService.applyImportSheet({
+        docId: normalizedCommand.docId,
+        snapshotJson: normalizedCommand.snapshot,
+      }, {
+        connection,
+      });
+
+      if (!updatedDoc) {
+        throw createServiceError(ERROR_CODES.DOCUMENT_NOT_FOUND, `document not found: ${normalizedCommand.docId}`);
+      }
+
+      seq = updatedDoc.currentSeq;
+
+      await historyStore.append({
+        docId: normalizedCommand.docId,
+        clientId: normalizedCommand.clientId,
+        seq,
+        opType: 'import_sheet',
+        eventId: normalizedCommand.eventId ? String(normalizedCommand.eventId) : null,
+        payloadJson: normalizedCommand.snapshot,
+      }, { connection });
+
+      await userOpStateStore.saveState({
+        docId: normalizedCommand.docId,
+        clientId: normalizedCommand.clientId,
+        undoStackJson: [],
+        redoStackJson: [],
+      }, { connection });
+    };
+
+    if (storeConfig.driver === 'mysql') {
+      await withTransaction(async (connection) => executeMutation(connection));
+    } else {
+      await executeMutation();
+    }
+
+    await docsService.invalidateDocCaches(normalizedCommand.docId);
+
+    await auditService.recordAuditEvent({
+      type: 'import_sheet',
+      docId: normalizedCommand.docId,
+      clientId: normalizedCommand.clientId,
+      seq,
+    });
+
+    return {
+      docId: normalizedCommand.docId,
+      clientId: normalizedCommand.clientId,
+      seq,
+      snapshot: updatedDoc.snapshotJson,
+      canUndo: false,
+      canRedo: false,
+    };
   });
-
-  if (!updatedDoc) {
-    throw createServiceError(ERROR_CODES.DOCUMENT_NOT_FOUND, `document not found: ${normalizedCommand.docId}`);
-  }
-
-  const seq = updatedDoc.currentSeq;
-
-  await historyStore.append({
-    docId: normalizedCommand.docId,
-    clientId: normalizedCommand.clientId,
-    seq,
-    opType: 'import_sheet',
-    eventId: normalizedCommand.eventId ? String(normalizedCommand.eventId) : null,
-    payloadJson: normalizedCommand.snapshot,
-  });
-
-  await userOpStateStore.saveState({
-    docId: normalizedCommand.docId,
-    clientId: normalizedCommand.clientId,
-    undoStackJson: [],
-    redoStackJson: [],
-  });
-
-  await auditService.recordAuditEvent({
-    type: 'import_sheet',
-    docId: normalizedCommand.docId,
-    clientId: normalizedCommand.clientId,
-    seq,
-  });
-
-  return {
-    docId: normalizedCommand.docId,
-    clientId: normalizedCommand.clientId,
-    seq,
-    snapshot: updatedDoc.snapshotJson,
-    canUndo: false,
-    canRedo: false,
-  };
 }
 
 async function applyImportSheet(command = {}) {

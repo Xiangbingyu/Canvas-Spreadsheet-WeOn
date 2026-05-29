@@ -1,0 +1,820 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Backend API Test Page</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f4efe7;
+      --panel: #fffdf8;
+      --panel-alt: #f8f1e5;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --line: #d6c7af;
+      --accent: #0f766e;
+      --accent-strong: #134e4a;
+      --error: #b42318;
+      --shadow: 0 16px 40px rgba(28, 25, 23, 0.08);
+      --radius: 16px;
+      --mono: "Consolas", "SFMono-Regular", "Courier New", monospace;
+      --sans: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: var(--sans);
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(15, 118, 110, 0.14), transparent 24%),
+        linear-gradient(180deg, #f9f5ef 0%, var(--bg) 100%);
+    }
+
+    main {
+      width: min(1320px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 32px 0 48px;
+    }
+
+    .hero,
+    .panel {
+      background: rgba(255, 253, 248, 0.92);
+      border: 1px solid rgba(214, 199, 175, 0.8);
+      box-shadow: var(--shadow);
+      border-radius: var(--radius);
+      backdrop-filter: blur(10px);
+    }
+
+    .hero {
+      padding: 28px;
+      margin-bottom: 24px;
+    }
+
+    h1,
+    h2,
+    h3 {
+      margin: 0;
+      font-weight: 700;
+    }
+
+    h1 {
+      font-size: clamp(28px, 4vw, 44px);
+      letter-spacing: -0.03em;
+    }
+
+    h2 {
+      font-size: 20px;
+      margin-bottom: 16px;
+    }
+
+    h3 {
+      font-size: 16px;
+      margin-bottom: 12px;
+    }
+
+    p {
+      margin: 0;
+      line-height: 1.6;
+    }
+
+    .hero-grid,
+    .grid {
+      display: grid;
+      gap: 16px;
+    }
+
+    .hero-grid {
+      margin-top: 20px;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    }
+
+    .hero-card,
+    .endpoint-card,
+    .message-card {
+      background: var(--panel-alt);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 16px;
+    }
+
+    .hero-label,
+    .meta,
+    .hint,
+    .status-line {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .hero-value,
+    .endpoint-meta,
+    .message-meta {
+      margin-top: 8px;
+      font-family: var(--mono);
+      font-size: 14px;
+      word-break: break-word;
+    }
+
+    .layout {
+      display: grid;
+      gap: 24px;
+      grid-template-columns: minmax(0, 1.2fr) minmax(340px, 0.8fr);
+    }
+
+    .stack {
+      display: grid;
+      gap: 24px;
+    }
+
+    .panel {
+      padding: 24px;
+    }
+
+    .grid {
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    }
+
+    .request-grid {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      margin-bottom: 12px;
+    }
+
+    label {
+      display: grid;
+      gap: 6px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    input,
+    select,
+    textarea,
+    button {
+      width: 100%;
+      border-radius: 10px;
+      border: 1px solid #c9b99c;
+      font: inherit;
+    }
+
+    input,
+    select,
+    textarea {
+      padding: 10px 12px;
+      background: #fff;
+      color: var(--text);
+    }
+
+    textarea {
+      min-height: 136px;
+      resize: vertical;
+      font-family: var(--mono);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    button {
+      cursor: pointer;
+      border: none;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 700;
+      padding: 11px 14px;
+      transition: transform 120ms ease, opacity 120ms ease, background 120ms ease;
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+      background: var(--accent-strong);
+    }
+
+    button.secondary {
+      background: #475569;
+    }
+
+    button.ghost {
+      background: #e7ded0;
+      color: #3f3f46;
+    }
+
+    .actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 12px;
+    }
+
+    code,
+    pre {
+      font-family: var(--mono);
+    }
+
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .response-box,
+    .log-box {
+      background: #1c1917;
+      color: #f8fafc;
+      border-radius: 14px;
+      padding: 16px;
+      min-height: 180px;
+      overflow: auto;
+    }
+
+    .response-box.error {
+      outline: 1px solid rgba(180, 35, 24, 0.65);
+    }
+
+    .log-entry {
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: rgba(248, 250, 252, 0.06);
+      border: 1px solid rgba(248, 250, 252, 0.1);
+    }
+
+    .log-entry + .log-entry {
+      margin-top: 12px;
+    }
+
+    .log-entry.outgoing {
+      border-color: rgba(13, 148, 136, 0.45);
+    }
+
+    .log-entry.incoming {
+      border-color: rgba(59, 130, 246, 0.45);
+    }
+
+    .log-entry.system {
+      border-color: rgba(245, 158, 11, 0.45);
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 999px;
+      padding: 6px 10px;
+      background: #e7f7f5;
+      color: var(--accent-strong);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .pill.offline {
+      background: #fbe6d7;
+      color: #9a3412;
+    }
+
+    .section-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+
+    .small {
+      font-size: 12px;
+    }
+
+    @media (max-width: 980px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="hero">
+      <div class="section-head">
+        <div>
+          <h1>Backend API Test Page</h1>
+          <p style="margin-top: 10px; max-width: 820px;">This page is served by the backend and acts as a lightweight dynamic document for the current HTTP and WebSocket APIs. Every section can send a real request and display the raw response.</p>
+        </div>
+        <div id="ws-status-pill" class="pill offline">WS offline</div>
+      </div>
+      <div class="hero-grid">
+        <div class="hero-card">
+          <div class="hero-label">HTTP base URL</div>
+          <div id="http-base" class="hero-value"></div>
+        </div>
+        <div class="hero-card">
+          <div class="hero-label">WebSocket URL</div>
+          <div id="ws-base" class="hero-value"></div>
+        </div>
+        <div class="hero-card">
+          <div class="hero-label">HTTP endpoints</div>
+          <div class="hero-value">4 callable routes</div>
+        </div>
+        <div class="hero-card">
+          <div class="hero-label">WebSocket message types</div>
+          <div class="hero-value">join, presence, set_cell, set_title, import_sheet, undo, redo</div>
+        </div>
+      </div>
+    </section>
+
+    <div class="layout">
+      <div class="stack">
+        <section class="panel">
+          <div class="section-head">
+            <div>
+              <h2>HTTP API</h2>
+              <p class="status-line">Each card documents one backend route and executes against the current origin.</p>
+            </div>
+          </div>
+          <div id="http-endpoints" class="grid"></div>
+        </section>
+
+        <section class="panel">
+          <div class="section-head">
+            <div>
+              <h2>WebSocket API</h2>
+              <p class="status-line">Connect once, then edit any outbound JSON template and send it directly.</p>
+            </div>
+            <div class="actions" style="margin-top: 0;">
+              <button id="connect-ws-button" type="button">Connect</button>
+              <button id="disconnect-ws-button" type="button" class="secondary">Disconnect</button>
+              <button id="clear-ws-log-button" type="button" class="ghost">Clear log</button>
+            </div>
+          </div>
+          <div class="request-grid">
+            <label>
+              WebSocket URL
+              <input id="ws-url-input" type="text">
+            </label>
+          </div>
+          <div id="ws-messages" class="grid"></div>
+        </section>
+      </div>
+
+      <div class="stack">
+        <section class="panel">
+          <div class="section-head">
+            <div>
+              <h2>Latest HTTP Response</h2>
+              <p class="status-line">The most recent HTTP call appears here with status and payload.</p>
+            </div>
+            <button id="clear-http-response-button" type="button" class="ghost">Clear</button>
+          </div>
+          <div id="http-response-meta" class="meta">No request sent yet.</div>
+          <div id="http-response-box" class="response-box" style="margin-top: 12px;">
+            <pre id="http-response-output">{}</pre>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="section-head">
+            <div>
+              <h2>WebSocket Log</h2>
+              <p class="status-line">Incoming and outgoing frames are appended in real time.</p>
+            </div>
+          </div>
+          <div id="ws-log" class="log-box"></div>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <template id="http-endpoint-template">
+    <article class="endpoint-card">
+      <div class="section-head">
+        <div>
+          <h3 data-role="title"></h3>
+          <div class="endpoint-meta" data-role="method-path"></div>
+        </div>
+        <div class="small" data-role="content-type"></div>
+      </div>
+      <p class="hint" data-role="description"></p>
+      <div class="request-grid" data-role="fields"></div>
+      <label style="margin-top: 12px;">
+        Body / generated URL preview
+        <textarea data-role="payload"></textarea>
+      </label>
+      <div class="actions">
+        <button type="button" data-role="send-button">Send request</button>
+        <button type="button" class="ghost" data-role="reset-button">Reset example</button>
+      </div>
+    </article>
+  </template>
+
+  <template id="ws-message-template">
+    <article class="message-card">
+      <h3 data-role="title"></h3>
+      <div class="message-meta" data-role="type"></div>
+      <p class="hint" data-role="description" style="margin-top: 8px;"></p>
+      <label style="margin-top: 12px;">
+        Outbound JSON
+        <textarea data-role="payload"></textarea>
+      </label>
+      <div class="actions">
+        <button type="button" data-role="send-button">Send message</button>
+        <button type="button" class="ghost" data-role="reset-button">Reset template</button>
+      </div>
+    </article>
+  </template>
+
+  <script>
+    const httpBase = window.location.origin;
+    const wsBase = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}`;
+
+    const httpEndpoints = [
+      {
+        title: 'Root Health Envelope',
+        method: 'GET',
+        path: '/',
+        contentType: 'query only',
+        description: 'Returns the backend service name in the standard HTTP envelope.',
+        fields: [],
+        examplePayload: '',
+        buildRequest() {
+          return { url: '/', options: { method: 'GET' } };
+        },
+      },
+      {
+        title: 'Health Check',
+        method: 'GET',
+        path: '/health',
+        contentType: 'query only',
+        description: 'Confirms the process is alive and returns status=ok.',
+        fields: [],
+        examplePayload: '',
+        buildRequest() {
+          return { url: '/health', options: { method: 'GET' } };
+        },
+      },
+      {
+        title: 'List Documents',
+        method: 'GET',
+        path: '/docs',
+        contentType: 'query string',
+        description: 'Reads the current user document list. Required query: userId, scope, page, pageSize.',
+        fields: [
+          { key: 'userId', label: 'userId', value: 'user_001' },
+          { key: 'scope', label: 'scope', value: 'all' },
+          { key: 'page', label: 'page', value: '1' },
+          { key: 'pageSize', label: 'pageSize', value: '20' },
+        ],
+        examplePayload: '/docs?userId=user_001&scope=all&page=1&pageSize=20',
+        buildRequest(values) {
+          const search = new URLSearchParams(values);
+          return { url: `/docs?${search.toString()}`, options: { method: 'GET' } };
+        },
+      },
+      {
+        title: 'Get Document State',
+        method: 'GET',
+        path: '/docs/:docId',
+        contentType: 'path param',
+        description: 'Returns the current snapshot, title and sequence for one document.',
+        fields: [
+          { key: 'docId', label: 'docId', value: 'doc_sys_001' },
+        ],
+        examplePayload: '/docs/doc_sys_001',
+        buildRequest(values) {
+          return { url: `/docs/${encodeURIComponent(values.docId || '')}`, options: { method: 'GET' } };
+        },
+      },
+      {
+        title: 'Create Document',
+        method: 'POST',
+        path: '/docs',
+        contentType: 'application/json',
+        description: 'Creates a new document. title defaults to Untitled if omitted; eventId enables idempotency.',
+        fields: [
+          { key: 'title', label: 'title', value: 'API test doc' },
+          { key: 'createdBy', label: 'createdBy', value: 'user_001' },
+          { key: 'eventId', label: 'eventId', value: 'evt_api_test_001' },
+        ],
+        examplePayload: JSON.stringify({
+          title: 'API test doc',
+          createdBy: 'user_001',
+          eventId: 'evt_api_test_001',
+        }, null, 2),
+        buildRequest(_, payloadText) {
+          return {
+            url: '/docs',
+            options: {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: payloadText,
+            },
+          };
+        },
+      },
+    ];
+
+    const wsMessages = [
+      {
+        title: 'Join Document',
+        type: 'join',
+        description: 'Join a room and receive join_ack with snapshot, users and current sequence.',
+        template: {
+          type: 'join',
+          docId: 'doc_sys_001',
+          clientId: 'user_001',
+          name: 'API Tester',
+          color: '#0f766e',
+        },
+      },
+      {
+        title: 'Presence Refresh',
+        type: 'presence',
+        description: 'Fetch and broadcast the current room presence. Requires an existing join first.',
+        template: {
+          type: 'presence',
+          docId: 'doc_sys_001',
+        },
+      },
+      {
+        title: 'Set Cell',
+        type: 'set_cell',
+        description: 'Write a cell value and optional style. row and col are 1-based integers.',
+        template: {
+          type: 'set_cell',
+          docId: 'doc_sys_001',
+          clientId: 'user_001',
+          row: 1,
+          col: 1,
+          value: 'Hello from test page',
+          style: {
+            bold: true,
+            color: '#ffffff',
+            bgColor: '#0f766e',
+          },
+        },
+      },
+      {
+        title: 'Set Title',
+        type: 'set_title',
+        description: 'Update the document title. The title must be a non-empty string.',
+        template: {
+          type: 'set_title',
+          docId: 'doc_sys_001',
+          clientId: 'user_001',
+          title: 'Renamed from test page',
+        },
+      },
+      {
+        title: 'Import Sheet',
+        type: 'import_sheet',
+        description: 'Replace a document snapshot with a full sheet payload.',
+        template: {
+          type: 'import_sheet',
+          docId: 'doc_sys_001',
+          clientId: 'user_001',
+          eventId: 'evt_import_test_001',
+          snapshot: {
+            id: 'sheet_import_001',
+            name: 'Imported Sheet',
+            defaultRowHeight: 25,
+            defaultColWidth: 100,
+            rowCount: 2,
+            colCount: 2,
+            styles: {},
+            cells: {
+              '0:0': { row: 0, col: 0, value: 'Name' },
+              '0:1': { row: 0, col: 1, value: 'Value' },
+              '1:0': { row: 1, col: 0, value: 'Status' },
+              '1:1': { row: 1, col: 1, value: 'Imported' },
+            },
+          },
+        },
+      },
+      {
+        title: 'Undo',
+        type: 'undo',
+        description: 'Undo the latest editable operation for the joined client.',
+        template: {
+          type: 'undo',
+          docId: 'doc_sys_001',
+          clientId: 'user_001',
+        },
+      },
+      {
+        title: 'Redo',
+        type: 'redo',
+        description: 'Redo the latest reverted operation for the joined client.',
+        template: {
+          type: 'redo',
+          docId: 'doc_sys_001',
+          clientId: 'user_001',
+        },
+      },
+    ];
+
+    const httpEndpointContainer = document.getElementById('http-endpoints');
+    const httpTemplate = document.getElementById('http-endpoint-template');
+    const httpResponseBox = document.getElementById('http-response-box');
+    const httpResponseMeta = document.getElementById('http-response-meta');
+    const httpResponseOutput = document.getElementById('http-response-output');
+    const wsTemplate = document.getElementById('ws-message-template');
+    const wsMessageContainer = document.getElementById('ws-messages');
+    const wsLog = document.getElementById('ws-log');
+    const wsUrlInput = document.getElementById('ws-url-input');
+    const wsStatusPill = document.getElementById('ws-status-pill');
+    const connectWsButton = document.getElementById('connect-ws-button');
+    const disconnectWsButton = document.getElementById('disconnect-ws-button');
+    const clearWsLogButton = document.getElementById('clear-ws-log-button');
+    const clearHttpResponseButton = document.getElementById('clear-http-response-button');
+
+    let ws = null;
+
+    document.getElementById('http-base').textContent = httpBase;
+    document.getElementById('ws-base').textContent = wsBase;
+    wsUrlInput.value = wsBase;
+
+    function formatJson(value) {
+      if (typeof value === 'string') {
+        try {
+          return JSON.stringify(JSON.parse(value), null, 2);
+        } catch {
+          return value;
+        }
+      }
+
+      return JSON.stringify(value, null, 2);
+    }
+
+    function setHttpResponse(meta, payload, isError) {
+      httpResponseMeta.textContent = meta;
+      httpResponseOutput.textContent = typeof payload === 'string' ? payload : formatJson(payload);
+      httpResponseBox.classList.toggle('error', Boolean(isError));
+    }
+
+    function createField(field) {
+      const label = document.createElement('label');
+      label.innerHTML = `${field.label}<input type="text" data-field-key="${field.key}" value="${field.value}">`;
+      return label;
+    }
+
+    function collectFieldValues(container) {
+      const entries = Array.from(container.querySelectorAll('[data-field-key]')).map((input) => [input.dataset.fieldKey, input.value]);
+      return Object.fromEntries(entries);
+    }
+
+    function appendWsLog(kind, payload) {
+      const entry = document.createElement('div');
+      entry.className = `log-entry ${kind}`;
+      const stamp = new Date().toLocaleTimeString();
+      entry.innerHTML = `<div class="meta">${stamp} · ${kind}</div><pre>${escapeHtml(typeof payload === 'string' ? payload : formatJson(payload))}</pre>`;
+      wsLog.prepend(entry);
+    }
+
+    function escapeHtml(value) {
+      return value
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+    }
+
+    function updateWsStatus(isOnline) {
+      wsStatusPill.textContent = isOnline ? 'WS connected' : 'WS offline';
+      wsStatusPill.classList.toggle('offline', !isOnline);
+    }
+
+    async function sendHttpRequest(endpoint, payloadElement, fieldsElement) {
+      try {
+        const fieldValues = collectFieldValues(fieldsElement);
+        const request = endpoint.buildRequest(fieldValues, payloadElement.value);
+        const response = await fetch(request.url, request.options);
+        const text = await response.text();
+        let parsed = text;
+
+        try {
+          parsed = JSON.parse(text);
+        } catch {}
+
+        setHttpResponse(`${endpoint.method} ${request.url} -> ${response.status}`, parsed, !response.ok);
+      } catch (error) {
+        setHttpResponse(`${endpoint.method} ${endpoint.path} -> request failed`, { message: error.message }, true);
+      }
+    }
+
+    function renderHttpEndpoints() {
+      for (const endpoint of httpEndpoints) {
+        const node = httpTemplate.content.firstElementChild.cloneNode(true);
+        const fieldsElement = node.querySelector('[data-role="fields"]');
+        const payloadElement = node.querySelector('[data-role="payload"]');
+
+        node.querySelector('[data-role="title"]').textContent = endpoint.title;
+        node.querySelector('[data-role="method-path"]').textContent = `${endpoint.method} ${endpoint.path}`;
+        node.querySelector('[data-role="content-type"]').textContent = endpoint.contentType;
+        node.querySelector('[data-role="description"]').textContent = endpoint.description;
+        payloadElement.value = endpoint.examplePayload;
+
+        for (const field of endpoint.fields) {
+          fieldsElement.appendChild(createField(field));
+        }
+
+        node.querySelector('[data-role="send-button"]').addEventListener('click', () => sendHttpRequest(endpoint, payloadElement, fieldsElement));
+        node.querySelector('[data-role="reset-button"]').addEventListener('click', () => {
+          payloadElement.value = endpoint.examplePayload;
+          Array.from(fieldsElement.querySelectorAll('[data-field-key]')).forEach((input) => {
+            const field = endpoint.fields.find((item) => item.key === input.dataset.fieldKey);
+            input.value = field ? field.value : '';
+          });
+        });
+
+        httpEndpointContainer.appendChild(node);
+      }
+    }
+
+    function renderWsMessages() {
+      for (const message of wsMessages) {
+        const node = wsTemplate.content.firstElementChild.cloneNode(true);
+        const payloadElement = node.querySelector('[data-role="payload"]');
+
+        node.querySelector('[data-role="title"]').textContent = message.title;
+        node.querySelector('[data-role="type"]').textContent = `type: ${message.type}`;
+        node.querySelector('[data-role="description"]').textContent = message.description;
+        payloadElement.value = JSON.stringify(message.template, null, 2);
+
+        node.querySelector('[data-role="send-button"]').addEventListener('click', () => {
+          if (!ws || ws.readyState !== WebSocket.OPEN) {
+            appendWsLog('system', 'WebSocket is not connected.');
+            return;
+          }
+
+          try {
+            const payload = JSON.parse(payloadElement.value);
+            ws.send(JSON.stringify(payload));
+            appendWsLog('outgoing', payload);
+          } catch (error) {
+            appendWsLog('system', `Invalid outbound JSON: ${error.message}`);
+          }
+        });
+
+        node.querySelector('[data-role="reset-button"]').addEventListener('click', () => {
+          payloadElement.value = JSON.stringify(message.template, null, 2);
+        });
+
+        wsMessageContainer.appendChild(node);
+      }
+    }
+
+    function disconnectWs() {
+      if (ws) {
+        ws.close();
+        ws = null;
+      }
+      updateWsStatus(false);
+    }
+
+    function connectWs() {
+      disconnectWs();
+      appendWsLog('system', `Connecting to ${wsUrlInput.value}`);
+
+      ws = new WebSocket(wsUrlInput.value);
+
+      ws.addEventListener('open', () => {
+        updateWsStatus(true);
+        appendWsLog('system', 'WebSocket connected.');
+      });
+
+      ws.addEventListener('message', (event) => {
+        try {
+          appendWsLog('incoming', JSON.parse(event.data));
+        } catch {
+          appendWsLog('incoming', event.data);
+        }
+      });
+
+      ws.addEventListener('close', () => {
+        updateWsStatus(false);
+        appendWsLog('system', 'WebSocket disconnected.');
+        ws = null;
+      });
+
+      ws.addEventListener('error', () => {
+        appendWsLog('system', 'WebSocket error occurred.');
+      });
+    }
+
+    connectWsButton.addEventListener('click', connectWs);
+    disconnectWsButton.addEventListener('click', disconnectWs);
+    clearWsLogButton.addEventListener('click', () => {
+      wsLog.innerHTML = '';
+    });
+    clearHttpResponseButton.addEventListener('click', () => {
+      setHttpResponse('No request sent yet.', {}, false);
+    });
+
+    renderHttpEndpoints();
+    renderWsMessages();
+    setHttpResponse('No request sent yet.', {}, false);
+    appendWsLog('system', 'Ready. Connect the socket before sending WS messages.');
+  </script>
+</body>
+</html>
