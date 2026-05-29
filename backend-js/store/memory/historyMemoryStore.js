@@ -129,6 +129,12 @@ function createHistoryMemoryStore() {
       return cloneRecords(listRowsByDocId(docId));
     },
 
+    async listByDocIdSeqRange(docId, startExclusiveSeq, endInclusiveSeq) {
+      return cloneRecords(
+        listRowsByDocId(docId).filter((row) => row.seq > startExclusiveSeq && row.seq <= endInclusiveSeq)
+      );
+    },
+
     async listByDocIdAndClientId(docId, clientId) {
       return cloneRecords(listRowsByDocId(docId).filter((row) => row.clientId === clientId));
     },

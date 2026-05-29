@@ -221,6 +221,8 @@ function createRoomSocketMemoryStore() {
 
       return nextRow;
     },
+
+    async close() {},
   };
 }
 

@@ -1,9 +1,18 @@
+const storeConfig = require('../config/storeConfig');
 const createMemoryDocStore = require('./memory/docMemoryStore');
-const { DOC_SEEDS } = require('./seed/docSeed');
+const createDocMysqlStore = require('./mysql/docMysqlStore');
+const { DOC_SEEDS } = require('../db/seed/docSeed');
 
 function createDocStore() {
-  const store = createMemoryDocStore();
-  store.seedSync(DOC_SEEDS);
+  const useMysqlStore = storeConfig.driver === 'mysql';
+  const store = useMysqlStore
+    ? createDocMysqlStore()
+    : createMemoryDocStore();
+
+  if (!useMysqlStore && typeof store.seedSync === 'function') {
+    store.seedSync(DOC_SEEDS);
+  }
+
   return store;
 }
 

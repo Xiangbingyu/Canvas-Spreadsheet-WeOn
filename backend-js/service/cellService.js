@@ -1,9 +1,13 @@
 const { ERROR_CODES } = require('../protocol/errorCodes');
+const storeConfig = require('../config/storeConfig');
+const { withTransaction } = require('../db/mysql');
+const docLock = require('../infra/redis/lock');
 const docsService = require('./docsService');
 const historyStore = require('../store/historyStore');
 const userOpStateStore = require('../store/userOpStateStore');
 const auditService = require('../audit/auditService');
 const collabConfig = require('../config/collabConfig');
+const { normalizeBaseSeq, rebaseSetCellCommand } = require('./cellOtService');
 
 function createServiceError(code, message, details = null) {
   const error = new Error(message);
@@ -30,6 +34,7 @@ function normalizeSetCellCommand(command = {}) {
     col,
     value: value ?? '',
     style: style !== undefined ? style : null,
+    baseSeq: normalizeBaseSeq(command.baseSeq),
   };
 }
 
@@ -47,72 +52,114 @@ function trimUndoStack(entries) {
 
 async function applySetCell(command = {}) {
   const normalizedCommand = normalizeSetCellCommand(command);
-  const updatedDoc = await docsService.applySetCell({
-    docId: normalizedCommand.docId,
-    row: normalizedCommand.row,
-    col: normalizedCommand.col,
-    value: normalizedCommand.value,
-    style: normalizedCommand.style,
+
+  return docLock.withDocLock(normalizedCommand.docId, async () => {
+    let updatedDoc = null;
+    let seq = 0;
+    let trimmedUndoStack = [];
+    let rebaseResult = {
+      enabled: false,
+      rebased: false,
+      baseSeq: null,
+      conflictSeq: null,
+    };
+
+    const executeMutation = async (connection = null) => {
+      const currentDoc = await docsService.getDocStateForWrite(normalizedCommand.docId, {
+        connection,
+        forUpdate: Boolean(connection),
+      });
+
+      if (!currentDoc) {
+        throw createServiceError(ERROR_CODES.DOCUMENT_NOT_FOUND, `document not found: ${normalizedCommand.docId}`);
+      }
+
+      const otResult = await rebaseSetCellCommand({
+        command: normalizedCommand,
+        currentDoc,
+        historyStore,
+        connection,
+      });
+
+      rebaseResult = otResult.rebaseResult;
+
+      updatedDoc = await docsService.applySetCell({
+        ...otResult.command,
+      }, {
+        connection,
+      });
+
+      if (!updatedDoc) {
+        throw createServiceError(ERROR_CODES.DOCUMENT_NOT_FOUND, `document not found: ${normalizedCommand.docId}`);
+      }
+
+      seq = updatedDoc.currentSeq;
+      const { value: oldValue, style: oldStyle } = updatedDoc._before;
+
+      await historyStore.append({
+        docId: normalizedCommand.docId,
+        clientId: normalizedCommand.clientId,
+        seq,
+        baseSeq: rebaseResult.baseSeq,
+        opType: 'set_cell',
+        targetRow: normalizedCommand.row,
+        targetCol: normalizedCommand.col,
+        oldValueJson: { value: oldValue, style: oldStyle },
+        newValueJson: { value: normalizedCommand.value, style: normalizedCommand.style },
+      }, { connection });
+
+      const opState = await userOpStateStore.getState(normalizedCommand.docId, normalizedCommand.clientId, { connection });
+      const undoStack = opState ? [...opState.undoStackJson] : [];
+      undoStack.push({
+        sourceSeq: seq,
+        docId: normalizedCommand.docId,
+        clientId: normalizedCommand.clientId,
+        opType: 'set_cell',
+        row: normalizedCommand.row,
+        col: normalizedCommand.col,
+        oldValue,
+        oldStyle,
+        newValue: normalizedCommand.value,
+        newStyle: normalizedCommand.style,
+        baseSeq: rebaseResult.baseSeq,
+      });
+      trimmedUndoStack = trimUndoStack(undoStack);
+
+      await userOpStateStore.saveState({
+        docId: normalizedCommand.docId,
+        clientId: normalizedCommand.clientId,
+        undoStackJson: trimmedUndoStack,
+        redoStackJson: [],
+      }, { connection });
+    };
+
+    if (storeConfig.driver === 'mysql') {
+      await withTransaction(async (connection) => executeMutation(connection));
+    } else {
+      await executeMutation();
+    }
+
+    await docsService.invalidateDocCaches(normalizedCommand.docId);
+
+    await auditService.recordAuditEvent({
+      type: 'set_cell',
+      docId: normalizedCommand.docId,
+      clientId: normalizedCommand.clientId,
+      seq,
+    });
+
+    return {
+      docId: normalizedCommand.docId,
+      clientId: normalizedCommand.clientId,
+      seq,
+      row: normalizedCommand.row,
+      col: normalizedCommand.col,
+      value: normalizedCommand.value,
+      style: normalizedCommand.style,
+      canUndo: true,
+      canRedo: false,
+    };
   });
-
-  if (!updatedDoc) {
-    throw createServiceError(ERROR_CODES.DOCUMENT_NOT_FOUND, `document not found: ${normalizedCommand.docId}`);
-  }
-
-  const seq = updatedDoc.currentSeq;
-  const { value: oldValue, style: oldStyle } = updatedDoc._before;
-
-  await historyStore.append({
-    docId: normalizedCommand.docId,
-    clientId: normalizedCommand.clientId,
-    seq,
-    opType: 'set_cell',
-    targetRow: normalizedCommand.row,
-    targetCol: normalizedCommand.col,
-    oldValueJson: { value: oldValue, style: oldStyle },
-    newValueJson: { value: normalizedCommand.value, style: normalizedCommand.style },
-  });
-
-  const opState = await userOpStateStore.getState(normalizedCommand.docId, normalizedCommand.clientId);
-  const undoStack = opState ? [...opState.undoStackJson] : [];
-  undoStack.push({
-    sourceSeq: seq,
-    docId: normalizedCommand.docId,
-    clientId: normalizedCommand.clientId,
-    opType: 'set_cell',
-    row: normalizedCommand.row,
-    col: normalizedCommand.col,
-    oldValue,
-    oldStyle,
-    newValue: normalizedCommand.value,
-    newStyle: normalizedCommand.style,
-  });
-  const trimmedUndoStack = trimUndoStack(undoStack);
-  await userOpStateStore.saveState({
-    docId: normalizedCommand.docId,
-    clientId: normalizedCommand.clientId,
-    undoStackJson: trimmedUndoStack,
-    redoStackJson: [],
-  });
-
-  await auditService.recordAuditEvent({
-    type: 'set_cell',
-    docId: normalizedCommand.docId,
-    clientId: normalizedCommand.clientId,
-    seq,
-  });
-
-  return {
-    docId: normalizedCommand.docId,
-    clientId: normalizedCommand.clientId,
-    seq,
-    row: normalizedCommand.row,
-    col: normalizedCommand.col,
-    value: normalizedCommand.value,
-    style: normalizedCommand.style,
-    canUndo: true,
-    canRedo: false,
-  };
 }
 
 module.exports = {

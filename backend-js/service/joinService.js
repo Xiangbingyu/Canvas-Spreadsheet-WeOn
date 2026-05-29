@@ -2,10 +2,10 @@ const { createWsSuccess, createWsError } = require('../utils/response');
 const { ERROR_CODES } = require('../protocol/errorCodes');
 const docsService = require('./docsService');
 const roomService = require('./roomService');
-const idempotencyService = require('../idempotency/idempotencyService');
-const { createJoinRequestKey } = require('../idempotency/idempotencyKeys');
 const auditService = require('../audit/auditService');
 const { isNonEmptyString } = require('../protocol/validators');
+
+const pendingJoinRequests = new Map();
 
 async function getUsersWithFallback(docId) {
   try {
@@ -97,10 +97,10 @@ async function handleJoin({ socket, message }) {
     };
   }
 
-  const requestKey = createJoinRequestKey(`conn:${socket._connId}:${docId}:${clientId}`);
-  const existing = idempotencyService.getRemembered(requestKey);
+  const requestKey = `conn:${socket._connId}:${docId}:${clientId}`;
+  const existing = pendingJoinRequests.get(requestKey);
 
-  if (existing && typeof existing.then === 'function') {
+  if (existing) {
     const settled = await existing;
     return {
       ...settled,
@@ -110,11 +110,11 @@ async function handleJoin({ socket, message }) {
 
   let resolvePending;
   const pendingPromise = new Promise((resolve) => { resolvePending = resolve; });
-  idempotencyService.remember(requestKey, pendingPromise);
+  pendingJoinRequests.set(requestKey, pendingPromise);
 
   try {
     const result = await executeJoin({ socket, docId, clientId, name, color });
-    idempotencyService.forget(requestKey);
+    pendingJoinRequests.delete(requestKey);
     resolvePending(result);
     return result;
   } catch (error) {
@@ -122,7 +122,7 @@ async function handleJoin({ socket, message }) {
       replyPayload: createWsError(error.code || ERROR_CODES.INTERNAL_ERROR, error.message || 'Internal server error'),
       broadcasts: [],
     };
-    idempotencyService.forget(requestKey);
+    pendingJoinRequests.delete(requestKey);
     resolvePending(result);
     return result;
   }

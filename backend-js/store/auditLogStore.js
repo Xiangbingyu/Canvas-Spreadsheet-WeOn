@@ -1,8 +1,11 @@
+const storeConfig = require('../config/storeConfig');
 const createMemoryAuditLogStore = require('./memory/auditLogMemoryStore');
+const createAuditLogMysqlStore = require('./mysql/auditLogMysqlStore');
 
 function createAuditLogStore() {
-  // Scaffold entry: first phase wires audit log store to memory implementation.
-  return createMemoryAuditLogStore();
+  return storeConfig.driver === 'mysql'
+    ? createAuditLogMysqlStore()
+    : createMemoryAuditLogStore();
 }
 
 module.exports = createAuditLogStore();
