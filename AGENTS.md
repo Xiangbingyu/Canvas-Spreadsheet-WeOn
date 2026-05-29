@@ -10,6 +10,8 @@
 
 其中包含：目录层级、`spreadsheet/` 各模块职责、**AI 红线**、新建文件规则与数据流约定。
 
+提交时若改动 `frontend/`，pre-commit 会自动执行 `pnpm check:fe:agents`（见 `frontend/scripts/check-agents-boundaries.mjs`），不通过则无法 commit。
+
 ## 范围说明
 
 | 路径 | 本规范 |

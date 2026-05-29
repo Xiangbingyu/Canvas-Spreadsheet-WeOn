@@ -297,7 +297,35 @@ frontend/
 
 ---
 
-## 6. AI 执行检查清单
+## 6. 自动检查（pre-commit / CI）
+
+仓库已配置 **可执行脚本**，提交时若暂存了 `frontend/` 下文件会自动运行；不通过则 **拒绝 commit**。
+
+| 命令                                  | 说明                                             |
+| ------------------------------------- | ------------------------------------------------ |
+| `pnpm check:fe:agents`                | 在仓库根目录手动跑一遍（推荐改 frontend 后先跑） |
+| `pnpm --filter frontend check:agents` | 等价，仅在 frontend 包内执行                     |
+
+脚本位置：`frontend/scripts/check-agents-boundaries.mjs`
+
+当前自动检测项（与上文红线对应）：
+
+- 禁止目录：`spreadsheet/engine/`、`src/helpers/`、`src/utils.ts`、`components/index.ts` 桶文件
+- `src/` 根目录不得散落业务 `.ts` 文件
+- `pages/*Page.tsx` 不超过 100 行
+- `hooks/` 下文件须为 `useXxx.ts`
+- `model/types.ts` 仅允许导出 `Style`、`Cell`、`WorksheetData`
+- `render/` 不得 import `interaction`、不得 `dispatch` / 定义 slice
+- `interaction/` 不得 import `gridRenderer`/`viewport`、不得写 Canvas 绘制 API
+- `store/` 不得含 Canvas 绘制代码
+
+接入方式：根目录 `.husky/pre-commit` 在 `lint-staged`（Prettier + ESLint）之后执行上述检查。
+
+如需在 CI 阻断合并，在 workflow 中增加一步：`pnpm check:fe:agents`（与 `pnpm lint`、`pnpm build` 并列）。
+
+---
+
+## 7. AI 执行检查清单
 
 在提交或结束任务前自检：
 
@@ -308,10 +336,11 @@ frontend/
 - [ ] `pages/` 未膨胀为“上帝文件”
 - [ ] 状态变更通过 Store，渲染跟随数据更新
 - [ ] import 使用 `@/` 别名，与现有代码风格一致
+- [ ] 本地已执行 `pnpm check:fe:agents` 通过
 
 ---
 
-## 7. 参考文档
+## 8. 参考文档
 
 - 团队协作与目录说明：`docs/` 内课题与开发指南
 - 后端接口（只读对照）：`docs/接口文档.md`
