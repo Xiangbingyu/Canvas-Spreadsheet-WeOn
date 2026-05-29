@@ -1,7 +1,16 @@
 // Layered Canvas spreadsheet component that connects Redux data to renderer hooks.
 // Input: worksheet/selection from store; output: grid, content, and overlay canvases.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+  type Ref,
+} from 'react'
 import { useSelector, useStore } from 'react-redux'
 import {
   ALL_CANVAS_LAYERS,
@@ -24,6 +33,7 @@ import {
 import { canvasPerf } from '@/spreadsheet/render/perfMonitor'
 import type { Viewport } from '@/spreadsheet/render'
 import type { RootState } from '@/spreadsheet/store'
+import type { InteractionEngine } from '@/spreadsheet/interaction/interactionEngine'
 
 const MIN_THUMB_SIZE = 24
 
@@ -34,6 +44,17 @@ type ScrollUi = {
   dataViewportHeight: number
   sheetWidth: number
   sheetHeight: number
+}
+
+export type GrideCanvasProps = {
+  interactionEngine: InteractionEngine
+  /** 滚动变化时上报，父组件用于定位 textarea */
+  onScrollChange?: (scrollX: number, scrollY: number) => void
+}
+
+export type GrideCanvasHandle = {
+  /** 让 canvas 重新拿到焦点（提交编辑后调用，确保后续键盘事件能被命中） */
+  focus: () => void
 }
 
 type GridScrollBarProps = {
@@ -283,7 +304,10 @@ function GridScrollBar({
  * 传入参数：无显式 props；组件通过 Redux 读取外部 Excel 解析后的 WorksheetData。
  * 返回结果：返回三层 Canvas 和滚动条 UI；不直接修改 Redux 数据。
  */
-function GrideCanvas() {
+function GrideCanvas(
+  { interactionEngine, onScrollChange }: GrideCanvasProps,
+  ref: Ref<GrideCanvasHandle>
+) {
   const reduxStore = useStore<RootState>()
   const worksheet = useSelector((state: RootState) => state.workSheet)
   const selection = useSelector((state: RootState) => state.selection)
@@ -313,6 +337,16 @@ function GrideCanvas() {
       layout,
       viewportRef,
     })
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      focus() {
+        overlayCanvasRef.current?.focus()
+      },
+    }),
+    [overlayCanvasRef]
+  )
 
   const getRenderOptions = useCallback(() => {
     const state = reduxStore.getState()
@@ -402,6 +436,8 @@ function GrideCanvas() {
 
       viewport.scrollX = clamped.scrollX
       viewport.scrollY = clamped.scrollY
+      interactionEngine.setScroll(clamped.scrollX, clamped.scrollY)
+      onScrollChange?.(clamped.scrollX, clamped.scrollY)
       publishScrollUi()
       scheduleRender(ALL_CANVAS_LAYERS)
     },
@@ -410,6 +446,8 @@ function GrideCanvas() {
       layout.colWidth,
       layout.rowCount,
       layout.rowHeight,
+      interactionEngine,
+      onScrollChange,
       publishScrollUi,
       scheduleRender,
     ]
@@ -431,18 +469,30 @@ function GrideCanvas() {
   useCanvasInteraction({
     interactionCanvasRef: overlayCanvasRef,
     wheelTargetRef: containerRef,
+    onPointerDown: (event, canvas) => {
+      canvas.focus()
+      interactionEngine.handleCanvasPointerDown({
+        currentTarget: canvas,
+        clientX: event.clientX,
+        clientY: event.clientY,
+        shiftKey: event.shiftKey,
+      })
+    },
     onWheelScroll,
   })
 
   useEffect(() => {
+    interactionEngine.setScroll(viewportRef.current.scrollX, viewportRef.current.scrollY)
+    onScrollChange?.(viewportRef.current.scrollX, viewportRef.current.scrollY)
     publishScrollUi()
     scheduleRender(ALL_CANVAS_LAYERS)
-  }, [layoutVersion, publishScrollUi, scheduleRender])
+  }, [interactionEngine, layoutVersion, onScrollChange, publishScrollUi, scheduleRender])
 
   useEffect(() => {
     scheduleRender(ALL_CANVAS_LAYERS)
   }, [scheduleRender, worksheet])
 
+  // 绑定 canvas 鼠标事件到 engine
   useEffect(() => {
     const overlayOnly: CanvasLayer[] = ['overlay']
     scheduleRender(overlayOnly)
@@ -458,7 +508,22 @@ function GrideCanvas() {
         <div ref={containerRef} className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
           <canvas ref={gridCanvasRef} className={`${canvasClass} pointer-events-none`} />
           <canvas ref={contentCanvasRef} className={`${canvasClass} pointer-events-none`} />
-          <canvas ref={overlayCanvasRef} className={canvasClass} aria-label="电子表格画布" />
+          <canvas
+            ref={overlayCanvasRef}
+            className={canvasClass}
+            tabIndex={0}
+            aria-label="电子表格画布"
+            onDoubleClick={(event) => interactionEngine.handleCanvasDoubleClick(event)}
+            onPointerMove={(event) =>
+              interactionEngine.handleCanvasPointerMove({
+                currentTarget: event.currentTarget,
+                clientX: event.clientX,
+                clientY: event.clientY,
+              })
+            }
+            onPointerUp={() => interactionEngine.handleCanvasPointerUp()}
+            onPointerCancel={() => interactionEngine.handleCanvasPointerUp()}
+          />
         </div>
 
         <GridScrollBar
@@ -486,4 +551,4 @@ function GrideCanvas() {
   )
 }
 
-export default GrideCanvas
+export default forwardRef<GrideCanvasHandle, GrideCanvasProps>(GrideCanvas)

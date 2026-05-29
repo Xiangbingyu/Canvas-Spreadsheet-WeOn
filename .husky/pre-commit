@@ -1,1 +1,7 @@
 pnpm exec lint-staged
+
+# 若本次提交包含 frontend 变更，则校验 AGENTS 目录与模块边界
+STAGED_FRONTEND=$(git diff --cached --name-only --diff-filter=ACM | grep -E '^frontend/' || true)
+if [ -n "$STAGED_FRONTEND" ]; then
+  pnpm run check:fe:agents
+fi

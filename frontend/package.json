@@ -10,6 +10,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
+    "check:agents": "node scripts/check-agents-boundaries.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
