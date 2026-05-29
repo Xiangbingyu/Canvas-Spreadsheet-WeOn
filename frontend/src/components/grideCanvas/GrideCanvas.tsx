@@ -2,22 +2,28 @@
 // Input: worksheet/selection from store; output: grid, content, and overlay canvases.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useDispatch, useSelector, useStore } from 'react-redux'
+import { useSelector, useStore } from 'react-redux'
+import {
+  ALL_CANVAS_LAYERS,
+  useCanvasInteraction,
+  useCanvasRenderLoop,
+  useLayeredCanvas,
+  type CanvasLayer,
+  type LayeredCanvasLayout,
+} from '@/hooks'
 import {
   createViewport,
   getDataViewportSize,
   getSheetSize,
   clampScroll,
+  renderContentLayer,
+  renderGridLayer,
+  renderOverlayLayer,
+  type RenderGridOptions,
 } from '@/spreadsheet/render'
+import { canvasPerf } from '@/spreadsheet/render/perfMonitor'
 import type { Viewport } from '@/spreadsheet/render'
-import type { AppDispatch, RootState } from '@/spreadsheet/store'
-import {
-  ALL_CANVAS_LAYERS,
-  useCanvasRenderLoop,
-  type CanvasLayer,
-} from './hooks/useCanvasRenderLoop'
-import { useCanvasInteraction } from './hooks/useCanvasInteraction'
-import { useLayeredCanvas, type LayeredCanvasLayout } from './hooks/useLayeredCanvas'
+import type { RootState } from '@/spreadsheet/store'
 
 const MIN_THUMB_SIZE = 24
 
@@ -37,6 +43,12 @@ type GridScrollBarProps = {
   viewportSize: number
   contentSize: number
   onScroll: (value: number) => void
+}
+
+type CanvasLayerContexts = {
+  grid: CanvasRenderingContext2D
+  content: CanvasRenderingContext2D
+  overlay: CanvasRenderingContext2D
 }
 
 /**
@@ -66,6 +78,47 @@ function computeThumbMetrics(
   }
 
   return { trackSize, thumbSize, thumbOffset }
+}
+
+/**
+ * 作用：获取单个 Canvas 的 2D 上下文，并按当前 DPR 设置绘制坐标变换。
+ * 传入参数：canvas 为目标画布。
+ * 返回结果：成功返回 CanvasRenderingContext2D，失败返回 null。
+ */
+function prepareCanvasContext(canvas: HTMLCanvasElement | null): CanvasRenderingContext2D | null {
+  if (!canvas) {
+    return null
+  }
+
+  const ctx = canvas.getContext('2d')
+  if (!ctx) {
+    return null
+  }
+
+  const dpr = window.devicePixelRatio || 1
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+  return ctx
+}
+
+/**
+ * 作用：从三层 Canvas ref 中获取绘制上下文，供 GrideCanvas 胶水层调用 renderer。
+ * 传入参数：grid/content/overlay 三个 HTMLCanvasElement。
+ * 返回结果：三层 ctx 全部可用时返回对象，否则返回 null。
+ */
+function prepareLayerContexts(
+  gridCanvas: HTMLCanvasElement | null,
+  contentCanvas: HTMLCanvasElement | null,
+  overlayCanvas: HTMLCanvasElement | null
+): CanvasLayerContexts | null {
+  const grid = prepareCanvasContext(gridCanvas)
+  const content = prepareCanvasContext(contentCanvas)
+  const overlay = prepareCanvasContext(overlayCanvas)
+
+  if (!grid || !content || !overlay) {
+    return null
+  }
+
+  return { grid, content, overlay }
 }
 
 /**
@@ -231,7 +284,6 @@ function GridScrollBar({
  * 返回结果：返回三层 Canvas 和滚动条 UI；不直接修改 Redux 数据。
  */
 function GrideCanvas() {
-  const dispatch = useDispatch<AppDispatch>()
   const reduxStore = useStore<RootState>()
   const worksheet = useSelector((state: RootState) => state.workSheet)
   const selection = useSelector((state: RootState) => state.selection)
@@ -271,11 +323,42 @@ function GrideCanvas() {
     }
   }, [reduxStore])
 
+  const renderDirtyLayers = useCallback(
+    /**
+     * 作用：根据 rAF 调度输出的 dirty layer 集合调用对应 renderer。
+     * 传入参数：dirtyLayers 为本帧需要重绘的层集合。
+     * 返回结果：无返回值；只调用 Canvas renderer，不修改 Redux 数据。
+     */
+    (dirtyLayers: Set<CanvasLayer>) => {
+      const contexts = prepareLayerContexts(
+        gridCanvasRef.current,
+        contentCanvasRef.current,
+        overlayCanvasRef.current
+      )
+      if (!contexts || dirtyLayers.size === 0) {
+        return
+      }
+
+      const options: RenderGridOptions = getRenderOptions()
+      const renderStart = performance.now()
+
+      if (dirtyLayers.has('grid')) {
+        renderGridLayer(contexts.grid, options)
+      }
+      if (dirtyLayers.has('content')) {
+        renderContentLayer(contexts.content, options)
+      }
+      if (dirtyLayers.has('overlay')) {
+        renderOverlayLayer(contexts.overlay, options)
+      }
+
+      canvasPerf.recordRender(performance.now() - renderStart)
+    },
+    [contentCanvasRef, getRenderOptions, gridCanvasRef, overlayCanvasRef]
+  )
+
   const { scheduleRender } = useCanvasRenderLoop({
-    gridCanvasRef,
-    contentCanvasRef,
-    overlayCanvasRef,
-    getRenderOptions,
+    onRender: renderDirtyLayers,
   })
 
   const publishScrollUi = useCallback(() => {
@@ -332,9 +415,6 @@ function GrideCanvas() {
     ]
   )
 
-  const getViewport = useCallback(() => viewportRef.current, [])
-  const getWorksheet = useCallback(() => reduxStore.getState().workSheet, [reduxStore])
-  const getState = useCallback(() => reduxStore.getState(), [reduxStore])
   const onWheelScroll = useCallback(
     /**
      * 作用：将滚轮增量转换为 Canvas 视口滚动。
@@ -351,10 +431,6 @@ function GrideCanvas() {
   useCanvasInteraction({
     interactionCanvasRef: overlayCanvasRef,
     wheelTargetRef: containerRef,
-    getViewport,
-    getWorksheet,
-    dispatch,
-    getState,
     onWheelScroll,
   })
 

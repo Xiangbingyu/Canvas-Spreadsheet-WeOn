@@ -2,33 +2,23 @@
 // Input: DOM refs and callbacks; output: browser event side effects with cleanup.
 
 import { useEffect, type RefObject } from 'react'
-import { attachCellSelectInteraction } from '@/spreadsheet/interaction/selectCell'
-import type { WorksheetData } from '@/spreadsheet/model/types'
-import type { Viewport } from '@/spreadsheet/render/viewport'
-import type { AppDispatch, RootState } from '@/spreadsheet/store'
 
 type UseCanvasInteractionParams = {
   interactionCanvasRef: RefObject<HTMLCanvasElement | null>
   wheelTargetRef: RefObject<HTMLElement | null>
-  getViewport: () => Viewport
-  getWorksheet: () => WorksheetData
-  dispatch: AppDispatch
-  getState: () => RootState
+  onPointerDown?: (event: PointerEvent, canvas: HTMLCanvasElement) => void
   onWheelScroll: (deltaX: number, deltaY: number) => void
 }
 
 /**
- * 作用：绑定 Canvas 选择交互和滚轮滚动交互，并在卸载时清理事件。
- * 传入参数：interactionCanvasRef 为 overlayCanvas，wheelTargetRef 为滚轮容器，其余为交互模块需要的回调。
- * 返回结果：无返回值；hook 只注册事件，不修改 Redux 和业务数据。
+ * 作用：绑定 Canvas 指针事件和滚轮滚动事件，并在卸载时清理事件。
+ * 传入参数：interactionCanvasRef 为 overlayCanvas，wheelTargetRef 为滚轮容器，onPointerDown/onWheelScroll 为调用方回调。
+ * 返回结果：无返回值；hook 只注册 DOM 事件，不命中单元格、不修改 Redux 数据。
  */
 export function useCanvasInteraction({
   interactionCanvasRef,
   wheelTargetRef,
-  getViewport,
-  getWorksheet,
-  dispatch,
-  getState,
+  onPointerDown,
   onWheelScroll,
 }: UseCanvasInteractionParams): void {
   useEffect(() => {
@@ -37,13 +27,13 @@ export function useCanvasInteraction({
       return
     }
 
-    return attachCellSelectInteraction(canvas, {
-      getViewport,
-      getWorksheet,
-      dispatch,
-      getState,
-    })
-  }, [dispatch, getState, getViewport, getWorksheet, interactionCanvasRef])
+    const handlePointerDown = (event: PointerEvent) => {
+      onPointerDown?.(event, canvas)
+    }
+
+    canvas.addEventListener('pointerdown', handlePointerDown)
+    return () => canvas.removeEventListener('pointerdown', handlePointerDown)
+  }, [interactionCanvasRef, onPointerDown])
 
   useEffect(() => {
     const el = wheelTargetRef.current

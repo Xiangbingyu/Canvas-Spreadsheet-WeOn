@@ -1,5 +1,5 @@
-// React hook for layered canvas refs, DPR scaling, and resize synchronization.
-// Input: sheet layout metrics and viewport ref; output: DOM refs and syncLayout.
+// React hook for layered canvas refs, DPR sizing, and resize observation.
+// Input: sheet layout metrics and viewport ref; output: DOM refs and layout version.
 
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 import {
@@ -29,32 +29,24 @@ type UseLayeredCanvasParams = {
 }
 
 /**
- * 作用：同步单个 canvas 的 bitmap 尺寸、CSS 尺寸和 DPR transform。
+ * 作用：同步单个 canvas 的 bitmap 尺寸和 CSS 尺寸；不获取 Canvas 上下文。
  * 传入参数：canvas 为目标画布，width/height 为逻辑像素，dpr 为设备像素比。
- * 返回结果：成功同步返回 true，无法获得 2D 上下文返回 false。
+ * 返回结果：无返回值；调用方需要在绘制前自行设置 ctx transform。
  */
-function syncCanvasSize(
+function syncCanvasElementSize(
   canvas: HTMLCanvasElement,
   width: number,
   height: number,
   dpr: number
-): boolean {
+): void {
   canvas.width = Math.max(1, Math.floor(width * dpr))
   canvas.height = Math.max(1, Math.floor(height * dpr))
   canvas.style.width = `${width}px`
   canvas.style.height = `${height}px`
-
-  const ctx = canvas.getContext('2d')
-  if (!ctx) {
-    return false
-  }
-
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-  return true
 }
 
 /**
- * 作用：管理 grid/content/overlay 三层 Canvas 的 ref、DPR 适配和 resize 同步。
+ * 作用：管理 grid/content/overlay 三层 Canvas 的 ref、DPR 尺寸和 resize 同步。
  * 传入参数：layout 为行列尺寸信息，viewportRef 为共享视口。
  * 返回结果：返回容器和三层 canvas refs、layoutVersion，以及可手动调用的 syncLayout。
  */
@@ -85,10 +77,7 @@ export function useLayeredCanvas({
     }
 
     const dpr = window.devicePixelRatio || 1
-    const synced = canvases.every((canvas) => syncCanvasSize(canvas!, width, height, dpr))
-    if (!synced) {
-      return false
-    }
+    canvases.forEach((canvas) => syncCanvasElementSize(canvas!, width, height, dpr))
 
     const viewport = viewportRef.current
     viewport.viewportWidth = width
