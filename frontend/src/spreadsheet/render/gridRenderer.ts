@@ -16,7 +16,7 @@
  * 单元格坐标统一由 viewport.getCellRect 计算。
  */
 
-import type { SelectionRange, WorksheetData } from '@/spreadsheet/model/types'
+import type { WorksheetData } from '@/spreadsheet/model/types'
 import { colNumberToLetters, GRID_CHROME } from './chrome'
 import {
   getCellRect,
@@ -35,14 +35,12 @@ export type GridSelection = { row: number; col: number } | null
  * renderGrid 的入参
  * - worksheet: Redux 中的工作表数据
  * - viewport:  滚动与视口尺寸
- * - selection: active cell（锚点格），用于绘制蓝色实心边框
- * - selectionRange: 矩形范围（拖拽 / Shift 多选）；单选时 start === end
+ * - selection: 选中格，用于绘制蓝色边框
  */
 export type RenderGridOptions = {
   worksheet: WorksheetData
   viewport: Viewport
   selection: GridSelection
-  selectionRange?: SelectionRange | null
 }
 
 const COLORS = {
@@ -53,7 +51,6 @@ const COLORS = {
   headerGridLine: '#dadce0',
   headerText: '#70757a',
   selectionBorder: '#1a73e8',
-  selectionFill: 'rgba(26, 115, 232, 0.10)',
   text: '#202124',
 } as const
 
@@ -71,7 +68,6 @@ type DrawContext = {
   scrollX: number
   scrollY: number
   selection: GridSelection
-  selectionRange: SelectionRange | null
 }
 
 function isRangeVisible(range: VisibleRange): boolean {
@@ -381,42 +377,6 @@ function drawGridLines(draw: DrawContext): void {
   ctx.restore()
 }
 
-/** 选区矩形：半透明蓝色填充 + 蓝色实线边框；多选才画（单格由 drawGridLines 的 active cell 处理） */
-function drawSelectionRange(draw: DrawContext): void {
-  const { ctx, selectionRange, scrollX, scrollY, rowHeight, colWidth, viewport } = draw
-  if (!selectionRange) return
-
-  const { start, end } = selectionRange
-  const top = Math.min(start.row, end.row)
-  const bottom = Math.max(start.row, end.row)
-  const left = Math.min(start.col, end.col)
-  const right = Math.max(start.col, end.col)
-
-  // 单格不画矩形（由 active cell 实心边框表达）
-  if (top === bottom && left === right) return
-
-  const tlRect = getCellRect(top, left, scrollX, scrollY, rowHeight, colWidth)
-  const brRect = getCellRect(bottom, right, scrollX, scrollY, rowHeight, colWidth)
-  const x = tlRect.x
-  const y = tlRect.y
-  const w = brRect.x + brRect.width - tlRect.x
-  const h = brRect.y + brRect.height - tlRect.y
-
-  ctx.save()
-  clipDataArea(ctx, viewport)
-
-  // 半透明蓝色背景
-  ctx.fillStyle = COLORS.selectionFill
-  ctx.fillRect(x, y, w, h)
-
-  // 蓝色边框
-  ctx.strokeStyle = COLORS.selectionBorder
-  ctx.lineWidth = 2
-  ctx.strokeRect(x + 1, y + 1, Math.max(0, w - 2), Math.max(0, h - 2))
-
-  ctx.restore()
-}
-
 /**
  * 根据样式设置 ctx 字体
  * @param ctx       Canvas 2D 上下文
@@ -510,7 +470,7 @@ function drawCellTexts(draw: DrawContext): void {
  * @作用 按顶部绘制顺序依次调用各绘制函数
  */
 export function renderGrid(ctx: CanvasRenderingContext2D, options: RenderGridOptions): void {
-  const { worksheet, viewport, selection, selectionRange } = options
+  const { worksheet, viewport, selection } = options
 
   const rowHeight = worksheet.defaultRowHeight
   const colWidth = worksheet.defaultColWidth
@@ -527,23 +487,21 @@ export function renderGrid(ctx: CanvasRenderingContext2D, options: RenderGridOpt
   )
   //绘制上下文
   const draw: DrawContext = {
-    ctx,
-    worksheet,
-    viewport,
-    range,
-    rowHeight,
-    colWidth,
-    scrollX,
-    scrollY,
-    selection,
-    selectionRange: selectionRange ?? null,
+    ctx, //Canvas 2D 上下文
+    worksheet, //工作表数据
+    viewport, //视口
+    range, //可见范围
+    rowHeight, //行高
+    colWidth, //列宽
+    scrollX, //水平滚动位置
+    scrollY, //垂直滚动位置
+    selection, //选中格子
   }
 
   clearScreen(ctx, viewport)
   drawChromeBackground(draw)
   drawSheetBackground(draw)
   drawCellBackgrounds(draw)
-  drawSelectionRange(draw) // 范围高亮（多选）画在 cellBg 之上、网格线之下
   drawGridLines(draw)
   drawHeaderGridLines(draw)
   drawChromeDividers(ctx, viewport)

@@ -1,18 +1,15 @@
-// GrideCanvas - Canvas 表格渲染容器
-// 负责：视口滚动、渲染循环、把鼠标事件转发给 InteractionEngine
-// InteractionEngine 由父组件创建并通过 props 注入，避免双实例冲突
-
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
-import { useSelector, useStore } from 'react-redux'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useDispatch, useSelector, useStore } from 'react-redux'
+import { attachCellSelectInteraction } from '@/spreadsheet/interaction/selectCell'
 import { renderGrid } from '@/spreadsheet/render/gridRenderer'
 import {
   clampScroll,
+  createViewport,
   getDataViewportSize,
   getSheetSize,
   type Viewport,
 } from '@/spreadsheet/render/viewport'
 import type { RootState } from '@/spreadsheet/store'
-import type { InteractionEngine } from '@/spreadsheet'
 
 const SCROLLBAR_SIZE = 14
 const MIN_THUMB_SIZE = 24
@@ -24,17 +21,6 @@ type ScrollUi = {
   dataViewportHeight: number
   sheetWidth: number
   sheetHeight: number
-}
-
-export type GrideCanvasProps = {
-  interactionEngine: InteractionEngine
-  /** 滚动变化时上报，父组件用于定位 textarea */
-  onScrollChange?: (scrollX: number, scrollY: number) => void
-}
-
-export type GrideCanvasHandle = {
-  /** 让 canvas 重新拿到焦点（提交编辑后调用，确保后续键盘事件能被命中） */
-  focus: () => void
 }
 
 type GridScrollBarProps = {
@@ -185,35 +171,15 @@ function GridScrollBar({
   )
 }
 
-const GrideCanvas = forwardRef<GrideCanvasHandle, GrideCanvasProps>(function GrideCanvas(
-  { interactionEngine, onScrollChange },
-  ref
-) {
+function GrideCanvas() {
+  const dispatch = useDispatch()
   const reduxStore = useStore<RootState>()
   const worksheet = useSelector((s: RootState) => s.workSheet)
   const selection = useSelector((s: RootState) => s.selection)
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const viewportRef = useRef<Viewport>({
-    scrollX: 0,
-    scrollY: 0,
-    viewportWidth: 0,
-    viewportHeight: 0,
-  })
+  const viewportRef = useRef<Viewport>(createViewport())
   const rafRef = useRef<number | null>(null)
-  // 把 onScrollChange 放进 ref，避免父组件每次渲染传新函数引发死循环
-  const onScrollChangeRef = useRef(onScrollChange)
-  useEffect(() => {
-    onScrollChangeRef.current = onScrollChange
-  }, [onScrollChange])
-
-  useImperativeHandle(
-    ref,
-    () => ({
-      focus: () => canvasRef.current?.focus(),
-    }),
-    []
-  )
 
   const [scrollUi, setScrollUi] = useState<ScrollUi>({
     scrollX: 0,
@@ -231,32 +197,17 @@ const GrideCanvas = forwardRef<GrideCanvasHandle, GrideCanvasProps>(function Gri
     const sheet = getSheetSize(worksheet.rowCount, worksheet.colCount, rowHeight, colWidth)
 
     const dataViewport = getDataViewportSize(viewport)
-    const next: ScrollUi = {
+    setScrollUi({
       scrollX: viewport.scrollX,
       scrollY: viewport.scrollY,
       dataViewportWidth: dataViewport.width,
       dataViewportHeight: dataViewport.height,
       sheetWidth: sheet.width,
       sheetHeight: sheet.height,
-    }
-    // 只有数值真的变化才 setState，避免每次都产生新对象引发死循环
-    setScrollUi((prev) =>
-      prev.scrollX === next.scrollX &&
-      prev.scrollY === next.scrollY &&
-      prev.dataViewportWidth === next.dataViewportWidth &&
-      prev.dataViewportHeight === next.dataViewportHeight &&
-      prev.sheetWidth === next.sheetWidth &&
-      prev.sheetHeight === next.sheetHeight
-        ? prev
-        : next
-    )
+    })
+  }, [worksheet])
 
-    // 同步给 engine 用于命中检测；上报给父组件用于 textarea 定位
-    interactionEngine.setScroll(viewport.scrollX, viewport.scrollY)
-    onScrollChangeRef.current?.(viewport.scrollX, viewport.scrollY)
-  }, [worksheet, interactionEngine])
-
-  // 绘制时从 store 读取最新数据
+  // 绘制时从 store 读取最新数据，避免 selection 变化导致回调重建并触发 syncLayout
   const scheduleRender = useCallback(() => {
     if (rafRef.current !== null) {
       cancelAnimationFrame(rafRef.current)
@@ -272,7 +223,6 @@ const GrideCanvas = forwardRef<GrideCanvasHandle, GrideCanvasProps>(function Gri
         worksheet: state.workSheet,
         viewport: viewportRef.current,
         selection: { row: state.selection.row, col: state.selection.col },
-        selectionRange: state.selection.range,
       })
     })
   }, [reduxStore])
@@ -366,65 +316,21 @@ const GrideCanvas = forwardRef<GrideCanvasHandle, GrideCanvasProps>(function Gri
   // 仅选中变化时重绘，不重复 syncLayout（避免 canvas 尺寸重置导致闪烁）
   useEffect(() => {
     scheduleRender()
-  }, [
-    selection.row,
-    selection.col,
-    selection.range.start.row,
-    selection.range.start.col,
-    selection.range.end.row,
-    selection.range.end.col,
-    scheduleRender,
-  ])
+  }, [selection.row, selection.col, scheduleRender])
 
-  // 绑定 canvas 鼠标事件到 engine
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
 
-    const handleMouseDown = (event: MouseEvent) => {
-      // 让 canvas 拿焦点（允许接收键盘事件）
-      canvas.focus()
-      interactionEngine.handleCanvasPointerDown({
-        currentTarget: canvas,
-        clientX: event.clientX,
-        clientY: event.clientY,
-        shiftKey: event.shiftKey,
-      })
-    }
+    const detach = attachCellSelectInteraction(canvas, {
+      getViewport: () => viewportRef.current,
+      getWorksheet: () => reduxStore.getState().workSheet,
+      dispatch,
+      getState: () => reduxStore.getState(),
+    })
 
-    const handleMouseMove = (event: MouseEvent) => {
-      interactionEngine.handleCanvasPointerMove({
-        currentTarget: canvas,
-        clientX: event.clientX,
-        clientY: event.clientY,
-      })
-    }
-
-    const handleMouseUp = () => {
-      interactionEngine.handleCanvasPointerUp()
-    }
-
-    const handleDoubleClick = (event: MouseEvent) => {
-      interactionEngine.handleCanvasDoubleClick({
-        currentTarget: canvas,
-        clientX: event.clientX,
-        clientY: event.clientY,
-      })
-    }
-
-    canvas.addEventListener('mousedown', handleMouseDown)
-    canvas.addEventListener('dblclick', handleDoubleClick)
-    // mousemove/up 绑 window，让拖拽到 canvas 外也能跟随
-    window.addEventListener('mousemove', handleMouseMove)
-    window.addEventListener('mouseup', handleMouseUp)
-
-    return () => {
-      canvas.removeEventListener('mousedown', handleMouseDown)
-      canvas.removeEventListener('dblclick', handleDoubleClick)
-      window.removeEventListener('mousemove', handleMouseMove)
-      window.removeEventListener('mouseup', handleMouseUp)
-    }
-  }, [interactionEngine])
+    return detach
+  }, [dispatch, reduxStore])
 
   useEffect(() => {
     const el = containerRef.current
@@ -455,8 +361,7 @@ const GrideCanvas = forwardRef<GrideCanvasHandle, GrideCanvasProps>(function Gri
         <div ref={containerRef} className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
           <canvas
             ref={canvasRef}
-            tabIndex={0}
-            className="block h-full w-full touch-none outline-none"
+            className="block h-full w-full touch-none"
             aria-label="电子表格画布"
           />
         </div>
@@ -488,6 +393,6 @@ const GrideCanvas = forwardRef<GrideCanvasHandle, GrideCanvasProps>(function Gri
       </div>
     </div>
   )
-})
+}
 
 export default GrideCanvas
