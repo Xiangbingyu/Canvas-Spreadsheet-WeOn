@@ -1,19 +1,16 @@
-// spreadsheet 模块导出
-// 纯业务逻辑，与 React UI 分离
+// spreadsheet 模块对外导出（业务逻辑，与 React UI 分离）
 
-// 数据模型
 export * from './model/types'
-export type { SelectionRange } from './model/types'
+export type { CellCoord, SelectionRange } from './model/selection'
+export type { RenderConfig, WorksheetConfig } from './model/renderConfig'
 
-// 交互接口和引擎
-export { InteractionEngine } from './engine/interactionEngine'
+export { InteractionEngine, hitTest, getCellRect } from './interaction/interactionEngine'
 export type {
   InteractionCallbacks,
   CellCompositionEventArgs,
   CellInputChangeEventArgs,
 } from './interaction/interaction'
 
-// Store
 export {
   store,
   setWorksheet,

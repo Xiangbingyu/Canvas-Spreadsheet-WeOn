@@ -16,7 +16,8 @@
  * 单元格坐标统一由 viewport.getCellRect 计算。
  */
 
-import type { SelectionRange, WorksheetData } from '@/spreadsheet/model/types'
+import type { SelectionRange } from '@/spreadsheet/model/selection'
+import type { WorksheetData } from '@/spreadsheet/model/types'
 import { colNumberToLetters, GRID_CHROME } from './chrome'
 import {
   getCellRect,

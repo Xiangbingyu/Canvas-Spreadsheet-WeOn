@@ -1,7 +1,7 @@
 // Interaction Engine 接口定义
 // 本模块定义 Canvas 渲染组件与交互逻辑之间的回调接口
 
-import type { CellCoord, SelectionRange } from '../model/types'
+import type { CellCoord, SelectionRange } from '../model/selection'
 
 // 单元格点击事件
 export interface CellClickEventArgs {

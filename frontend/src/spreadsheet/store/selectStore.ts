@@ -1,7 +1,8 @@
 // 选中区域 store（active cell + 矩形范围）
 
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit'
-import type { SelectionRange, Style } from '@/spreadsheet/model/types'
+import type { SelectionRange } from '@/spreadsheet/model/selection'
+import type { Style } from '@/spreadsheet/model/types'
 import { colNumberToLetters } from '@/spreadsheet/render/chrome'
 
 /** 当前选中的单元格信息（active cell — 范围的锚点格） */

@@ -12,7 +12,7 @@ import {
   type Viewport,
 } from '@/spreadsheet/render/viewport'
 import type { RootState } from '@/spreadsheet/store'
-import type { InteractionEngine } from '@/spreadsheet'
+import type { InteractionEngine } from '@/spreadsheet/interaction/interactionEngine'
 
 const SCROLLBAR_SIZE = 14
 const MIN_THUMB_SIZE = 24
