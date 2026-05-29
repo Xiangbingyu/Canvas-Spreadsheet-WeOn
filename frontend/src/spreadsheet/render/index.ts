@@ -4,8 +4,12 @@ export {
   renderGrid,
   renderGridLayer,
   renderOverlayLayer,
+  tryScrollBlitContent,
   type GridSelection,
+  type RenderContentOptions,
   type RenderGridOptions,
+  type RenderRect,
+  type ScrollBlitResult,
 } from './layerRenderer'
 export { fitTextToWidth, measureTextCached } from './textMeasureCache'
 export {

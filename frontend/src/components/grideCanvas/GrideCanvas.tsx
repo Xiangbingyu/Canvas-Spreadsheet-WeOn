@@ -28,6 +28,7 @@ import {
   renderContentLayer,
   renderGridLayer,
   renderOverlayLayer,
+  tryScrollBlitContent,
   type RenderGridOptions,
 } from '@/spreadsheet/render'
 import { canvasPerf } from '@/spreadsheet/render/perfMonitor'
@@ -312,6 +313,8 @@ function GrideCanvas(
   const worksheet = useSelector((state: RootState) => state.workSheet)
   const selection = useSelector((state: RootState) => state.selection)
   const viewportRef = useRef<Viewport>(createViewport())
+  const lastRenderedScrollRef = useRef<{ scrollX: number; scrollY: number } | null>(null)
+  const forceFullContentRenderRef = useRef(true)
 
   const layout: LayeredCanvasLayout = useMemo(
     () => ({
@@ -353,7 +356,12 @@ function GrideCanvas(
     return {
       worksheet: state.workSheet,
       viewport: viewportRef.current,
-      selection: { row: state.selection.row, col: state.selection.col },
+      selection:
+        state.selection.range ??
+        ({
+          start: { row: state.selection.row, col: state.selection.col },
+          end: { row: state.selection.row, col: state.selection.col },
+        } satisfies RenderGridOptions['selection']),
     }
   }, [reduxStore])
 
@@ -375,17 +383,38 @@ function GrideCanvas(
 
       const options: RenderGridOptions = getRenderOptions()
       const renderStart = performance.now()
+      const currentScroll = {
+        scrollX: options.viewport.scrollX,
+        scrollY: options.viewport.scrollY,
+      }
+      const previousScroll = lastRenderedScrollRef.current
+      const deltaX = previousScroll ? currentScroll.scrollX - previousScroll.scrollX : 0
+      const deltaY = previousScroll ? currentScroll.scrollY - previousScroll.scrollY : 0
 
       if (dirtyLayers.has('grid')) {
         renderGridLayer(contexts.grid, options)
       }
       if (dirtyLayers.has('content')) {
-        renderContentLayer(contexts.content, options)
+        const canTryBlit =
+          previousScroll !== null &&
+          !forceFullContentRenderRef.current &&
+          (deltaX !== 0 || deltaY !== 0)
+        const blitResult = canTryBlit
+          ? tryScrollBlitContent(contexts.content, options.viewport, deltaX, deltaY)
+          : null
+
+        if (blitResult) {
+          renderContentLayer(contexts.content, options, { clipRects: blitResult.clipRects })
+        } else {
+          renderContentLayer(contexts.content, options)
+        }
       }
       if (dirtyLayers.has('overlay')) {
         renderOverlayLayer(contexts.overlay, options)
       }
 
+      forceFullContentRenderRef.current = false
+      lastRenderedScrollRef.current = currentScroll
       canvasPerf.recordRender(performance.now() - renderStart)
     },
     [contentCanvasRef, getRenderOptions, gridCanvasRef, overlayCanvasRef]
@@ -412,7 +441,7 @@ function GrideCanvas(
 
   const applyScroll = useCallback(
     /**
-     * 作用：应用横向/纵向滚动，限制边界后触发全层重绘。
+     * 作用：应用横向/纵向滚动，限制边界后通过 rAF 触发分层重绘。
      * 传入参数：nextX/nextY 为待应用的滚动偏移。
      * 返回结果：无返回值，更新 viewportRef 和滚动条 UI。
      */
@@ -433,6 +462,10 @@ function GrideCanvas(
         sheet.width,
         sheet.height
       )
+
+      if (viewport.scrollX === clamped.scrollX && viewport.scrollY === clamped.scrollY) {
+        return
+      }
 
       viewport.scrollX = clamped.scrollX
       viewport.scrollY = clamped.scrollY
@@ -482,6 +515,8 @@ function GrideCanvas(
   })
 
   useEffect(() => {
+    forceFullContentRenderRef.current = true
+    lastRenderedScrollRef.current = null
     interactionEngine.setScroll(viewportRef.current.scrollX, viewportRef.current.scrollY)
     onScrollChange?.(viewportRef.current.scrollX, viewportRef.current.scrollY)
     publishScrollUi()
@@ -489,14 +524,23 @@ function GrideCanvas(
   }, [interactionEngine, layoutVersion, onScrollChange, publishScrollUi, scheduleRender])
 
   useEffect(() => {
+    forceFullContentRenderRef.current = true
+    lastRenderedScrollRef.current = null
     scheduleRender(ALL_CANVAS_LAYERS)
   }, [scheduleRender, worksheet])
 
-  // 绑定 canvas 鼠标事件到 engine
   useEffect(() => {
     const overlayOnly: CanvasLayer[] = ['overlay']
     scheduleRender(overlayOnly)
-  }, [scheduleRender, selection.col, selection.row])
+  }, [
+    scheduleRender,
+    selection.col,
+    selection.row,
+    selection.range.end.col,
+    selection.range.end.row,
+    selection.range.start.col,
+    selection.range.start.row,
+  ])
 
   const maxScrollX = Math.max(0, scrollUi.sheetWidth - scrollUi.dataViewportWidth)
   const maxScrollY = Math.max(0, scrollUi.sheetHeight - scrollUi.dataViewportHeight)
