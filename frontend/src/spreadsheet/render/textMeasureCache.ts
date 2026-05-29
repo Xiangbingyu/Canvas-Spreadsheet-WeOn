@@ -1,5 +1,5 @@
-// Cached Canvas text measurement for renderer-only overflow handling.
-// Input: canvas context and text; output: measured width or clipped text.
+// Canvas 文本测量缓存，服务于渲染层的超长文本处理。
+// 输入绘制上下文和文本，输出测量宽度或截断后的文本。
 
 const MAX_CACHE_SIZE = 5000
 const ELLIPSIS = '...'

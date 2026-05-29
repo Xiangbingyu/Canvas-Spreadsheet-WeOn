@@ -1,5 +1,5 @@
-// Layered Canvas renderer for grid, content, and overlay drawing.
-// Input: worksheet/viewport/selection snapshot; output: pixels drawn on canvas layers.
+// 分层 Canvas 渲染器，负责 grid/content/overlay 三层绘制。
+// 输入工作表、视口和选区快照，输出绘制到各层画布的像素。
 
 import type { WorksheetData } from '@/spreadsheet/model/types'
 import { colNumberToLetters, GRID_CHROME } from './chrome'

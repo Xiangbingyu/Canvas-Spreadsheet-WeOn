@@ -6,7 +6,7 @@ export {
   renderOverlayLayer,
   type GridSelection,
   type RenderGridOptions,
-} from './gridRenderer'
+} from './layerRenderer'
 export { fitTextToWidth, measureTextCached } from './textMeasureCache'
 export {
   clampScroll,

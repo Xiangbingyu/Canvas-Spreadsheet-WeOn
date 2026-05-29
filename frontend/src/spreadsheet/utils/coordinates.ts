@@ -1,5 +1,5 @@
-// Spreadsheet coordinate helpers shared by render, interaction, and store.
-// Input: 1-based rows/columns or A1 labels; output: normalized coordinates.
+// 表格坐标工具，供渲染、交互和 store 共享使用。
+// 输入 1-based 行列或 A1 地址，输出规范化坐标。
 
 /** 行列标头区域尺寸，供渲染和命中检测共享。 */
 export const GRID_CHROME = {

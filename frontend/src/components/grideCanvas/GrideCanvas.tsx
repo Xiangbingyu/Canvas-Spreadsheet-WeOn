@@ -1,5 +1,5 @@
-// Layered Canvas spreadsheet component that connects Redux data to renderer hooks.
-// Input: worksheet/selection from store; output: grid, content, and overlay canvases.
+// 分层 Canvas 表格组件，连接 Redux 数据、渲染器和交互引擎。
+// 输入工作表与选区状态，输出 grid/content/overlay 三层画布。
 
 import {
   forwardRef,

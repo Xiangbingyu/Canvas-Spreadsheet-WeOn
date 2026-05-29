@@ -1,5 +1,5 @@
-// React hook for layered canvas refs, DPR sizing, and resize observation.
-// Input: sheet layout metrics and viewport ref; output: DOM refs and layout version.
+// 分层 Canvas 基础 Hook，管理引用、DPR 尺寸和 resize 监听。
+// 输入表格布局与视口引用，输出画布引用和布局版本。
 
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 import {

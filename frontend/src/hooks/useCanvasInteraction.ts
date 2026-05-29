@@ -1,5 +1,5 @@
-// React hook that binds canvas selection and wheel interactions.
-// Input: DOM refs and callbacks; output: browser event side effects with cleanup.
+// Canvas 交互绑定 Hook，负责指针和滚轮事件注册。
+// 输入 DOM 引用与回调函数，输出自动清理的浏览器事件副作用。
 
 import { useEffect, type RefObject } from 'react'
 

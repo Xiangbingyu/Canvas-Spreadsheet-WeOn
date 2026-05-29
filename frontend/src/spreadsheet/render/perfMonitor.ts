@@ -1,5 +1,5 @@
-// Development-only canvas render performance monitor for baseline measurements.
-// Input: render durations and manual sessions; output: console summaries for tables.
+// Canvas 渲染性能监控工具，用于开发阶段基线测量。
+// 输入渲染耗时和手动会话，输出可填表的控制台统计。
 export type CanvasPerfSummary = {
   caseName: string
   operation: string

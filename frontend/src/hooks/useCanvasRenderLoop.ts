@@ -1,5 +1,5 @@
-// React hook for dirty-layer scheduling with requestAnimationFrame.
-// Input: dirty layers and render callback; output: schedule/cancel methods.
+// Canvas 渲染调度 Hook，使用 rAF 合并脏层重绘。
+// 输入脏层与渲染回调，输出调度和取消方法。
 
 import { useCallback, useEffect, useRef } from 'react'
 
