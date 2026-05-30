@@ -87,6 +87,31 @@ export class InteractionEngine {
     }
   }
 
+  /**
+   * 点击表头：整行 / 整列 / 全选。
+   * 产出对应的矩形范围并走 onSelectionChange，active cell 落在该行/列的首格。
+   */
+  selectHeader(hit: HeaderHit) {
+    const rowCount = this.worksheetConfig.rowCount
+    const colCount = this.worksheetConfig.colCount
+    let range: SelectionRange
+    switch (hit.type) {
+      case 'row':
+        // 整行：该行第 1 列 → 最后一列
+        range = { start: { row: hit.index, col: 1 }, end: { row: hit.index, col: colCount } }
+        break
+      case 'col':
+        // 整列：第 1 行 → 最后一行
+        range = { start: { row: 1, col: hit.index }, end: { row: rowCount, col: hit.index } }
+        break
+      case 'corner':
+        // 全选
+        range = { start: { row: 1, col: 1 }, end: { row: rowCount, col: colCount } }
+        break
+    }
+    this.updateSelection(range, 'mouse')
+  }
+
   private normalizeSelection(
     start: { row: number; col: number },
     end: { row: number; col: number }
@@ -120,6 +145,21 @@ export class InteractionEngine {
     const rect = event.currentTarget.getBoundingClientRect()
     const x = event.clientX - rect.left
     const y = event.clientY - rect.top
+
+    // 先判表头：点行号选整行、点列号选整列、点左上角全选
+    const headerHit = hitTestHeader(
+      x,
+      y,
+      this.config,
+      this.scrollX,
+      this.scrollY,
+      this.worksheetConfig
+    )
+    if (headerHit) {
+      this.selectHeader(headerHit)
+      return
+    }
+
     const coord = hitTest(x, y, this.config, this.scrollX, this.scrollY, this.worksheetConfig)
     if (!coord) {
       this.callbacks.onCanvasClick?.({ event: event as unknown as React.MouseEvent })
@@ -358,4 +398,56 @@ interface InteractionEngineState {
   isSelecting: boolean
   selectionStart?: { row: number; col: number }
   isDragging: boolean
+}
+
+/** 表头命中类型：点中行号格（整行）、列号格（整列）、还是左上角全选格 */
+export type HeaderHit =
+  | { type: 'row'; index: number }
+  | { type: 'col'; index: number }
+  | { type: 'corner' }
+
+/**
+ * 命中表头区域（行号列 / 列号行 / 左上角）。
+ * 返回 1-based 索引；命中网格主体或越界返回 null。
+ */
+export function hitTestHeader(
+  mouseX: number,
+  mouseY: number,
+  config: Required<RenderConfig>,
+  scrollX: number = 0,
+  scrollY: number = 0,
+  worksheetConfig?: WorksheetConfig
+): HeaderHit | null {
+  const headerWidth = config.headerWidth
+  const headerHeight = config.headerHeight
+  const colWidth = worksheetConfig?.defaultColWidth ?? config.colWidth
+  const rowHeight = worksheetConfig?.defaultRowHeight ?? config.rowHeight
+  const rowCount = worksheetConfig?.rowCount
+  const colCount = worksheetConfig?.colCount
+
+  const inHeaderCol = mouseX < headerWidth // 落在左侧行号列
+  const inHeaderRow = mouseY < headerHeight // 落在顶部列号行
+
+  // 左上角全选格
+  if (inHeaderCol && inHeaderRow) return { type: 'corner' }
+
+  // 顶部列号行 → 整列
+  if (inHeaderRow) {
+    const sheetX = scrollX + (mouseX - headerWidth)
+    if (sheetX < 0) return null
+    const col = Math.floor(sheetX / colWidth) + 1
+    if (colCount !== undefined && (col < 1 || col > colCount)) return null
+    return { type: 'col', index: col }
+  }
+
+  // 左侧行号列 → 整行
+  if (inHeaderCol) {
+    const sheetY = scrollY + (mouseY - headerHeight)
+    if (sheetY < 0) return null
+    const row = Math.floor(sheetY / rowHeight) + 1
+    if (rowCount !== undefined && (row < 1 || row > rowCount)) return null
+    return { type: 'row', index: row }
+  }
+
+  return null
 }
