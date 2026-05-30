@@ -19,7 +19,7 @@ export interface Cell {
 //工作表数据结构
 export interface WorksheetData {
   id: string // 工作表id， 如 "01"
-  name: string // 工作表名称，如 "Sheet1"
+  name: string // 文档标题（Menubar 展示；与底部 Sheet 标签名无关）
   defaultRowHeight: number // 默认行高，如 25
   defaultColWidth: number // 默认列宽，如 100
   rowCount: number // 行数，如 20

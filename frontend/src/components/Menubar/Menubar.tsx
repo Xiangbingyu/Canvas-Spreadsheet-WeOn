@@ -1,18 +1,61 @@
+import { message } from 'antd'
 import { useState } from 'react'
+import { useDispatch, useSelector } from 'react-redux'
+import { CreateBlankSheetModal } from '@/components/startUI/CreateBlankSheetModal'
+import API, { ApiError } from '@/services/httpAPI'
 import { ExportExcelModal } from './ExportExcelModal'
 import { ImportExcelModal } from './ImportExcelModal'
+import type { RootState } from '@/spreadsheet/store'
+import { setWorksheet } from '@/spreadsheet/store'
+import { setDocSession } from '@/spreadsheet/store/userStore'
+import { fromServerSnapshot } from '@/spreadsheet/utils/fromServerSnapshot'
 
 type MenubarProps = {
-  initialTitle?: string
   userInitial?: string
 }
 
 const menuBtnClass = 'rounded px-2 py-0.5 text-[13px] leading-6 text-[#202124] hover:bg-[#f1f3f4]'
 
-export function Menubar({ initialTitle = '未命名电子表格', userInitial = 'd' }: MenubarProps) {
-  const [title, setTitle] = useState(initialTitle)
+export function Menubar({ userInitial = 'd' }: MenubarProps) {
+  const dispatch = useDispatch()
+  const clientId = useSelector((s: RootState) => s.collab.clientId) || 'system'
+  /** 文档标题：来自 workSheetStore.name，打开文档时由 StartPage 写入 */
+  const docTitle = useSelector((s: RootState) => s.workSheet.name)
+  const [title, setTitle] = useState(docTitle)
+  const [prevDocTitle, setPrevDocTitle] = useState(docTitle)
   const [importOpen, setImportOpen] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
+  const [createModalOpen, setCreateModalOpen] = useState(false)
+  const [creating, setCreating] = useState(false)
+
+  if (docTitle !== prevDocTitle) {
+    setPrevDocTitle(docTitle)
+    setTitle(docTitle)
+  }
+
+  async function handleCreateBlankSheet(sheetTitle: string) {
+    setCreating(true)
+    try {
+      const doc = await API.createDoc({ title: sheetTitle, createdBy: clientId })
+      console.log('[POST /docs]', doc)
+      const worksheet = fromServerSnapshot(doc.snapshot)
+      dispatch(
+        setWorksheet({
+          ...worksheet,
+          name: doc.title?.trim() || worksheet.name,
+        })
+      )
+      dispatch(setDocSession({ docId: doc.docId, clientId }))
+      setCreateModalOpen(false)
+    } catch (error) {
+      console.log('[POST /docs] error', error)
+      const text =
+        error instanceof ApiError ? `${error.message} (code ${error.code})` : '创建文档失败'
+      message.error(text)
+    } finally {
+      setCreating(false)
+    }
+  }
 
   return (
     <header className="shrink-0 border-b border-[#dadce0] bg-white">
@@ -34,6 +77,14 @@ export function Menubar({ initialTitle = '未命名电子表格', userInitial = 
             className="h-7 w-full min-w-0 max-w-md truncate border-0 bg-transparent text-[20px] leading-7 font-normal text-[#202124] outline-none ring-0 focus:rounded-sm focus:bg-[#f1f3f4] focus:px-2 focus:-ml-2"
           />
           <nav className="-ml-2 flex items-center gap-0.5">
+            <button
+              type="button"
+              className={menuBtnClass}
+              disabled={creating}
+              onClick={() => setCreateModalOpen(true)}
+            >
+              新建空白表格
+            </button>
             <button type="button" className={menuBtnClass} onClick={() => setImportOpen(true)}>
               导入 Excel
             </button>
@@ -61,6 +112,12 @@ export function Menubar({ initialTitle = '未命名电子表格', userInitial = 
       </div>
 
       <ImportExcelModal open={importOpen} onClose={() => setImportOpen(false)} />
+      <CreateBlankSheetModal
+        open={createModalOpen}
+        loading={creating}
+        onClose={() => setCreateModalOpen(false)}
+        onConfirm={(sheetTitle) => void handleCreateBlankSheet(sheetTitle)}
+      />
       <ExportExcelModal open={exportOpen} fileName={title} onClose={() => setExportOpen(false)} />
     </header>
   )
