@@ -1,4 +1,4 @@
-/** 选区与坐标相关类型（1-based 行列，与 hitTest / gridRenderer 一致） */
+/** 选区与坐标相关类型（1-based 行列，与 hitTest / layerRenderer 一致） */
 
 export interface CellCoord {
   row: number

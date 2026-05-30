@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useDispatch, useSelector, useStore } from 'react-redux'
 import { InteractionEngine } from '@/spreadsheet/interaction/interactionEngine'
-import { GRID_CHROME } from '@/spreadsheet/render/chrome'
+import { GRID_CHROME } from '@/spreadsheet/utils/coordinates'
 import { updateCell } from '@/spreadsheet/store/workSheetStore'
 import { setSelectedCell } from '@/spreadsheet/store/selectStore'
 import type { RootState } from '@/spreadsheet/store'

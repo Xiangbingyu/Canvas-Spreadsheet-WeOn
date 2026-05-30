@@ -3,7 +3,7 @@
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit'
 import type { SelectionRange } from '@/spreadsheet/model/selection'
 import type { Style } from '@/spreadsheet/model/types'
-import { colNumberToLetters } from '@/spreadsheet/render/chrome'
+import { colNumberToLetters } from '@/spreadsheet/utils/coordinates'
 
 /** 当前选中的单元格信息（active cell — 范围的锚点格） */
 export type SelectedCell = {

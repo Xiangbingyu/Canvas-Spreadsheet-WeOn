@@ -1,20 +1,40 @@
-// GrideCanvas - Canvas 表格渲染容器
-// 负责：视口滚动、渲染循环、把鼠标事件转发给 InteractionEngine
-// InteractionEngine 由父组件创建并通过 props 注入，避免双实例冲突
+// 分层 Canvas 表格组件，连接 Redux 数据、渲染器和交互引擎。
+// 输入工作表与选区状态，输出 grid/content/overlay 三层画布。
 
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
-import { useSelector, useStore } from 'react-redux'
-import { renderGrid } from '@/spreadsheet/render/gridRenderer'
 import {
-  clampScroll,
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+  type Ref,
+} from 'react'
+import { useSelector, useStore } from 'react-redux'
+import {
+  ALL_CANVAS_LAYERS,
+  useCanvasInteraction,
+  useCanvasRenderLoop,
+  useLayeredCanvas,
+  type CanvasLayer,
+  type LayeredCanvasLayout,
+} from '@/hooks'
+import {
+  createViewport,
   getDataViewportSize,
   getSheetSize,
-  type Viewport,
-} from '@/spreadsheet/render/viewport'
+  clampScroll,
+  renderContentLayer,
+  renderGridLayer,
+  renderOverlayLayer,
+  type RenderGridOptions,
+} from '@/spreadsheet/render'
+import { canvasPerf } from '@/spreadsheet/render/perfMonitor'
+import type { Viewport } from '@/spreadsheet/render'
 import type { RootState } from '@/spreadsheet/store'
 import type { InteractionEngine } from '@/spreadsheet/interaction/interactionEngine'
 
-const SCROLLBAR_SIZE = 14
 const MIN_THUMB_SIZE = 24
 
 type ScrollUi = {
@@ -35,6 +55,12 @@ export type GrideCanvasProps = {
 export type GrideCanvasHandle = {
   /** 让 canvas 重新拿到焦点（提交编辑后调用，确保后续键盘事件能被命中） */
   focus: () => void
+  /** 传入横向/纵向增量，返回结果为触发 Canvas 视口滚动并重绘。 */
+  scrollBy: (deltaX: number, deltaY: number) => void
+  /** 传入目标 scrollX/scrollY，返回结果为滚动到限制后的合法位置。 */
+  scrollTo: (scrollX: number, scrollY: number) => void
+  /** 无传入参数，返回当前 Canvas viewport 快照，供交互模块自动滚动后重新命中。 */
+  getViewport: () => Viewport
 }
 
 type GridScrollBarProps = {
@@ -46,6 +72,17 @@ type GridScrollBarProps = {
   onScroll: (value: number) => void
 }
 
+type CanvasLayerContexts = {
+  grid: CanvasRenderingContext2D
+  content: CanvasRenderingContext2D
+  overlay: CanvasRenderingContext2D
+}
+
+/**
+ * 作用：计算滚动条滑块尺寸与偏移。
+ * 传入参数：viewportSize 为视口尺寸，contentSize 为内容尺寸，scroll/maxScroll 为当前滚动状态。
+ * 返回结果：返回轨道尺寸、滑块尺寸和滑块偏移，供滚动条组件渲染。
+ */
 function computeThumbMetrics(
   viewportSize: number,
   contentSize: number,
@@ -53,8 +90,8 @@ function computeThumbMetrics(
   maxScroll: number
 ) {
   const trackSize = viewportSize
-
   let thumbSize = MIN_THUMB_SIZE
+
   if (contentSize > 0 && trackSize > 0) {
     thumbSize = Math.max(MIN_THUMB_SIZE, (viewportSize / contentSize) * trackSize)
   }
@@ -70,6 +107,52 @@ function computeThumbMetrics(
   return { trackSize, thumbSize, thumbOffset }
 }
 
+/**
+ * 作用：获取单个 Canvas 的 2D 上下文，并按当前 DPR 设置绘制坐标变换。
+ * 传入参数：canvas 为目标画布。
+ * 返回结果：成功返回 CanvasRenderingContext2D，失败返回 null。
+ */
+function prepareCanvasContext(canvas: HTMLCanvasElement | null): CanvasRenderingContext2D | null {
+  if (!canvas) {
+    return null
+  }
+
+  const ctx = canvas.getContext('2d')
+  if (!ctx) {
+    return null
+  }
+
+  const dpr = window.devicePixelRatio || 1
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+  return ctx
+}
+
+/**
+ * 作用：从三层 Canvas ref 中获取绘制上下文，供 GrideCanvas 胶水层调用 renderer。
+ * 传入参数：grid/content/overlay 三个 HTMLCanvasElement。
+ * 返回结果：三层 ctx 全部可用时返回对象，否则返回 null。
+ */
+function prepareLayerContexts(
+  gridCanvas: HTMLCanvasElement | null,
+  contentCanvas: HTMLCanvasElement | null,
+  overlayCanvas: HTMLCanvasElement | null
+): CanvasLayerContexts | null {
+  const grid = prepareCanvasContext(gridCanvas)
+  const content = prepareCanvasContext(contentCanvas)
+  const overlay = prepareCanvasContext(overlayCanvas)
+
+  if (!grid || !content || !overlay) {
+    return null
+  }
+
+  return { grid, content, overlay }
+}
+
+/**
+ * 作用：渲染自定义滚动条，并把拖拽/点击转换为滚动值。
+ * 传入参数：orientation 为方向，scroll/maxScroll 为滚动状态，onScroll 接收新的滚动值。
+ * 返回结果：返回 React 滚动条元素；不读取 Redux，不修改业务数据。
+ */
 function GridScrollBar({
   orientation,
   scroll,
@@ -90,8 +173,15 @@ function GridScrollBar({
   )
 
   const scrollFromPointer = useCallback(
+    /**
+     * 作用：将滚动条轨道上的指针位置转换为实际 scroll 值。
+     * 传入参数：pointer 为指针在轨道内的坐标。
+     * 返回结果：无返回值，通过 onScroll 通知调用方。
+     */
     (pointer: number) => {
-      if (maxScroll <= 0) return
+      if (maxScroll <= 0) {
+        return
+      }
 
       const { thumbSize: currentThumbSize, trackSize: currentTrackSize } = computeThumbMetrics(
         viewportSize,
@@ -103,32 +193,57 @@ function GridScrollBar({
       const ratio = Math.min(1, Math.max(0, (pointer - currentThumbSize / 2) / movable))
       onScroll(ratio * maxScroll)
     },
-    [viewportSize, contentSize, scroll, maxScroll, onScroll]
+    [contentSize, maxScroll, onScroll, scroll, viewportSize]
   )
 
-  const onTrackPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (maxScroll <= 0) return
+  /**
+   * 作用：处理轨道点击，跳转到点击位置对应的滚动偏移。
+   * 传入参数：event 为 React pointer 事件。
+   * 返回结果：无返回值，通过 scrollFromPointer 间接触发 onScroll。
+   */
+  const onTrackPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (maxScroll <= 0) {
+      return
+    }
+
     const track = trackRef.current
-    if (!track) return
+    if (!track) {
+      return
+    }
 
     const rect = track.getBoundingClientRect()
-    const pointer = isVertical ? e.clientY - rect.top : e.clientX - rect.left
+    const pointer = isVertical ? event.clientY - rect.top : event.clientX - rect.left
     scrollFromPointer(pointer)
   }
 
-  const onThumbPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (maxScroll <= 0) return
-    e.stopPropagation()
+  /**
+   * 作用：开始拖拽滚动条滑块，并记录初始指针和滚动位置。
+   * 传入参数：event 为 React pointer 事件。
+   * 返回结果：无返回值，内部写入 dragRef。
+   */
+  const onThumbPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (maxScroll <= 0) {
+      return
+    }
+
+    event.stopPropagation()
     dragRef.current = {
-      startPointer: isVertical ? e.clientY : e.clientX,
+      startPointer: isVertical ? event.clientY : event.clientX,
       startScroll: scroll,
     }
-    e.currentTarget.setPointerCapture(e.pointerId)
+    event.currentTarget.setPointerCapture(event.pointerId)
   }
 
-  const onThumbPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+  /**
+   * 作用：拖拽滑块时根据指针位移计算下一次滚动值。
+   * 传入参数：event 为 React pointer 事件。
+   * 返回结果：无返回值，通过 onScroll 通知调用方。
+   */
+  const onThumbPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
     const drag = dragRef.current
-    if (!drag || maxScroll <= 0) return
+    if (!drag || maxScroll <= 0) {
+      return
+    }
 
     const { thumbSize: currentThumbSize, trackSize: currentTrackSize } = computeThumbMetrics(
       viewportSize,
@@ -137,15 +252,20 @@ function GridScrollBar({
       maxScroll
     )
     const movable = Math.max(1, currentTrackSize - currentThumbSize)
-    const pointer = isVertical ? e.clientY : e.clientX
+    const pointer = isVertical ? event.clientY : event.clientX
     const delta = pointer - drag.startPointer
     const nextScroll = drag.startScroll + (delta / movable) * maxScroll
     onScroll(nextScroll)
   }
 
-  const onThumbPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+  /**
+   * 作用：结束滚动条拖拽并释放 pointer capture。
+   * 传入参数：event 为 React pointer 事件。
+   * 返回结果：无返回值，内部清空 dragRef。
+   */
+  const onThumbPointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
     dragRef.current = null
-    e.currentTarget.releasePointerCapture(e.pointerId)
+    event.currentTarget.releasePointerCapture(event.pointerId)
   }
 
   const trackClass = isVertical
@@ -185,34 +305,28 @@ function GridScrollBar({
   )
 }
 
-const GrideCanvas = forwardRef<GrideCanvasHandle, GrideCanvasProps>(function GrideCanvas(
-  { interactionEngine, onScrollChange },
-  ref
+/**
+ * 作用：表格 Canvas 入口组件，从 Redux 获取 worksheet/selection 并组合分层 Canvas hooks。
+ * 传入参数：无显式 props；组件通过 Redux 读取外部 Excel 解析后的 WorksheetData。
+ * 返回结果：返回三层 Canvas 和滚动条 UI；不直接修改 Redux 数据。
+ */
+function GrideCanvas(
+  { interactionEngine, onScrollChange }: GrideCanvasProps,
+  ref: Ref<GrideCanvasHandle>
 ) {
   const reduxStore = useStore<RootState>()
-  const worksheet = useSelector((s: RootState) => s.workSheet)
-  const selection = useSelector((s: RootState) => s.selection)
-  const containerRef = useRef<HTMLDivElement>(null)
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const viewportRef = useRef<Viewport>({
-    scrollX: 0,
-    scrollY: 0,
-    viewportWidth: 0,
-    viewportHeight: 0,
-  })
-  const rafRef = useRef<number | null>(null)
-  // 把 onScrollChange 放进 ref，避免父组件每次渲染传新函数引发死循环
-  const onScrollChangeRef = useRef(onScrollChange)
-  useEffect(() => {
-    onScrollChangeRef.current = onScrollChange
-  }, [onScrollChange])
+  const worksheet = useSelector((state: RootState) => state.workSheet)
+  const selection = useSelector((state: RootState) => state.selection)
+  const viewportRef = useRef<Viewport>(createViewport())
 
-  useImperativeHandle(
-    ref,
+  const layout: LayeredCanvasLayout = useMemo(
     () => ({
-      focus: () => canvasRef.current?.focus(),
+      rowCount: worksheet.rowCount,
+      colCount: worksheet.colCount,
+      rowHeight: worksheet.defaultRowHeight,
+      colWidth: worksheet.defaultColWidth,
     }),
-    []
+    [worksheet.colCount, worksheet.defaultColWidth, worksheet.defaultRowHeight, worksheet.rowCount]
   )
 
   const [scrollUi, setScrollUi] = useState<ScrollUi>({
@@ -224,66 +338,93 @@ const GrideCanvas = forwardRef<GrideCanvasHandle, GrideCanvasProps>(function Gri
     sheetHeight: 0,
   })
 
+  const { containerRef, gridCanvasRef, contentCanvasRef, overlayCanvasRef, layoutVersion } =
+    useLayeredCanvas({
+      layout,
+      viewportRef,
+    })
+
+  const getRenderOptions = useCallback(() => {
+    const state = reduxStore.getState()
+    return {
+      worksheet: state.workSheet,
+      viewport: viewportRef.current,
+      selection:
+        state.selection.range ??
+        ({
+          start: { row: state.selection.row, col: state.selection.col },
+          end: { row: state.selection.row, col: state.selection.col },
+        } satisfies RenderGridOptions['selection']),
+    }
+  }, [reduxStore])
+
+  const renderDirtyLayers = useCallback(
+    /**
+     * 作用：根据 rAF 调度输出的 dirty layer 集合调用对应 renderer。
+     * 传入参数：dirtyLayers 为本帧需要重绘的层集合。
+     * 返回结果：无返回值；只调用 Canvas renderer，不修改 Redux 数据。
+     */
+    (dirtyLayers: Set<CanvasLayer>) => {
+      const contexts = prepareLayerContexts(
+        gridCanvasRef.current,
+        contentCanvasRef.current,
+        overlayCanvasRef.current
+      )
+      if (!contexts || dirtyLayers.size === 0) {
+        return
+      }
+
+      const options: RenderGridOptions = getRenderOptions()
+      const renderStart = performance.now()
+
+      if (dirtyLayers.has('grid')) {
+        renderGridLayer(contexts.grid, options)
+      }
+      if (dirtyLayers.has('content')) {
+        renderContentLayer(contexts.content, options)
+      }
+      if (dirtyLayers.has('overlay')) {
+        renderOverlayLayer(contexts.overlay, options)
+      }
+
+      canvasPerf.recordRender(performance.now() - renderStart)
+    },
+    [contentCanvasRef, getRenderOptions, gridCanvasRef, overlayCanvasRef]
+  )
+
+  const { scheduleRender } = useCanvasRenderLoop({
+    onRender: renderDirtyLayers,
+  })
+
   const publishScrollUi = useCallback(() => {
     const viewport = viewportRef.current
-    const rowHeight = worksheet.defaultRowHeight
-    const colWidth = worksheet.defaultColWidth
-    const sheet = getSheetSize(worksheet.rowCount, worksheet.colCount, rowHeight, colWidth)
-
+    const sheet = getSheetSize(layout.rowCount, layout.colCount, layout.rowHeight, layout.colWidth)
     const dataViewport = getDataViewportSize(viewport)
-    const next: ScrollUi = {
+
+    setScrollUi({
       scrollX: viewport.scrollX,
       scrollY: viewport.scrollY,
       dataViewportWidth: dataViewport.width,
       dataViewportHeight: dataViewport.height,
       sheetWidth: sheet.width,
       sheetHeight: sheet.height,
-    }
-    // 只有数值真的变化才 setState，避免每次都产生新对象引发死循环
-    setScrollUi((prev) =>
-      prev.scrollX === next.scrollX &&
-      prev.scrollY === next.scrollY &&
-      prev.dataViewportWidth === next.dataViewportWidth &&
-      prev.dataViewportHeight === next.dataViewportHeight &&
-      prev.sheetWidth === next.sheetWidth &&
-      prev.sheetHeight === next.sheetHeight
-        ? prev
-        : next
-    )
-
-    // 同步给 engine 用于命中检测；上报给父组件用于 textarea 定位
-    interactionEngine.setScroll(viewport.scrollX, viewport.scrollY)
-    onScrollChangeRef.current?.(viewport.scrollX, viewport.scrollY)
-  }, [worksheet, interactionEngine])
-
-  // 绘制时从 store 读取最新数据
-  const scheduleRender = useCallback(() => {
-    if (rafRef.current !== null) {
-      cancelAnimationFrame(rafRef.current)
-    }
-    rafRef.current = requestAnimationFrame(() => {
-      rafRef.current = null
-      const canvas = canvasRef.current
-      const ctx = canvas?.getContext('2d')
-      if (!canvas || !ctx) return
-
-      const state = reduxStore.getState()
-      renderGrid(ctx, {
-        worksheet: state.workSheet,
-        viewport: viewportRef.current,
-        selection: { row: state.selection.row, col: state.selection.col },
-        selectionRange: state.selection.range,
-      })
     })
-  }, [reduxStore])
+  }, [layout.colCount, layout.colWidth, layout.rowCount, layout.rowHeight])
 
   const applyScroll = useCallback(
+    /**
+     * 作用：应用横向/纵向滚动，限制边界后通过 rAF 触发分层重绘。
+     * 传入参数：nextX/nextY 为待应用的滚动偏移。
+     * 返回结果：无返回值，更新 viewportRef 和滚动条 UI。
+     */
     (nextX: number, nextY: number) => {
       const viewport = viewportRef.current
-      const rowHeight = worksheet.defaultRowHeight
-      const colWidth = worksheet.defaultColWidth
-      const sheet = getSheetSize(worksheet.rowCount, worksheet.colCount, rowHeight, colWidth)
-
+      const sheet = getSheetSize(
+        layout.rowCount,
+        layout.colCount,
+        layout.rowHeight,
+        layout.colWidth
+      )
       const dataViewport = getDataViewportSize(viewport)
       const clamped = clampScroll(
         nextX,
@@ -293,96 +434,67 @@ const GrideCanvas = forwardRef<GrideCanvasHandle, GrideCanvasProps>(function Gri
         sheet.width,
         sheet.height
       )
+
+      if (viewport.scrollX === clamped.scrollX && viewport.scrollY === clamped.scrollY) {
+        return
+      }
+
       viewport.scrollX = clamped.scrollX
       viewport.scrollY = clamped.scrollY
-
+      interactionEngine.setScroll(clamped.scrollX, clamped.scrollY)
+      onScrollChange?.(clamped.scrollX, clamped.scrollY)
       publishScrollUi()
-      scheduleRender()
+      scheduleRender(ALL_CANVAS_LAYERS)
     },
-    [worksheet, publishScrollUi, scheduleRender]
+    [
+      layout.colCount,
+      layout.colWidth,
+      layout.rowCount,
+      layout.rowHeight,
+      interactionEngine,
+      onScrollChange,
+      publishScrollUi,
+      scheduleRender,
+    ]
   )
 
-  const syncLayout = useCallback(() => {
-    const container = containerRef.current
-    const canvas = canvasRef.current
-    if (!container || !canvas) return false
+  useImperativeHandle(
+    ref,
+    () => ({
+      focus() {
+        overlayCanvasRef.current?.focus()
+      },
+      scrollBy(deltaX: number, deltaY: number) {
+        const viewport = viewportRef.current
+        applyScroll(viewport.scrollX + deltaX, viewport.scrollY + deltaY)
+      },
+      scrollTo(scrollX: number, scrollY: number) {
+        applyScroll(scrollX, scrollY)
+      },
+      getViewport() {
+        return { ...viewportRef.current }
+      },
+    }),
+    [applyScroll, overlayCanvasRef]
+  )
 
-    const width = Math.floor(container.clientWidth)
-    const height = Math.floor(container.clientHeight)
-    if (width <= 0 || height <= 0) return false
+  const onWheelScroll = useCallback(
+    /**
+     * 作用：将滚轮增量转换为 Canvas 视口滚动。
+     * 传入参数：deltaX/deltaY 为浏览器滚轮事件提供的滚动增量。
+     * 返回结果：无返回值，通过 applyScroll 更新视口。
+     */
+    (deltaX: number, deltaY: number) => {
+      const viewport = viewportRef.current
+      applyScroll(viewport.scrollX + deltaX, viewport.scrollY + deltaY)
+    },
+    [applyScroll]
+  )
 
-    const dpr = window.devicePixelRatio || 1
-    canvas.width = Math.max(1, Math.floor(width * dpr))
-    canvas.height = Math.max(1, Math.floor(height * dpr))
-    canvas.style.width = `${width}px`
-    canvas.style.height = `${height}px`
-
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return false
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-
-    const viewport = viewportRef.current
-    viewport.viewportWidth = width
-    viewport.viewportHeight = height
-
-    const rowHeight = worksheet.defaultRowHeight
-    const colWidth = worksheet.defaultColWidth
-    const sheet = getSheetSize(worksheet.rowCount, worksheet.colCount, rowHeight, colWidth)
-    const dataViewport = getDataViewportSize(viewport)
-    const clamped = clampScroll(
-      viewport.scrollX,
-      viewport.scrollY,
-      dataViewport.width,
-      dataViewport.height,
-      sheet.width,
-      sheet.height
-    )
-    viewport.scrollX = clamped.scrollX
-    viewport.scrollY = clamped.scrollY
-
-    publishScrollUi()
-    return true
-  }, [worksheet, publishScrollUi])
-
-  useEffect(() => {
-    const el = containerRef.current
-    if (!el) return
-
-    const onResize = () => {
-      if (syncLayout()) scheduleRender()
-    }
-
-    const observer = new ResizeObserver(onResize)
-    observer.observe(el)
-    onResize()
-
-    return () => observer.disconnect()
-  }, [syncLayout, scheduleRender])
-
-  useEffect(() => {
-    if (syncLayout()) scheduleRender()
-  }, [worksheet, syncLayout, scheduleRender])
-
-  // 仅选中变化时重绘，不重复 syncLayout（避免 canvas 尺寸重置导致闪烁）
-  useEffect(() => {
-    scheduleRender()
-  }, [
-    selection.row,
-    selection.col,
-    selection.range.start.row,
-    selection.range.start.col,
-    selection.range.end.row,
-    selection.range.end.col,
-    scheduleRender,
-  ])
-
-  // 绑定 canvas 鼠标事件到 engine
-  useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-
-    const handleMouseDown = (event: MouseEvent) => {
-      // 让 canvas 拿焦点（允许接收键盘事件）
+  useCanvasInteraction({
+    interactionCanvasRef: overlayCanvasRef,
+    wheelTargetRef: containerRef,
+    onPointerDown: (event, canvas) => {
       canvas.focus()
       interactionEngine.handleCanvasPointerDown({
         currentTarget: canvas,
@@ -390,74 +502,63 @@ const GrideCanvas = forwardRef<GrideCanvasHandle, GrideCanvasProps>(function Gri
         clientY: event.clientY,
         shiftKey: event.shiftKey,
       })
-    }
-
-    const handleMouseMove = (event: MouseEvent) => {
+    },
+    onPointerMove: (event, canvas) => {
       interactionEngine.handleCanvasPointerMove({
         currentTarget: canvas,
         clientX: event.clientX,
         clientY: event.clientY,
       })
-    }
-
-    const handleMouseUp = () => {
+    },
+    onPointerUp: () => {
       interactionEngine.handleCanvasPointerUp()
-    }
-
-    const handleDoubleClick = (event: MouseEvent) => {
-      interactionEngine.handleCanvasDoubleClick({
-        currentTarget: canvas,
-        clientX: event.clientX,
-        clientY: event.clientY,
-      })
-    }
-
-    canvas.addEventListener('mousedown', handleMouseDown)
-    canvas.addEventListener('dblclick', handleDoubleClick)
-    // mousemove/up 绑 window，让拖拽到 canvas 外也能跟随
-    window.addEventListener('mousemove', handleMouseMove)
-    window.addEventListener('mouseup', handleMouseUp)
-
-    return () => {
-      canvas.removeEventListener('mousedown', handleMouseDown)
-      canvas.removeEventListener('dblclick', handleDoubleClick)
-      window.removeEventListener('mousemove', handleMouseMove)
-      window.removeEventListener('mouseup', handleMouseUp)
-    }
-  }, [interactionEngine])
+    },
+    onPointerCancel: () => {
+      interactionEngine.handleCanvasPointerUp()
+    },
+    onWheelScroll,
+  })
 
   useEffect(() => {
-    const el = containerRef.current
-    if (!el) return
-
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault()
-      const viewport = viewportRef.current
-      applyScroll(viewport.scrollX + e.deltaX, viewport.scrollY + e.deltaY)
-    }
-
-    el.addEventListener('wheel', onWheel, { passive: false })
-    return () => el.removeEventListener('wheel', onWheel)
-  }, [applyScroll])
+    interactionEngine.setScroll(viewportRef.current.scrollX, viewportRef.current.scrollY)
+    onScrollChange?.(viewportRef.current.scrollX, viewportRef.current.scrollY)
+    publishScrollUi()
+    scheduleRender(ALL_CANVAS_LAYERS)
+  }, [interactionEngine, layoutVersion, onScrollChange, publishScrollUi, scheduleRender])
 
   useEffect(() => {
-    return () => {
-      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
-    }
-  }, [])
+    scheduleRender(ALL_CANVAS_LAYERS)
+  }, [scheduleRender, worksheet])
+
+  useEffect(() => {
+    const overlayOnly: CanvasLayer[] = ['overlay']
+    scheduleRender(overlayOnly)
+  }, [
+    scheduleRender,
+    selection.col,
+    selection.row,
+    selection.range.end.col,
+    selection.range.end.row,
+    selection.range.start.col,
+    selection.range.start.row,
+  ])
 
   const maxScrollX = Math.max(0, scrollUi.sheetWidth - scrollUi.dataViewportWidth)
   const maxScrollY = Math.max(0, scrollUi.sheetHeight - scrollUi.dataViewportHeight)
+  const canvasClass = 'absolute inset-0 h-full w-full touch-none'
 
   return (
     <div className="absolute inset-0 flex flex-col bg-[#f8f9fa]">
       <div className="flex min-h-0 min-w-0 flex-1">
         <div ref={containerRef} className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
+          <canvas ref={gridCanvasRef} className={`${canvasClass} pointer-events-none`} />
+          <canvas ref={contentCanvasRef} className={`${canvasClass} pointer-events-none`} />
           <canvas
-            ref={canvasRef}
+            ref={overlayCanvasRef}
+            className={canvasClass}
             tabIndex={0}
-            className="block h-full w-full touch-none outline-none"
             aria-label="电子表格画布"
+            onDoubleClick={(event) => interactionEngine.handleCanvasDoubleClick(event)}
           />
         </div>
 
@@ -480,14 +581,10 @@ const GrideCanvas = forwardRef<GrideCanvasHandle, GrideCanvasProps>(function Gri
           contentSize={scrollUi.sheetWidth}
           onScroll={(scrollX) => applyScroll(scrollX, scrollUi.scrollY)}
         />
-        <div
-          className="shrink-0 border-l border-t border-[#dadce0] bg-[#f1f3f4]"
-          style={{ width: SCROLLBAR_SIZE, height: SCROLLBAR_SIZE }}
-          aria-hidden
-        />
+        <div className="h-[14px] w-[14px] shrink-0 border-l border-t border-[#dadce0] bg-[#f1f3f4]" />
       </div>
     </div>
   )
-})
+}
 
-export default GrideCanvas
+export default forwardRef<GrideCanvasHandle, GrideCanvasProps>(GrideCanvas)
