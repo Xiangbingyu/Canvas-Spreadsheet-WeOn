@@ -1,3 +1,5 @@
+import { useEffect } from 'react'
+import { useSelector } from 'react-redux'
 import { FormulaBar } from '@/components/FormulaBar/FormulaBar'
 import { Loading } from '@/components/Loading/Loading'
 import { Menubar } from '@/components/Menubar/Menubar'
@@ -8,13 +10,42 @@ import { CellEditOverlay } from '@/components/cellEditor/CellEditOverlay'
 import GrideCanvas from '@/components/grideCanvas/GrideCanvas'
 import { useSpreadsheetInteraction } from '@/hooks/useSpreadsheetInteraction'
 import { useCommitCell } from '@/hooks/useCommitCell'
+import { useCollab } from '@/hooks/useCollab'
 import { useHistory } from '@/hooks/useHistory'
+import type { RootState } from '@/spreadsheet/store'
+
+/** WS 地址：开发环境走 Vite 代理 /ws → 后端 3000 */
+const COLLAB_WS_URL =
+  import.meta.env.VITE_WS_URL ||
+  `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`
 
 export function SpreadsheetPage() {
-  // 单元格提交（协同 WS / 本地兜底，开关在 useCommitCell 内）
-  const onCommitCell = useCommitCell()
+  const docId = useSelector((s: RootState) => s.collab.docId)
+  const clientId = useSelector((s: RootState) => s.collab.clientId)
 
-  // 本地撤销/重做：包装 onCommitCell，编辑与样式变更都经此入栈；Ctrl+Z / Ctrl+Shift+Z
+  const { connect, disconnect, setCell } = useCollab({
+    url: COLLAB_WS_URL,
+    docId,
+    clientId,
+  })
+
+  // 表格页生命周期内管理 WS：进入/换文档时 connect（join），离开或 docId 清空时 disconnect
+  useEffect(() => {
+    if (!docId) {
+      disconnect()
+      return
+    }
+
+    disconnect()
+    connect()
+
+    return () => {
+      disconnect()
+    }
+  }, [docId, clientId, connect, disconnect])
+
+  const onCommitCell = useCommitCell(setCell)
+
   const { commitWithHistory, undo, redo } = useHistory(onCommitCell)
 
   const {
