@@ -4,6 +4,12 @@
 
 import * as XLSX from 'xlsx'
 import type { WorksheetData } from '@/spreadsheet/model/types'
+import { findOrCreateStyleId } from '@/spreadsheet/utils/generateStyleId'
+import {
+  buildCellStyleIndexMap,
+  resolveImportedCellStyle,
+  type XlsxWorkbookWithStyles,
+} from './excelImportStyle'
 import type { ParseExcelProgress } from './excelImportTypes'
 
 const DEFAULT_ROW_COUNT = 1000
@@ -24,6 +30,8 @@ const READ_WORKBOOK_OPTIONS: XLSX.ParsingOptions = {
   cellDates: false,
   cellText: true,
   cellNF: true,
+  cellStyles: true,
+  bookFiles: true,
 }
 
 function cellValueToString(value: unknown): string {
@@ -34,9 +42,13 @@ function cellValueToString(value: unknown): string {
 function buildWorksheetFromRows(
   rows: unknown[][],
   sheetName: string,
+  workbook: XlsxWorkbookWithStyles,
+  worksheet: XLSX.WorkSheet,
+  styleIndexMap: Map<string, number>,
   reportProgress: (progress: ParseExcelProgress) => void
 ): WorksheetData {
   const cells: WorksheetData['cells'] = {}
+  const styles: WorksheetData['styles'] = {}
   let maxRow = 0
   let maxCol = 0
   const totalRows = rows.length
@@ -55,7 +67,24 @@ function buildWorksheetFromRows(
       const colNum = c + 1
       maxRow = Math.max(maxRow, rowNum)
       maxCol = Math.max(maxCol, colNum)
-      cells[`${rowNum}:${colNum}`] = { row: rowNum, col: colNum, value }
+
+      const cellAddr = XLSX.utils.encode_cell({ r: r, c: c })
+      const xlsxCell = worksheet[cellAddr] as XLSX.CellObject | undefined
+      const importedStyle = resolveImportedCellStyle(
+        workbook,
+        rowNum,
+        colNum,
+        styleIndexMap,
+        xlsxCell?.s
+      )
+      const styleId = findOrCreateStyleId(styles, importedStyle)
+
+      const cell = { row: rowNum, col: colNum, value }
+      if (styleId) {
+        cells[`${rowNum}:${colNum}`] = { ...cell, styleId }
+      } else {
+        cells[`${rowNum}:${colNum}`] = cell
+      }
     }
 
     if (totalRows > 0 && (r % BUILD_CHUNK_ROWS === 0 || r === totalRows - 1)) {
@@ -85,7 +114,7 @@ function buildWorksheetFromRows(
     defaultColWidth: 100,
     rowCount: Math.max(DEFAULT_ROW_COUNT, parsedRow),
     colCount: Math.max(DEFAULT_COL_COUNT, parsedCol),
-    styles: {},
+    styles,
     cells,
   }
 }
@@ -133,9 +162,25 @@ export function parseExcelBufferCore(
 
   reportProgress({
     phase: 'building',
+    percent: 30,
+    message: '正在解析样式…',
+  })
+
+  const styledWorkbook = workbook as XlsxWorkbookWithStyles
+  const styleIndexMap = buildCellStyleIndexMap(styledWorkbook)
+
+  reportProgress({
+    phase: 'building',
     percent: 35,
     message: '正在构建表格数据…',
   })
 
-  return buildWorksheetFromRows(rows, firstSheetName ?? 'Sheet1', reportProgress)
+  return buildWorksheetFromRows(
+    rows,
+    firstSheetName ?? 'Sheet1',
+    styledWorkbook,
+    worksheet,
+    styleIndexMap,
+    reportProgress
+  )
 }

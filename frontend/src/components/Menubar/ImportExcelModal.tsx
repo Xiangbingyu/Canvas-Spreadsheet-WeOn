@@ -92,6 +92,7 @@ export function ImportExcelModal({ open, onClose }: ImportExcelModalProps) {
       })
 
       dispatch(setWorksheet(result))
+      console.log('result', result)
       message.success('导入成功')
       setFileList([])
       onClose()
