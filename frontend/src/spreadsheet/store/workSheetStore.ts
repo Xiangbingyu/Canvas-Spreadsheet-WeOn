@@ -49,12 +49,12 @@ const workSheetSlice = createSlice({
       //获取当前单元格数据
       const prev = state.cells[key]
 
-      //如果值为空，则删除该单元格
-      if (value === '') {
+      //如果值为空且样式为空，则删除该单元格
+      if (value === '' && style === undefined) {
         delete state.cells[key]
         return
       }
-      //
+
       let styleId: string | undefined
       //如果样式不为空，则在styles中查找或新增，并绑定styleId
       if (style !== undefined) {
