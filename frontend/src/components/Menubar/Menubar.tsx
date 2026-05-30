@@ -7,6 +7,7 @@ import API, { ApiError } from '@/services/httpAPI'
 import { ExportExcelModal } from './ExportExcelModal'
 import { ImportExcelModal } from './ImportExcelModal'
 import type { RootState } from '@/spreadsheet/store'
+import { buildDocShareUrl } from '@/spreadsheet/utils/shareLink'
 
 type MenubarProps = {
   userInitial?: string
@@ -17,6 +18,7 @@ const menuBtnClass = 'rounded px-2 py-0.5 text-[13px] leading-6 text-[#202124] h
 export function Menubar({ userInitial = 'd' }: MenubarProps) {
   const navigate = useNavigate()
   const clientId = useSelector((s: RootState) => s.collab.clientId) || 'system'
+  const docId = useSelector((s: RootState) => s.collab.docId)
   const docTitle = useSelector((s: RootState) => s.workSheet.name)
   const [title, setTitle] = useState(docTitle)
   const [prevDocTitle, setPrevDocTitle] = useState(docTitle)
@@ -28,6 +30,19 @@ export function Menubar({ userInitial = 'd' }: MenubarProps) {
   if (docTitle !== prevDocTitle) {
     setPrevDocTitle(docTitle)
     setTitle(docTitle)
+  }
+
+  async function handleShare() {
+    if (!docId) {
+      message.warning('请先打开文档')
+      return
+    }
+    try {
+      await navigator.clipboard.writeText(buildDocShareUrl(docId))
+      message.success('复制链接成功')
+    } catch {
+      message.error('复制失败，请手动复制地址栏链接')
+    }
   }
 
   async function handleCreateBlankSheet(sheetTitle: string) {
@@ -88,6 +103,7 @@ export function Menubar({ userInitial = 'd' }: MenubarProps) {
           <button
             type="button"
             className="flex h-9 items-center gap-1.5 rounded-full bg-[#c2e7ff] px-4 text-[14px] font-medium text-[#001d35] hover:bg-[#a8d5f5]"
+            onClick={() => void handleShare()}
           >
             <LockIcon />
             共享

@@ -88,7 +88,7 @@ export function SpreadsheetWorkspace() {
         <Loading visible={false} />
       </div>
 
-      <StatusBar onlineCount={3} userName="演示用户" />
+      <StatusBar />
       <SheetTabs />
     </div>
   )
