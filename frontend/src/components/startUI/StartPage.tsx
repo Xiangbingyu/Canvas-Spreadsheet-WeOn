@@ -1,17 +1,13 @@
 import { Button, Spin, Table, Typography, message } from 'antd'
 import { useEffect, useMemo, useState } from 'react'
 import type { ColumnsType } from 'antd/es/table'
-import { useDispatch } from 'react-redux'
+import { useNavigate } from 'react-router-dom'
 import { CreateBlankSheetModal } from '@/components/startUI/CreateBlankSheetModal'
 import API, { ApiError } from '@/services/httpAPI'
-import type { DocDetail, DocListItem } from '@/services/httpType'
-import { setWorksheet } from '@/spreadsheet/store'
-import { setDocSession } from '@/spreadsheet/store/userStore'
-import { fromServerSnapshot } from '@/spreadsheet/utils/fromServerSnapshot'
+import type { DocListItem } from '@/services/httpType'
 
 type StartPageProps = {
   userId: string
-  onEnterSheet: () => void
 }
 
 function formatCreatedAt(value: string) {
@@ -25,25 +21,12 @@ function formatCreatedAt(value: string) {
   ).padStart(2, '0')}`
 }
 
-export function StartPage({ userId, onEnterSheet }: StartPageProps) {
-  const dispatch = useDispatch()
+export function StartPage({ userId }: StartPageProps) {
+  const navigate = useNavigate()
   const [docs, setDocs] = useState<DocListItem[]>([])
   const [loading, setLoading] = useState(true)
-  const [openingDocId, setOpeningDocId] = useState<string | null>(null)
   const [createModalOpen, setCreateModalOpen] = useState(false)
   const [creating, setCreating] = useState(false)
-
-  function enterSheetFromDoc(doc: DocDetail) {
-    const worksheet = fromServerSnapshot(doc.snapshot)
-    dispatch(
-      setWorksheet({
-        ...worksheet,
-        name: doc.title?.trim() || worksheet.name,
-      })
-    )
-    dispatch(setDocSession({ docId: doc.docId, clientId: userId }))
-    onEnterSheet()
-  }
 
   useEffect(() => {
     let cancelled = false
@@ -77,20 +60,8 @@ export function StartPage({ userId, onEnterSheet }: StartPageProps) {
     }
   }, [userId])
 
-  async function handleOpenDoc(docId: string) {
-    setOpeningDocId(docId)
-    try {
-      const doc = await API.getDoc(docId)
-      console.log('[GET /docs/:docId]', doc)
-      enterSheetFromDoc(doc)
-    } catch (error) {
-      console.log('[GET /docs/:docId] error', error)
-      const text =
-        error instanceof ApiError ? `${error.message} (code ${error.code})` : '加载文档失败'
-      message.error(text)
-    } finally {
-      setOpeningDocId(null)
-    }
+  function handleOpenDoc(docId: string) {
+    navigate(`/doc/${encodeURIComponent(docId)}`)
   }
 
   async function handleCreateBlankSheet(title: string) {
@@ -99,7 +70,7 @@ export function StartPage({ userId, onEnterSheet }: StartPageProps) {
       const doc = await API.createDoc({ title, createdBy: userId })
       console.log('[POST /docs]', doc)
       setCreateModalOpen(false)
-      enterSheetFromDoc(doc)
+      navigate(`/doc/${encodeURIComponent(doc.docId)}`)
     } catch (error) {
       console.log('[POST /docs] error', error)
       const text =
@@ -141,19 +112,12 @@ export function StartPage({ userId, onEnterSheet }: StartPageProps) {
       key: 'action',
       width: 90,
       render: (_, record) => (
-        <Button
-          type="link"
-          loading={openingDocId === record.docId}
-          disabled={openingDocId !== null && openingDocId !== record.docId}
-          onClick={() => void handleOpenDoc(record.docId)}
-        >
+        <Button type="link" onClick={() => handleOpenDoc(record.docId)}>
           打开
         </Button>
       ),
     },
   ]
-
-  const listBusy = openingDocId !== null || creating
 
   return (
     <div className="flex min-h-screen items-start justify-center bg-[#f5f7fb] px-6 py-12">
@@ -162,7 +126,7 @@ export function StartPage({ userId, onEnterSheet }: StartPageProps) {
           <Typography.Title level={4} style={{ margin: 0 }}>
             文档列表
           </Typography.Title>
-          <Button type="primary" disabled={listBusy} onClick={() => setCreateModalOpen(true)}>
+          <Button type="primary" disabled={creating} onClick={() => setCreateModalOpen(true)}>
             新建空白表
           </Button>
         </div>

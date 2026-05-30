@@ -1,97 +1,64 @@
-import { useEffect } from 'react'
-import { useSelector } from 'react-redux'
-import { FormulaBar } from '@/components/FormulaBar/FormulaBar'
+import { message } from 'antd'
+import { useEffect, useMemo } from 'react'
+import { useDispatch, useSelector } from 'react-redux'
+import { useNavigate, useParams } from 'react-router-dom'
 import { Loading } from '@/components/Loading/Loading'
-import { Menubar } from '@/components/Menubar/Menubar'
-import { SheetTabs } from '@/components/sheetTabs/SheetTabs'
-import { StatusBar } from '@/components/statusBar/StatusBar'
-import { Toolbar } from '@/components/Toolbar/Toolbar'
-import { CellEditOverlay } from '@/components/cellEditor/CellEditOverlay'
-import GrideCanvas from '@/components/grideCanvas/GrideCanvas'
-import { useSpreadsheetInteraction } from '@/hooks/useSpreadsheetInteraction'
-import { useCommitCell } from '@/hooks/useCommitCell'
-import { useCollab } from '@/hooks/useCollab'
-import { useHistory } from '@/hooks/useHistory'
+import { SpreadsheetWorkspace } from '@/components/spreadsheetLayout/SpreadsheetWorkspace'
+import API, { ApiError } from '@/services/httpAPI'
 import type { RootState } from '@/spreadsheet/store'
+import { setWorksheet } from '@/spreadsheet/store'
+import { setDocSession } from '@/spreadsheet/store/userStore'
+import { allocateClientId } from '@/spreadsheet/utils/allocateClientId'
+import { fromServerSnapshot } from '@/spreadsheet/utils/fromServerSnapshot'
 
-/** WS 地址：开发环境走 Vite 代理 /ws → 后端 3000 */
-const COLLAB_WS_URL =
-  import.meta.env.VITE_WS_URL ||
-  `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`
-
+/** 解析 URL docId，统一 GET 加载文档后组装表格 UI */
 export function SpreadsheetPage() {
-  const docId = useSelector((s: RootState) => s.collab.docId)
-  const clientId = useSelector((s: RootState) => s.collab.clientId)
+  const { docId: routeDocId = '' } = useParams()
+  const dispatch = useDispatch()
+  const navigate = useNavigate()
+  const userId = useMemo(() => allocateClientId(), [])
+  const storeDocId = useSelector((s: RootState) => s.collab.docId)
+  const docReady = Boolean(routeDocId) && storeDocId === routeDocId
 
-  const { connect, disconnect, setCell } = useCollab({
-    url: COLLAB_WS_URL,
-    docId,
-    clientId,
-  })
-
-  // 表格页生命周期内管理 WS：进入/换文档时 connect（join），离开或 docId 清空时 disconnect
   useEffect(() => {
-    if (!docId) {
-      disconnect()
-      return
+    if (!routeDocId || storeDocId === routeDocId) return
+
+    let cancelled = false
+
+    async function load() {
+      try {
+        const doc = await API.getDoc(routeDocId)
+        if (cancelled) return
+        const worksheet = fromServerSnapshot(doc.snapshot)
+        dispatch(
+          setWorksheet({
+            ...worksheet,
+            name: doc.title?.trim() || worksheet.name,
+          })
+        )
+        dispatch(setDocSession({ docId: doc.docId, clientId: userId }))
+      } catch (error) {
+        if (cancelled) return
+        const text =
+          error instanceof ApiError ? `${error.message} (code ${error.code})` : '加载文档失败'
+        message.error(text)
+        navigate('/')
+      }
     }
 
-    disconnect()
-    connect()
-
+    void load()
     return () => {
-      disconnect()
+      cancelled = true
     }
-  }, [docId, clientId, connect, disconnect])
+  }, [routeDocId, storeDocId, dispatch, userId, navigate])
 
-  const onCommitCell = useCommitCell(setCell)
-
-  const { commitWithHistory, undo, redo } = useHistory(onCommitCell)
-
-  const {
-    engine,
-    canvasHandleRef,
-    editingCell,
-    editValue,
-    setEditValue,
-    textareaRef,
-    isComposingRef,
-    textareaStyle,
-    submitEdit,
-    cancelEdit,
-    onScrollChange,
-    formulaBarValue,
-  } = useSpreadsheetInteraction({ onCommitCell: commitWithHistory })
-
-  return (
-    <div className="flex h-screen flex-col overflow-hidden bg-white font-[Roboto,Arial,sans-serif]">
-      <Menubar />
-      <Toolbar onCommitCell={commitWithHistory} onUndo={undo} onRedo={redo} />
-      <FormulaBar value={formulaBarValue} onCommitCell={commitWithHistory} />
-
-      <div className="relative min-h-0 flex-1 overflow-hidden">
-        <GrideCanvas
-          ref={canvasHandleRef}
-          interactionEngine={engine}
-          onScrollChange={onScrollChange}
-        />
-
-        <CellEditOverlay
-          editingCell={editingCell}
-          editValue={editValue}
-          textareaRef={textareaRef}
-          isComposingRef={isComposingRef}
-          style={textareaStyle}
-          onChange={setEditValue}
-          onSubmit={submitEdit}
-          onCancel={cancelEdit}
-        />
-
-        <Loading visible={false} />
+  if (!docReady) {
+    return (
+      <div className="relative flex min-h-screen items-center justify-center bg-white">
+        <Loading visible message="正在加载文档…" />
       </div>
+    )
+  }
 
-      <StatusBar onlineCount={3} userName="演示用户" />
-      <SheetTabs />
-    </div>
-  )
+  return <SpreadsheetWorkspace />
 }

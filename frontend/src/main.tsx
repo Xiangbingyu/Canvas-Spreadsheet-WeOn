@@ -7,12 +7,15 @@ import 'antd/dist/reset.css'
 import App from '@/App.tsx'
 import '@/index.css'
 import { store } from '@/spreadsheet/store'
+import { BrowserRouter } from 'react-router-dom'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <Provider store={store}>
       <ConfigProvider locale={zhCN}>
-        <App />
+        <BrowserRouter>
+          <App />
+        </BrowserRouter>
       </ConfigProvider>
     </Provider>
   </StrictMode>

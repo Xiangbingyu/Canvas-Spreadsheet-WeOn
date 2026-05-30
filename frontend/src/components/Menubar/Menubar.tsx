@@ -1,14 +1,12 @@
 import { message } from 'antd'
 import { useState } from 'react'
-import { useDispatch, useSelector } from 'react-redux'
+import { useSelector } from 'react-redux'
+import { useNavigate } from 'react-router-dom'
 import { CreateBlankSheetModal } from '@/components/startUI/CreateBlankSheetModal'
 import API, { ApiError } from '@/services/httpAPI'
 import { ExportExcelModal } from './ExportExcelModal'
 import { ImportExcelModal } from './ImportExcelModal'
 import type { RootState } from '@/spreadsheet/store'
-import { setWorksheet } from '@/spreadsheet/store'
-import { setDocSession } from '@/spreadsheet/store/userStore'
-import { fromServerSnapshot } from '@/spreadsheet/utils/fromServerSnapshot'
 
 type MenubarProps = {
   userInitial?: string
@@ -17,9 +15,8 @@ type MenubarProps = {
 const menuBtnClass = 'rounded px-2 py-0.5 text-[13px] leading-6 text-[#202124] hover:bg-[#f1f3f4]'
 
 export function Menubar({ userInitial = 'd' }: MenubarProps) {
-  const dispatch = useDispatch()
+  const navigate = useNavigate()
   const clientId = useSelector((s: RootState) => s.collab.clientId) || 'system'
-  /** 文档标题：来自 workSheetStore.name，打开文档时由 StartPage 写入 */
   const docTitle = useSelector((s: RootState) => s.workSheet.name)
   const [title, setTitle] = useState(docTitle)
   const [prevDocTitle, setPrevDocTitle] = useState(docTitle)
@@ -38,15 +35,8 @@ export function Menubar({ userInitial = 'd' }: MenubarProps) {
     try {
       const doc = await API.createDoc({ title: sheetTitle, createdBy: clientId })
       console.log('[POST /docs]', doc)
-      const worksheet = fromServerSnapshot(doc.snapshot)
-      dispatch(
-        setWorksheet({
-          ...worksheet,
-          name: doc.title?.trim() || worksheet.name,
-        })
-      )
-      dispatch(setDocSession({ docId: doc.docId, clientId }))
       setCreateModalOpen(false)
+      navigate(`/doc/${encodeURIComponent(doc.docId)}`)
     } catch (error) {
       console.log('[POST /docs] error', error)
       const text =

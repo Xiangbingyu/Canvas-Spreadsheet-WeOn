@@ -1,21 +1,21 @@
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
+import { Route, Routes } from 'react-router-dom'
 import { StartPage } from '@/components/startUI/StartPage'
 import { SpreadsheetPage } from '@/pages/SpreadsheetPage'
 import { allocateClientId } from '@/spreadsheet/utils/allocateClientId'
 
-type View = 'start' | 'sheet'
-
 function App() {
-  const userId = useMemo(() => {
-    return allocateClientId()
-  }, [])
+  const userId = useMemo(() => allocateClientId(), [])
 
-  const [view, setView] = useState<View>('start')
+  return (
+    <Routes>
+      {/* 文档列表 */}
+      <Route path="/" element={<StartPage userId={userId} />} />
 
-  if (view === 'sheet') {
-    return <SpreadsheetPage />
-  }
-  return <StartPage userId={userId} onEnterSheet={() => setView('sheet')} />
+      {/* 文档页（带 ID） */}
+      <Route path="/doc/:docId" element={<SpreadsheetPage />} />
+    </Routes>
+  )
 }
 
 export default App

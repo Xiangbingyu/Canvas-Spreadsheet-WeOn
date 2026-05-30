@@ -24,10 +24,17 @@ export function fromServerSnapshot(snapshot: WorksheetData): WorksheetData {
     cells[`${cell.row}:${cell.col}`] = { ...cell }
   }
 
+  let maxRow = snapshot.rowCount
+  let maxCol = snapshot.colCount
+  for (const cell of Object.values(cells)) {
+    maxRow = Math.max(maxRow, cell.row)
+    maxCol = Math.max(maxCol, cell.col)
+  }
+
   return {
     ...snapshot,
     cells,
-    rowCount: snapshot.rowCount > 0 ? snapshot.rowCount : DEFAULT_ROW_COUNT,
-    colCount: snapshot.colCount > 0 ? snapshot.colCount : DEFAULT_COL_COUNT,
+    rowCount: Math.max(DEFAULT_ROW_COUNT, maxRow),
+    colCount: Math.max(DEFAULT_COL_COUNT, maxCol),
   }
 }
