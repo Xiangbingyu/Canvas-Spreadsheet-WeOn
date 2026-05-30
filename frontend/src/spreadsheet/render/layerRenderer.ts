@@ -3,8 +3,8 @@
 
 import type { WorksheetData } from '@/spreadsheet/model/types'
 import type { SelectionRange } from '@/spreadsheet/model/selection'
-import { colNumberToLetters, GRID_CHROME } from './chrome'
-import { fitTextToWidth } from './textMeasureCache'
+import { colNumberToLetters, GRID_CHROME } from '@/spreadsheet/utils/coordinates'
+import { fitTextToWidth, measureTextCached } from './textMeasureCache'
 import {
   getCellRect,
   getColHeaderRect,
@@ -28,14 +28,6 @@ export type RenderGridOptions = {
   worksheet: WorksheetData
   viewport: Viewport
   selection: GridSelection
-}
-
-export type RenderContentOptions = {
-  clipRects?: RenderRect[]
-}
-
-export type ScrollBlitResult = {
-  clipRects: RenderRect[]
 }
 
 type DrawContext = {
@@ -66,7 +58,6 @@ const COLORS = {
 const TEXT_PADDING = 4
 const HEADER_FONT = '500 11px Roboto, Arial, sans-serif'
 const ROW_HEADER_FONT = '11px Roboto, Arial, sans-serif'
-const MAX_BLIT_RATIO = 0.5
 
 /**
  * 作用：判断可见区域是否包含实际行列。
@@ -117,15 +108,6 @@ function clearCanvas(ctx: CanvasRenderingContext2D, viewport: Viewport): void {
 }
 
 /**
- * 作用：清空指定逻辑矩形，供滚动条带补画时局部擦除。
- * 传入参数：ctx 为 Canvas 2D 上下文，rect 为画布逻辑坐标矩形。
- * 返回结果：无返回值，只清除指定区域像素。
- */
-function clearRect(ctx: CanvasRenderingContext2D, rect: RenderRect): void {
-  ctx.clearRect(rect.x, rect.y, rect.width, rect.height)
-}
-
-/**
  * 作用：使用底色铺满底层 grid 画布。
  * 传入参数：ctx 为 Canvas 2D 上下文，viewport 提供逻辑宽高。
  * 返回结果：无返回值，只绘制背景。
@@ -149,37 +131,6 @@ function clipDataArea(ctx: CanvasRenderingContext2D, viewport: Viewport): void {
 }
 
 /**
- * 作用：将后续绘制限制在指定逻辑矩形内，供 content 层条带补画使用。
- * 传入参数：ctx 为 Canvas 2D 上下文，rect 为需要补画的画布区域。
- * 返回结果：无返回值，通过 ctx.clip 修改当前 save 范围内的裁剪区。
- */
-function clipRect(ctx: CanvasRenderingContext2D, rect: RenderRect): void {
-  ctx.beginPath()
-  ctx.rect(rect.x, rect.y, rect.width, rect.height)
-  ctx.clip()
-}
-
-/**
- * 作用：计算两个逻辑矩形的交集。
- * 传入参数：a/b 为画布逻辑坐标矩形。
- * 返回结果：有交集时返回交集矩形，否则返回 null。
- */
-function intersectRect(a: RenderRect, b: RenderRect): RenderRect | null {
-  const x = Math.max(a.x, b.x)
-  const y = Math.max(a.y, b.y)
-  const right = Math.min(a.x + a.width, b.x + b.width)
-  const bottom = Math.min(a.y + a.height, b.y + b.height)
-  const width = right - x
-  const height = bottom - y
-
-  if (width <= 0 || height <= 0) {
-    return null
-  }
-
-  return { x, y, width, height }
-}
-
-/**
  * 作用：获取当前数据区在画布中的逻辑矩形。
  * 传入参数：viewport 为当前视口。
  * 返回结果：返回扣除行列标头后的数据区矩形。
@@ -192,128 +143,6 @@ function getDataAreaRect(viewport: Viewport): RenderRect {
     width: dataViewport.width,
     height: dataViewport.height,
   }
-}
-
-/**
- * 作用：根据滚动位移计算 content 层新露出的补画条带。
- * 传入参数：dataRect 为数据区矩形，deltaX/deltaY 为相对上一帧的滚动差值。
- * 返回结果：返回需要局部补画的画布逻辑矩形数组。
- */
-function getScrollExposeRects(dataRect: RenderRect, deltaX: number, deltaY: number): RenderRect[] {
-  const rects: RenderRect[] = []
-  const absX = Math.abs(deltaX)
-  const absY = Math.abs(deltaY)
-
-  if (absX > 0) {
-    rects.push({
-      x: deltaX > 0 ? dataRect.x + dataRect.width - absX : dataRect.x,
-      y: dataRect.y,
-      width: absX,
-      height: dataRect.height,
-    })
-  }
-
-  if (absY > 0) {
-    rects.push({
-      x: dataRect.x,
-      y: deltaY > 0 ? dataRect.y + dataRect.height - absY : dataRect.y,
-      width: dataRect.width,
-      height: absY,
-    })
-  }
-
-  return rects
-}
-
-/**
- * 作用：复用 content canvas 已绘制像素，减少连续滚动时的整层重绘成本。
- * 传入参数：ctx 为 contentCanvas 上下文，viewport 为当前视口，deltaX/deltaY 为滚动差值。
- * 返回结果：可复用时返回需补画条带；不可复用时返回 null，调用方应整层重绘。
- */
-export function tryScrollBlitContent(
-  ctx: CanvasRenderingContext2D,
-  viewport: Viewport,
-  deltaX: number,
-  deltaY: number
-): ScrollBlitResult | null {
-  const dataRect = getDataAreaRect(viewport)
-  const absX = Math.abs(deltaX)
-  const absY = Math.abs(deltaY)
-
-  if (dataRect.width <= 0 || dataRect.height <= 0 || (absX === 0 && absY === 0)) {
-    return null
-  }
-  if (absX >= dataRect.width * MAX_BLIT_RATIO || absY >= dataRect.height * MAX_BLIT_RATIO) {
-    return null
-  }
-
-  const copyWidth = dataRect.width - absX
-  const copyHeight = dataRect.height - absY
-  if (copyWidth <= 0 || copyHeight <= 0) {
-    return null
-  }
-
-  const dpr = window.devicePixelRatio || 1
-  const sx = (dataRect.x + Math.max(0, deltaX)) * dpr
-  const sy = (dataRect.y + Math.max(0, deltaY)) * dpr
-  const sw = copyWidth * dpr
-  const sh = copyHeight * dpr
-  const dx = (dataRect.x + Math.max(0, -deltaX)) * dpr
-  const dy = (dataRect.y + Math.max(0, -deltaY)) * dpr
-
-  ctx.save()
-  ctx.setTransform(1, 0, 0, 1, 0, 0)
-  ctx.drawImage(ctx.canvas, sx, sy, sw, sh, dx, dy, sw, sh)
-  ctx.restore()
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-
-  return { clipRects: getScrollExposeRects(dataRect, deltaX, deltaY) }
-}
-
-/**
- * 作用：根据局部补画矩形计算需要遍历的可见行列范围。
- * 传入参数：rect 为画布逻辑坐标矩形，options 提供工作表和视口快照。
- * 返回结果：返回与该矩形相交的 1-based 行列范围；无交集时返回空范围。
- */
-function getVisibleRangeForRect(rect: RenderRect, options: RenderGridOptions): VisibleRange {
-  const { worksheet, viewport } = options
-  const rowHeight = worksheet.defaultRowHeight
-  const colWidth = worksheet.defaultColWidth
-  const emptyRange: VisibleRange = {
-    rowStart: 1,
-    rowEnd: 0,
-    colStart: 1,
-    colEnd: 0,
-  }
-
-  if (rowHeight <= 0 || colWidth <= 0) {
-    return emptyRange
-  }
-
-  const dirtyDataRect = intersectRect(rect, getDataAreaRect(viewport))
-  if (!dirtyDataRect) {
-    return emptyRange
-  }
-
-  const localLeft = dirtyDataRect.x - GRID_CHROME.headerColWidth
-  const localTop = dirtyDataRect.y - GRID_CHROME.headerRowHeight
-  const localRight = localLeft + dirtyDataRect.width
-  const localBottom = localTop + dirtyDataRect.height
-  const sheetLeft = viewport.scrollX + localLeft
-  const sheetTop = viewport.scrollY + localTop
-  const sheetRight = viewport.scrollX + localRight
-  const sheetBottom = viewport.scrollY + localBottom
-
-  const rowStart = Math.max(1, Math.floor(sheetTop / rowHeight) + 1)
-  const rowEnd = Math.min(worksheet.rowCount, Math.ceil(sheetBottom / rowHeight))
-  const colStart = Math.max(1, Math.floor(sheetLeft / colWidth) + 1)
-  const colEnd = Math.min(worksheet.colCount, Math.ceil(sheetRight / colWidth))
-
-  if (rowEnd < rowStart || colEnd < colStart) {
-    return emptyRange
-  }
-
-  return { rowStart, rowEnd, colStart, colEnd }
 }
 
 /**
@@ -368,7 +197,13 @@ function isRowHeaderVisible(rect: { y: number; height: number }, viewport: Viewp
  * 返回结果：相交返回 true，否则返回 false。
  */
 function isRectInDataArea(rect: RenderRect, viewport: Viewport): boolean {
-  return intersectRect(rect, getDataAreaRect(viewport)) !== null
+  const dataRect = getDataAreaRect(viewport)
+  return (
+    rect.x + rect.width > dataRect.x &&
+    rect.x < dataRect.x + dataRect.width &&
+    rect.y + rect.height > dataRect.y &&
+    rect.y < dataRect.y + dataRect.height
+  )
 }
 
 /**
@@ -650,6 +485,54 @@ function getTextX(
 }
 
 /**
+ * 作用：根据文本对齐方式把 Canvas 文本锚点转换为下划线起点。
+ * 传入参数：textX 为 fillText 锚点，textWidth 为已绘制文本宽度，hAlign 为单元格水平对齐方式。
+ * 返回结果：返回下划线起始 x 坐标，不读取 Redux，不修改外部数据。
+ */
+function getUnderlineStartX(
+  textX: number,
+  textWidth: number,
+  hAlign: 'left' | 'center' | 'right' | undefined
+): number {
+  if (hAlign === 'center') {
+    return textX - textWidth / 2
+  }
+  if (hAlign === 'right') {
+    return textX - textWidth
+  }
+  return textX
+}
+
+/**
+ * 作用：绘制单元格文本下划线，补齐 Canvas fillText 不会自动渲染 underline 的限制。
+ * 传入参数：ctx 为当前文本上下文，text/textX/textY 为已绘制文本，rect/hAlign/fontSize 用于定位。
+ * 返回结果：无返回值，只在当前单元格裁剪区内绘制下划线，不处理交互或状态修改。
+ */
+function drawTextUnderline(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  textX: number,
+  textY: number,
+  rect: { y: number; height: number },
+  hAlign: 'left' | 'center' | 'right' | undefined,
+  fontSize: number
+): void {
+  const textWidth = measureTextCached(ctx, text)
+  const startX = getUnderlineStartX(textX, textWidth, hAlign)
+  const endX = startX + textWidth
+  const underlineY = Math.min(rect.y + rect.height - 3, textY + Math.max(2, fontSize * 0.35))
+
+  ctx.save()
+  ctx.beginPath()
+  ctx.strokeStyle = ctx.fillStyle
+  ctx.lineWidth = Math.max(1, Math.round(fontSize / 12))
+  ctx.moveTo(startX, underlineY)
+  ctx.lineTo(endX, underlineY)
+  ctx.stroke()
+  ctx.restore()
+}
+
+/**
  * 作用：绘制可见单元格文本，并使用测量缓存处理超长文本。
  * 传入参数：draw 为本次绘制上下文。
  * 返回结果：无返回值，只绘制当前可见范围内的文本。
@@ -660,6 +543,8 @@ function drawCellTexts(draw: DrawContext): void {
     return
   }
 
+  ctx.save()
+  clipDataArea(ctx, draw.viewport)
   for (let row = range.rowStart; row <= range.rowEnd; row++) {
     for (let col = range.colStart; col <= range.colEnd; col++) {
       const cell = worksheet.cells[`${row}:${col}`]
@@ -682,11 +567,17 @@ function drawCellTexts(draw: DrawContext): void {
       const maxTextWidth = Math.max(0, rect.width - TEXT_PADDING * 2)
       const text = fitTextToWidth(ctx, cell.value, maxTextWidth)
       if (text) {
-        ctx.fillText(text, getTextX(rect, hAlign), rect.y + rect.height / 2)
+        const textX = getTextX(rect, hAlign)
+        const textY = rect.y + rect.height / 2
+        ctx.fillText(text, textX, textY)
+        if (style?.underline) {
+          drawTextUnderline(ctx, text, textX, textY, rect, hAlign, style.fontSize ?? 13)
+        }
       }
       ctx.restore()
     }
   }
+  ctx.restore()
 }
 
 /**
@@ -785,33 +676,12 @@ export function renderGridLayer(ctx: CanvasRenderingContext2D, options: RenderGr
  */
 export function renderContentLayer(
   ctx: CanvasRenderingContext2D,
-  options: RenderGridOptions,
-  renderOptions: RenderContentOptions = {}
+  options: RenderGridOptions
 ): void {
-  const clipRects = renderOptions.clipRects?.filter((rect) => rect.width > 0 && rect.height > 0)
-  if (!clipRects?.length) {
-    const draw = createDrawContext(ctx, options)
-    clearCanvas(ctx, options.viewport)
-    drawCellBackgrounds(draw)
-    drawCellTexts(draw)
-    return
-  }
-
-  for (const rect of clipRects) {
-    const range = getVisibleRangeForRect(rect, options)
-    if (!isRangeVisible(range)) {
-      clearRect(ctx, rect)
-      continue
-    }
-
-    const draw = createDrawContext(ctx, options, range)
-    clearRect(ctx, rect)
-    ctx.save()
-    clipRect(ctx, rect)
-    drawCellBackgrounds(draw)
-    drawCellTexts(draw)
-    ctx.restore()
-  }
+  const draw = createDrawContext(ctx, options)
+  clearCanvas(ctx, options.viewport)
+  drawCellBackgrounds(draw)
+  drawCellTexts(draw)
 }
 
 /**

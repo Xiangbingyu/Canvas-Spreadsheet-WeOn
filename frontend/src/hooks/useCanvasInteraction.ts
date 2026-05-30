@@ -7,6 +7,9 @@ type UseCanvasInteractionParams = {
   interactionCanvasRef: RefObject<HTMLCanvasElement | null>
   wheelTargetRef: RefObject<HTMLElement | null>
   onPointerDown?: (event: PointerEvent, canvas: HTMLCanvasElement) => void
+  onPointerMove?: (event: PointerEvent, canvas: HTMLCanvasElement) => void
+  onPointerUp?: (event: PointerEvent, canvas: HTMLCanvasElement) => void
+  onPointerCancel?: (event: PointerEvent, canvas: HTMLCanvasElement) => void
   onWheelScroll: (deltaX: number, deltaY: number) => void
 }
 
@@ -19,6 +22,9 @@ export function useCanvasInteraction({
   interactionCanvasRef,
   wheelTargetRef,
   onPointerDown,
+  onPointerMove,
+  onPointerUp,
+  onPointerCancel,
   onWheelScroll,
 }: UseCanvasInteractionParams): void {
   useEffect(() => {
@@ -28,12 +34,42 @@ export function useCanvasInteraction({
     }
 
     const handlePointerDown = (event: PointerEvent) => {
+      // 传入参数：pointerId 来自浏览器事件；返回结果：Canvas 在指针移出视口后仍持续接收 move/up。
+      canvas.setPointerCapture(event.pointerId)
       onPointerDown?.(event, canvas)
     }
 
+    const handlePointerMove = (event: PointerEvent) => {
+      onPointerMove?.(event, canvas)
+    }
+
+    const releasePointerCapture = (event: PointerEvent) => {
+      if (canvas.hasPointerCapture(event.pointerId)) {
+        canvas.releasePointerCapture(event.pointerId)
+      }
+    }
+
+    const handlePointerUp = (event: PointerEvent) => {
+      releasePointerCapture(event)
+      onPointerUp?.(event, canvas)
+    }
+
+    const handlePointerCancel = (event: PointerEvent) => {
+      releasePointerCapture(event)
+      onPointerCancel?.(event, canvas)
+    }
+
     canvas.addEventListener('pointerdown', handlePointerDown)
-    return () => canvas.removeEventListener('pointerdown', handlePointerDown)
-  }, [interactionCanvasRef, onPointerDown])
+    canvas.addEventListener('pointermove', handlePointerMove)
+    canvas.addEventListener('pointerup', handlePointerUp)
+    canvas.addEventListener('pointercancel', handlePointerCancel)
+    return () => {
+      canvas.removeEventListener('pointerdown', handlePointerDown)
+      canvas.removeEventListener('pointermove', handlePointerMove)
+      canvas.removeEventListener('pointerup', handlePointerUp)
+      canvas.removeEventListener('pointercancel', handlePointerCancel)
+    }
+  }, [interactionCanvasRef, onPointerCancel, onPointerDown, onPointerMove, onPointerUp])
 
   useEffect(() => {
     const el = wheelTargetRef.current

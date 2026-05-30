@@ -28,7 +28,6 @@ import {
   renderContentLayer,
   renderGridLayer,
   renderOverlayLayer,
-  tryScrollBlitContent,
   type RenderGridOptions,
 } from '@/spreadsheet/render'
 import { canvasPerf } from '@/spreadsheet/render/perfMonitor'
@@ -56,6 +55,12 @@ export type GrideCanvasProps = {
 export type GrideCanvasHandle = {
   /** 让 canvas 重新拿到焦点（提交编辑后调用，确保后续键盘事件能被命中） */
   focus: () => void
+  /** 传入横向/纵向增量，返回结果为触发 Canvas 视口滚动并重绘。 */
+  scrollBy: (deltaX: number, deltaY: number) => void
+  /** 传入目标 scrollX/scrollY，返回结果为滚动到限制后的合法位置。 */
+  scrollTo: (scrollX: number, scrollY: number) => void
+  /** 无传入参数，返回当前 Canvas viewport 快照，供交互模块自动滚动后重新命中。 */
+  getViewport: () => Viewport
 }
 
 type GridScrollBarProps = {
@@ -313,8 +318,6 @@ function GrideCanvas(
   const worksheet = useSelector((state: RootState) => state.workSheet)
   const selection = useSelector((state: RootState) => state.selection)
   const viewportRef = useRef<Viewport>(createViewport())
-  const lastRenderedScrollRef = useRef<{ scrollX: number; scrollY: number } | null>(null)
-  const forceFullContentRenderRef = useRef(true)
 
   const layout: LayeredCanvasLayout = useMemo(
     () => ({
@@ -340,16 +343,6 @@ function GrideCanvas(
       layout,
       viewportRef,
     })
-
-  useImperativeHandle(
-    ref,
-    () => ({
-      focus() {
-        overlayCanvasRef.current?.focus()
-      },
-    }),
-    [overlayCanvasRef]
-  )
 
   const getRenderOptions = useCallback(() => {
     const state = reduxStore.getState()
@@ -383,38 +376,17 @@ function GrideCanvas(
 
       const options: RenderGridOptions = getRenderOptions()
       const renderStart = performance.now()
-      const currentScroll = {
-        scrollX: options.viewport.scrollX,
-        scrollY: options.viewport.scrollY,
-      }
-      const previousScroll = lastRenderedScrollRef.current
-      const deltaX = previousScroll ? currentScroll.scrollX - previousScroll.scrollX : 0
-      const deltaY = previousScroll ? currentScroll.scrollY - previousScroll.scrollY : 0
 
       if (dirtyLayers.has('grid')) {
         renderGridLayer(contexts.grid, options)
       }
       if (dirtyLayers.has('content')) {
-        const canTryBlit =
-          previousScroll !== null &&
-          !forceFullContentRenderRef.current &&
-          (deltaX !== 0 || deltaY !== 0)
-        const blitResult = canTryBlit
-          ? tryScrollBlitContent(contexts.content, options.viewport, deltaX, deltaY)
-          : null
-
-        if (blitResult) {
-          renderContentLayer(contexts.content, options, { clipRects: blitResult.clipRects })
-        } else {
-          renderContentLayer(contexts.content, options)
-        }
+        renderContentLayer(contexts.content, options)
       }
       if (dirtyLayers.has('overlay')) {
         renderOverlayLayer(contexts.overlay, options)
       }
 
-      forceFullContentRenderRef.current = false
-      lastRenderedScrollRef.current = currentScroll
       canvasPerf.recordRender(performance.now() - renderStart)
     },
     [contentCanvasRef, getRenderOptions, gridCanvasRef, overlayCanvasRef]
@@ -486,6 +458,26 @@ function GrideCanvas(
     ]
   )
 
+  useImperativeHandle(
+    ref,
+    () => ({
+      focus() {
+        overlayCanvasRef.current?.focus()
+      },
+      scrollBy(deltaX: number, deltaY: number) {
+        const viewport = viewportRef.current
+        applyScroll(viewport.scrollX + deltaX, viewport.scrollY + deltaY)
+      },
+      scrollTo(scrollX: number, scrollY: number) {
+        applyScroll(scrollX, scrollY)
+      },
+      getViewport() {
+        return { ...viewportRef.current }
+      },
+    }),
+    [applyScroll, overlayCanvasRef]
+  )
+
   const onWheelScroll = useCallback(
     /**
      * 作用：将滚轮增量转换为 Canvas 视口滚动。
@@ -511,12 +503,23 @@ function GrideCanvas(
         shiftKey: event.shiftKey,
       })
     },
+    onPointerMove: (event, canvas) => {
+      interactionEngine.handleCanvasPointerMove({
+        currentTarget: canvas,
+        clientX: event.clientX,
+        clientY: event.clientY,
+      })
+    },
+    onPointerUp: () => {
+      interactionEngine.handleCanvasPointerUp()
+    },
+    onPointerCancel: () => {
+      interactionEngine.handleCanvasPointerUp()
+    },
     onWheelScroll,
   })
 
   useEffect(() => {
-    forceFullContentRenderRef.current = true
-    lastRenderedScrollRef.current = null
     interactionEngine.setScroll(viewportRef.current.scrollX, viewportRef.current.scrollY)
     onScrollChange?.(viewportRef.current.scrollX, viewportRef.current.scrollY)
     publishScrollUi()
@@ -524,8 +527,6 @@ function GrideCanvas(
   }, [interactionEngine, layoutVersion, onScrollChange, publishScrollUi, scheduleRender])
 
   useEffect(() => {
-    forceFullContentRenderRef.current = true
-    lastRenderedScrollRef.current = null
     scheduleRender(ALL_CANVAS_LAYERS)
   }, [scheduleRender, worksheet])
 
@@ -558,15 +559,6 @@ function GrideCanvas(
             tabIndex={0}
             aria-label="电子表格画布"
             onDoubleClick={(event) => interactionEngine.handleCanvasDoubleClick(event)}
-            onPointerMove={(event) =>
-              interactionEngine.handleCanvasPointerMove({
-                currentTarget: event.currentTarget,
-                clientX: event.clientX,
-                clientY: event.clientY,
-              })
-            }
-            onPointerUp={() => interactionEngine.handleCanvasPointerUp()}
-            onPointerCancel={() => interactionEngine.handleCanvasPointerUp()}
           />
         </div>
 

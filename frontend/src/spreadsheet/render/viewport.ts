@@ -1,6 +1,6 @@
 // 纯函数：视口、可见范围、坐标换算
 
-import { GRID_CHROME } from './chrome'
+import { GRID_CHROME } from '@/spreadsheet/utils/coordinates'
 
 /** 视口状态（Canvas 逻辑像素坐标系） */
 export type Viewport = {
