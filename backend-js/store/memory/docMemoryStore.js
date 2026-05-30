@@ -233,6 +233,25 @@ function createDocMemoryStore() {
       return { ...updatedDoc, _before: { value: oldValue, style: oldStyle } };
     },
 
+    async applySetTitle(command) {
+      const current = getStoredRowByDocId(command.docId);
+
+      if (!current) {
+        return null;
+      }
+
+      const updatedDoc = updateByDocId(command.docId, {
+        title: command.title,
+        currentSeq: Number.isInteger(command.seq) ? command.seq : current.currentSeq + 1,
+      });
+
+      if (!updatedDoc) {
+        return null;
+      }
+
+      return { ...updatedDoc, _before: { title: current.title } };
+    },
+
     async applyImportSheet(command) {
       const current = getStoredRowByDocId(command.docId);
 

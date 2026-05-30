@@ -1,5 +1,6 @@
 param(
-  [string]$BaseUrl = "http://127.0.0.1:3000"
+  [string]$BaseUrl = "http://127.0.0.1:3000",
+  [string]$SecondaryBaseUrl = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -38,7 +39,9 @@ function Invoke-CurlJson {
     [Parameter(Mandatory = $true)]
     [string]$Path,
 
-    [object]$JsonBody = $null
+    [object]$JsonBody = $null,
+
+    [string]$TargetBaseUrl = $BaseUrl
   )
 
   $tempFile = [System.IO.Path]::GetTempFileName()
@@ -50,7 +53,7 @@ function Invoke-CurlJson {
       "-X", $Method,
       "-o", $tempFile,
       "-w", "%{http_code}",
-      "$BaseUrl$Path"
+      "$TargetBaseUrl$Path"
     )
 
     if ($null -ne $JsonBody) {
@@ -64,7 +67,7 @@ function Invoke-CurlJson {
         "--data-binary", "@$payloadFile",
         "-o", $tempFile,
         "-w", "%{http_code}",
-        "$BaseUrl$Path"
+        "$TargetBaseUrl$Path"
       )
     }
 
@@ -100,23 +103,29 @@ function Invoke-CurlJson {
 
 Write-Host "Checking docs API via curl.exe" -ForegroundColor Green
 Write-Host "Base URL: $BaseUrl"
+if (-not [string]::IsNullOrWhiteSpace($SecondaryBaseUrl)) {
+  Write-Host "Secondary Base URL: $SecondaryBaseUrl"
+}
 Write-Host "Note: HTTP status is checked separately from response JSON code."
 
-$createEventId = "evt_auto_docs_001"
+$suffix = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+$createEventId = "evt_auto_docs_$suffix"
+$createdBy = "curl_script_user_$suffix"
+$createdTitle = "auto-test-doc-$suffix"
 $createResponse = $null
 $createdDocId = $null
 
 Write-Step "POST /docs should create a document"
 $createResponse = Invoke-CurlJson -Method "POST" -Path "/docs" -JsonBody @{
-  title = "auto-test-doc"
-  createdBy = "curl_script_user"
+  title = $createdTitle
+  createdBy = $createdBy
   eventId = $createEventId
 }
 
 Assert-Equal $createResponse.StatusCode 201 "POST /docs should return HTTP 201."
 Assert-Equal $createResponse.Json.code 0 "POST /docs should return business code 0."
-Assert-Equal $createResponse.Json.data.title "auto-test-doc" "Created title mismatch."
-Assert-Equal $createResponse.Json.data.createdBy "curl_script_user" "CreatedBy mismatch."
+Assert-Equal $createResponse.Json.data.title $createdTitle "Created title mismatch."
+Assert-Equal $createResponse.Json.data.createdBy $createdBy "CreatedBy mismatch."
 Assert-Equal $createResponse.Json.data.currentSeq 0 "Initial currentSeq should be 0."
 Assert-True ($null -ne $createResponse.Json.data.snapshot) "Snapshot should exist."
 $createdDocId = $createResponse.Json.data.docId
@@ -141,7 +150,7 @@ Assert-Equal $getDocResponse.Json.data.snapshot.id "sheet_${createdDocId}_001" "
 Write-Host "PASS GET /docs/$createdDocId => HTTP 200" -ForegroundColor Green
 
 Write-Step "GET /docs should list created docs for the user"
-$listResponse = Invoke-CurlJson -Method "GET" -Path "/docs?userId=curl_script_user&scope=created&page=1&pageSize=10"
+$listResponse = Invoke-CurlJson -Method "GET" -Path "/docs?userId=$createdBy&scope=created&page=1&pageSize=10"
 
 Assert-Equal $listResponse.StatusCode 200 "GET /docs should return HTTP 200."
 Assert-Equal $listResponse.Json.code 0 "GET /docs should return business code 0."
@@ -162,8 +171,32 @@ $duplicateResponse = Invoke-CurlJson -Method "POST" -Path "/docs" -JsonBody @{
 Assert-Equal $duplicateResponse.StatusCode 201 "Duplicate POST /docs should still return HTTP 201."
 Assert-Equal $duplicateResponse.Json.code 0 "Duplicate POST /docs should return business code 0."
 Assert-Equal $duplicateResponse.Json.data.docId $createdDocId "Duplicate POST /docs should return the original docId."
-Assert-Equal $duplicateResponse.Json.data.title "auto-test-doc" "Duplicate POST /docs should return the original title."
+Assert-Equal $duplicateResponse.Json.data.title $createdTitle "Duplicate POST /docs should return the original title."
 Write-Host "PASS duplicate POST /docs => HTTP 201, idempotent hit confirmed" -ForegroundColor Green
+
+if (-not [string]::IsNullOrWhiteSpace($SecondaryBaseUrl)) {
+  Write-Step "Secondary instance should observe the created document"
+  $secondaryDocResponse = Invoke-CurlJson -Method "GET" -Path "/docs/$createdDocId" -TargetBaseUrl $SecondaryBaseUrl
+  Assert-Equal $secondaryDocResponse.StatusCode 200 "Secondary GET /docs/:docId should return HTTP 200."
+  Assert-Equal $secondaryDocResponse.Json.code 0 "Secondary GET /docs/:docId should return business code 0."
+  Assert-Equal $secondaryDocResponse.Json.data.docId $createdDocId "Secondary GET /docs/:docId returned wrong docId."
+
+  $secondaryListResponse = Invoke-CurlJson -Method "GET" -Path "/docs?userId=$createdBy&scope=created&page=1&pageSize=10" -TargetBaseUrl $SecondaryBaseUrl
+  Assert-Equal $secondaryListResponse.StatusCode 200 "Secondary GET /docs should return HTTP 200."
+  Assert-Equal $secondaryListResponse.Json.code 0 "Secondary GET /docs should return business code 0."
+  $secondaryMatchedDoc = $secondaryListResponse.Json.data.list | Where-Object { $_.docId -eq $createdDocId } | Select-Object -First 1
+  Assert-True ($null -ne $secondaryMatchedDoc) "Secondary GET /docs should contain the created doc."
+
+  $secondaryDuplicateResponse = Invoke-CurlJson -Method "POST" -Path "/docs" -JsonBody @{
+    title = "should-still-be-ignored"
+    createdBy = "other_user_2"
+    eventId = $createEventId
+  } -TargetBaseUrl $SecondaryBaseUrl
+  Assert-Equal $secondaryDuplicateResponse.StatusCode 201 "Cross-instance duplicate POST /docs should still return HTTP 201."
+  Assert-Equal $secondaryDuplicateResponse.Json.code 0 "Cross-instance duplicate POST /docs should return business code 0."
+  Assert-Equal $secondaryDuplicateResponse.Json.data.docId $createdDocId "Cross-instance duplicate POST /docs should return the original docId."
+  Write-Host "PASS secondary instance => GET /docs/:docId, GET /docs and duplicate POST /docs all succeeded" -ForegroundColor Green
+}
 
 Write-Step "GET /docs/:docId for a missing doc should return 404"
 $missingResponse = Invoke-CurlJson -Method "GET" -Path "/docs/doc_999999"

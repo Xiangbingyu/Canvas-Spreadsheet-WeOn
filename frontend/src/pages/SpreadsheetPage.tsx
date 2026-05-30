@@ -7,8 +7,16 @@ import { Toolbar } from '@/components/Toolbar/Toolbar'
 import { CellEditOverlay } from '@/components/cellEditor/CellEditOverlay'
 import GrideCanvas from '@/components/grideCanvas/GrideCanvas'
 import { useSpreadsheetInteraction } from '@/hooks/useSpreadsheetInteraction'
+import { useCommitCell } from '@/hooks/useCommitCell'
+import { useHistory } from '@/hooks/useHistory'
 
 export function SpreadsheetPage() {
+  // 单元格提交（协同 WS / 本地兜底，开关在 useCommitCell 内）
+  const onCommitCell = useCommitCell()
+
+  // 本地撤销/重做：包装 onCommitCell，编辑与样式变更都经此入栈；Ctrl+Z / Ctrl+Shift+Z
+  const { commitWithHistory, undo, redo } = useHistory(onCommitCell)
+
   const {
     engine,
     canvasHandleRef,
@@ -22,14 +30,13 @@ export function SpreadsheetPage() {
     cancelEdit,
     onScrollChange,
     formulaBarValue,
-    formulaBarAddress,
-  } = useSpreadsheetInteraction()
+  } = useSpreadsheetInteraction({ onCommitCell: commitWithHistory })
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-white font-[Roboto,Arial,sans-serif]">
       <Menubar />
-      <Toolbar />
-      <FormulaBar cellAddress={formulaBarAddress} value={formulaBarValue} />
+      <Toolbar onCommitCell={commitWithHistory} onUndo={undo} onRedo={redo} />
+      <FormulaBar value={formulaBarValue} onCommitCell={commitWithHistory} />
 
       <div className="relative min-h-0 flex-1 overflow-hidden">
         <GrideCanvas

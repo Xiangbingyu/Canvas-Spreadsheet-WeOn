@@ -2,3 +2,5 @@ export { ALL_CANVAS_LAYERS, useCanvasRenderLoop, type CanvasLayer } from './useC
 export { useCanvasInteraction } from './useCanvasInteraction'
 export { useLayeredCanvas, type LayeredCanvasLayout } from './useLayeredCanvas'
 export { useSpreadsheetInteraction } from './useSpreadsheetInteraction'
+export { useHistory } from './useHistory'
+export { useCommitCell } from './useCommitCell'

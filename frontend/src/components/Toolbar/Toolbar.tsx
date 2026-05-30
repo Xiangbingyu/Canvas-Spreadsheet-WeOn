@@ -1,5 +1,18 @@
 import type { ReactNode } from 'react'
+import { useRef } from 'react'
+import { useSelector } from 'react-redux'
 import { IconButton } from '@/components/IconButton/IconButton'
+import type { RootState } from '@/spreadsheet/store'
+import type { Style } from '@/spreadsheet/model/types'
+import type { CommitCellFn } from '@/hooks/useSpreadsheetInteraction'
+
+export interface ToolbarProps {
+  /** 提交单元格样式（走协同链路）。缺省时按钮为只读，不直接改 Redux。 */
+  onCommitCell?: CommitCellFn
+  /** 撤销 / 重做（本地历史栈） */
+  onUndo?: () => void
+  onRedo?: () => void
+}
 
 function Divider() {
   return <span className="mx-0.5 h-5 w-px shrink-0 bg-[#dadce0]" aria-hidden />
@@ -14,28 +27,47 @@ function FormatButton({
   label,
   children,
   className = '',
+  active = false,
+  disabled = false,
+  onClick,
 }: {
   label: string
   children: ReactNode
   className?: string
+  active?: boolean
+  disabled?: boolean
+  onClick?: () => void
 }) {
   return (
     <button
       type="button"
       aria-label={label}
+      aria-pressed={active}
       title={label}
-      className={`${formatBtnClass} ${className}`}
+      disabled={disabled}
+      onClick={onClick}
+      className={`${formatBtnClass} ${active ? 'bg-[#e8f0fe] text-[#1a73e8]' : ''} disabled:opacity-40 ${className}`}
     >
       {children}
     </button>
   )
 }
 
-function FontSizeSelect() {
+function FontSizeSelect({
+  value,
+  disabled = false,
+  onChange,
+}: {
+  value: number
+  disabled?: boolean
+  onChange?: (size: number) => void
+}) {
   return (
     <select
-      className="h-7 w-12 cursor-default rounded border-0 bg-transparent px-1 text-center text-[13px] text-[#202124] hover:bg-[#e8eaed]"
-      defaultValue="10"
+      className="h-7 w-12 cursor-default rounded border-0 bg-transparent px-1 text-center text-[13px] text-[#202124] hover:bg-[#e8eaed] disabled:opacity-40"
+      value={value}
+      disabled={disabled}
+      onChange={(e) => onChange?.(Number(e.target.value))}
       aria-label="字号"
     >
       {FONT_SIZES.map((size) => (
@@ -91,50 +123,151 @@ function TextColorMark({ barColor = '#202124' }: { barColor?: string }) {
   )
 }
 
-export function Toolbar() {
+const DEFAULT_FONT_SIZE = 10
+
+export function Toolbar({ onCommitCell, onUndo, onRedo }: ToolbarProps) {
+  const selection = useSelector((s: RootState) => s.selection)
+  const worksheet = useSelector((s: RootState) => s.workSheet)
+  // 读取当前选中格的「已提交」值与样式，直接取自 workSheet，
+  // 避免 selection.style 过期导致连续点击样式按钮时互相覆盖。
+  const cell = worksheet.cells[`${selection.row}:${selection.col}`]
+  const style: Style = cell?.styleId ? (worksheet.styles[cell.styleId] ?? {}) : {}
+  const cellValue = cell?.value ?? ''
+  const disabled = !onCommitCell
+  const colorInputRef = useRef<HTMLInputElement>(null)
+  const bgColorInputRef = useRef<HTMLInputElement>(null)
+
+  // 合并样式补丁并提交（走协同链路）。value 保持不变，只改 style。
+  const commitStyle = (patch: Partial<Style>) => {
+    if (!onCommitCell) return
+    const next: Style = { ...style, ...patch }
+    onCommitCell(selection.row, selection.col, cellValue, next)
+  }
+
+  const toggle = (key: 'bold' | 'italic' | 'underline') => commitStyle({ [key]: !style[key] })
+  const setAlign = (hAlign: NonNullable<Style['hAlign']>) => commitStyle({ hAlign })
+
   return (
     <div className="flex h-10 shrink-0 items-center gap-0.5 border-b border-[#dadce0] bg-[#edf2fa] px-2 text-[13px]">
-      <IconButton label="撤销">
+      <IconButton label="撤销" disabled={!onUndo} onClick={onUndo}>
         <UndoIcon />
       </IconButton>
-      <IconButton label="重做">
+      <IconButton label="重做" disabled={!onRedo} onClick={onRedo}>
         <RedoIcon />
       </IconButton>
       <Divider />
 
-      <IconButton label="减小字号">−</IconButton>
-      <FontSizeSelect />
-      <IconButton label="增大字号">+</IconButton>
+      <IconButton
+        label="减小字号"
+        disabled={disabled}
+        onClick={() =>
+          commitStyle({ fontSize: Math.max(8, (style.fontSize ?? DEFAULT_FONT_SIZE) - 1) })
+        }
+      >
+        −
+      </IconButton>
+      <FontSizeSelect
+        value={style.fontSize ?? DEFAULT_FONT_SIZE}
+        disabled={disabled}
+        onChange={(size) => commitStyle({ fontSize: size })}
+      />
+      <IconButton
+        label="增大字号"
+        disabled={disabled}
+        onClick={() =>
+          commitStyle({ fontSize: Math.min(96, (style.fontSize ?? DEFAULT_FONT_SIZE) + 1) })
+        }
+      >
+        +
+      </IconButton>
       <Divider />
 
-      <FormatButton label="粗体">
+      <FormatButton
+        label="粗体"
+        active={!!style.bold}
+        disabled={disabled}
+        onClick={() => toggle('bold')}
+      >
         <strong className="text-[16px] font-bold leading-none text-[#3c4043]">B</strong>
       </FormatButton>
-      <FormatButton label="斜体">
+      <FormatButton
+        label="斜体"
+        active={!!style.italic}
+        disabled={disabled}
+        onClick={() => toggle('italic')}
+      >
         <ItalicMark />
       </FormatButton>
-      <FormatButton label="下划线">
+      <FormatButton
+        label="下划线"
+        active={!!style.underline}
+        disabled={disabled}
+        onClick={() => toggle('underline')}
+      >
         <span className="text-[16px] leading-none text-[#3c4043] underline decoration-[#3c4043] decoration-2 underline-offset-[3px]">
           U
         </span>
       </FormatButton>
       <Divider />
 
-      <FormatButton label="字体颜色" className="w-8">
-        <TextColorMark />
+      <FormatButton
+        label="字体颜色"
+        className="relative w-8"
+        disabled={disabled}
+        onClick={() => colorInputRef.current?.click()}
+      >
+        <TextColorMark barColor={style.color ?? '#202124'} />
+        <input
+          ref={colorInputRef}
+          type="color"
+          value={style.color ?? '#202124'}
+          disabled={disabled}
+          onChange={(e) => commitStyle({ color: e.target.value })}
+          className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+          aria-label="选择字体颜色"
+        />
       </FormatButton>
-      <FormatButton label="背景色" className="w-8">
-        <FillColorMark />
+      <FormatButton
+        label="背景色"
+        className="relative w-8"
+        disabled={disabled}
+        onClick={() => bgColorInputRef.current?.click()}
+      >
+        <FillColorMark barColor={style.bgColor ?? '#ffffff'} />
+        <input
+          ref={bgColorInputRef}
+          type="color"
+          value={style.bgColor ?? '#ffffff'}
+          disabled={disabled}
+          onChange={(e) => commitStyle({ bgColor: e.target.value })}
+          className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+          aria-label="选择背景色"
+        />
       </FormatButton>
       <Divider />
 
-      <IconButton label="左对齐">
+      <IconButton
+        label="左对齐"
+        active={style.hAlign === 'left'}
+        disabled={disabled}
+        onClick={() => setAlign('left')}
+      >
         <AlignLeftIcon />
       </IconButton>
-      <IconButton label="居中对齐">
+      <IconButton
+        label="居中对齐"
+        active={style.hAlign === 'center'}
+        disabled={disabled}
+        onClick={() => setAlign('center')}
+      >
         <AlignCenterIcon />
       </IconButton>
-      <IconButton label="右对齐">
+      <IconButton
+        label="右对齐"
+        active={style.hAlign === 'right'}
+        disabled={disabled}
+        onClick={() => setAlign('right')}
+      >
         <AlignRightIcon />
       </IconButton>
     </div>

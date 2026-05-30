@@ -1,8 +1,11 @@
+const storeConfig = require('../config/storeConfig');
 const createMemoryHistoryStore = require('./memory/historyMemoryStore');
+const createHistoryMysqlStore = require('./mysql/historyMysqlStore');
 
 function createHistoryStore() {
-  // Scaffold entry: first phase wires history store to memory implementation.
-  return createMemoryHistoryStore();
+  return storeConfig.driver === 'mysql'
+    ? createHistoryMysqlStore()
+    : createMemoryHistoryStore();
 }
 
 module.exports = createHistoryStore();

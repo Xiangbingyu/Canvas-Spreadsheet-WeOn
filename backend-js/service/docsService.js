@@ -1,5 +1,6 @@
-const docsCache = require('../cache/docsCache');
-const { docStateKey } = require('../cache/cacheKeys');
+const docSnapshotCache = require('../cache/docSnapshotCache');
+const docMetaCache = require('../cache/docMetaCache');
+const userDocsListCache = require('../cache/userDocsListCache');
 const idempotencyService = require('../idempotency/idempotencyService');
 const { createDocRequestKey } = require('../idempotency/idempotencyKeys');
 const { ERROR_CODES } = require('../protocol/errorCodes');
@@ -74,6 +75,17 @@ function toDocView(docRecord) {
   };
 }
 
+function toDocMeta(docRecord) {
+  return {
+    docId: docRecord.docId,
+    title: docRecord.title,
+    currentSeq: docRecord.currentSeq,
+    createdBy: docRecord.createdBy,
+    createdAt: docRecord.createdAt,
+    updatedAt: docRecord.updatedAt,
+  };
+}
+
 // 把 store 层记录转换为文档列表项。
 function toDocListItem(docRecord, relation) {
   return {
@@ -85,6 +97,90 @@ function toDocListItem(docRecord, relation) {
     currentSeq: docRecord.currentSeq,
     relation,
   };
+}
+
+function uniqueNonEmptyStrings(values = []) {
+  return Array.from(
+    new Set(
+      values.filter((value) => typeof value === 'string' && value.trim())
+        .map((value) => value.trim())
+    )
+  );
+}
+
+async function primeDocCaches(docRecord) {
+  if (!docRecord) {
+    return;
+  }
+
+  await Promise.all([
+    docSnapshotCache.set(docRecord.docId, toDocView(docRecord)),
+    docMetaCache.set(docRecord.docId, toDocMeta(docRecord)),
+  ]);
+}
+
+async function getValidRememberedCreateDocResponse(record) {
+  if (!record || record.status !== 'completed' || !record.response || !record.response.docId) {
+    return null;
+  }
+
+  const existingDoc = await docStore.getDocState(record.response.docId);
+  return existingDoc ? record.response : null;
+}
+
+async function getDocMeta(docId) {
+  const normalizedDocId = normalizeDocId(docId);
+  const cachedMeta = await docMetaCache.get(normalizedDocId);
+
+  if (cachedMeta) {
+    return cachedMeta;
+  }
+
+  const storedDoc = await docStore.getDocState(normalizedDocId);
+
+  if (!storedDoc) {
+    return null;
+  }
+
+  await primeDocCaches(storedDoc);
+  return toDocMeta(storedDoc);
+}
+
+async function invalidateUserDocsListCaches(userIds = []) {
+  const normalizedUserIds = uniqueNonEmptyStrings(userIds);
+
+  await Promise.all(
+    normalizedUserIds.map((userId) => userDocsListCache.invalidateByUserId(userId))
+  );
+}
+
+async function getRelatedUserIdsByDoc(docId) {
+  const docMeta = await getDocMeta(docId);
+
+  if (!docMeta) {
+    return [];
+  }
+
+  const roomUsers = await roomUserStore.listByDocId(docId);
+  return uniqueNonEmptyStrings([
+    docMeta.createdBy,
+    ...roomUsers.map((roomUser) => roomUser.clientId),
+  ]);
+}
+
+async function invalidateDocCaches(docId, options = {}) {
+  const { relatedUserIds = null } = options;
+
+  await Promise.all([
+    docSnapshotCache.invalidate(docId),
+    docMetaCache.invalidate(docId),
+  ]);
+
+  const resolvedUserIds = Array.isArray(relatedUserIds)
+    ? relatedUserIds
+    : await getRelatedUserIdsByDoc(docId);
+
+  await invalidateUserDocsListCaches(resolvedUserIds);
 }
 
 // 文档列表统一按最近更新时间倒序返回。
@@ -121,41 +217,66 @@ function paginateRecords(records, page, pageSize) {
 // 1. 校验并规范化入参
 // 2. 执行基础幂等判断
 // 3. 写入 docStore
-// 4. 回写 docsCache
+// 4. 预热文档缓存并失效相关列表缓存
 // 5. 记录审计日志
 async function createDoc(input = {}) {
   const normalizedInput = normalizeCreateDocInput(input);
   const requestKey = createDocRequestKey(normalizedInput.eventId);
+  let hasRetriedAfterDeletingStaleRecord = false;
 
-  if (requestKey && idempotencyService.isProcessed(requestKey)) {
-    const remembered = idempotencyService.getRemembered(requestKey);
+  while (requestKey) {
+    const lockAcquired = await idempotencyService.beginProcessing(requestKey);
 
-    if (remembered) {
-      return remembered;
+    if (lockAcquired) {
+      break;
     }
+
+    const remembered = await idempotencyService.waitForCompleted(requestKey);
+    const validRememberedResponse = await getValidRememberedCreateDocResponse(remembered);
+
+    if (validRememberedResponse) {
+      return validRememberedResponse;
+    }
+
+    await idempotencyService.deleteRecord(requestKey);
+
+    if (hasRetriedAfterDeletingStaleRecord) {
+      throw createServiceError(ERROR_CODES.INTERNAL_ERROR, 'duplicate request is still processing');
+    }
+
+    hasRetriedAfterDeletingStaleRecord = true;
   }
 
-  const createdDoc = await docStore.createDoc({
-    title: normalizedInput.title,
-    createdBy: normalizedInput.createdBy,
-  });
-  const docView = toDocView(createdDoc);
+  try {
+    const createdDoc = await docStore.createDoc({
+      title: normalizedInput.title,
+      createdBy: normalizedInput.createdBy,
+    });
+    const docView = toDocView(createdDoc);
 
-  docsCache.set(docStateKey(createdDoc.docId), docView);
+    await primeDocCaches(createdDoc);
+    await invalidateUserDocsListCaches([createdDoc.createdBy]);
 
-  await auditService.recordAuditEvent({
-    type: 'doc_created',
-    docId: createdDoc.docId,
-    createdBy: createdDoc.createdBy,
-    eventId: normalizedInput.eventId,
-    title: createdDoc.title,
-  });
+    await auditService.recordAuditEvent({
+      type: 'doc_created',
+      docId: createdDoc.docId,
+      createdBy: createdDoc.createdBy,
+      eventId: normalizedInput.eventId,
+      title: createdDoc.title,
+    });
 
-  if (requestKey) {
-    idempotencyService.remember(requestKey, docView);
+    if (requestKey) {
+      await idempotencyService.completeProcessing(requestKey, docView);
+    }
+
+    return docView;
+  } catch (error) {
+    if (requestKey) {
+      await idempotencyService.deleteRecord(requestKey);
+    }
+
+    throw error;
   }
-
-  return docView;
 }
 
 // ==================== GET /docs ====================
@@ -202,6 +323,12 @@ function normalizeListDocsInput(input = {}) {
 // 4. 返回分页结果
 async function listDocsByUser(input = {}) {
   const normalizedInput = normalizeListDocsInput(input);
+  const cachedList = await userDocsListCache.get(normalizedInput);
+
+  if (cachedList) {
+    return cachedList;
+  }
+
   const allDocs = await docStore.list();
   const createdDocs = [];
   const participatedDocs = [];
@@ -230,7 +357,13 @@ async function listDocsByUser(input = {}) {
   }
 
   if (normalizedInput.scope === 'created') {
-    return paginateRecords(sortDocsByUpdatedAtDesc(createdDocs), normalizedInput.page, normalizedInput.pageSize);
+    const paginatedResult = paginateRecords(
+      sortDocsByUpdatedAtDesc(createdDocs),
+      normalizedInput.page,
+      normalizedInput.pageSize
+    );
+    await userDocsListCache.set(normalizedInput, paginatedResult);
+    return paginatedResult;
   }
 
   if (normalizedInput.scope === 'participated') {
@@ -238,11 +371,13 @@ async function listDocsByUser(input = {}) {
       new Map(participatedDocs.map((doc) => [doc.docId, doc])).values()
     );
 
-    return paginateRecords(
+    const paginatedResult = paginateRecords(
       sortDocsByUpdatedAtDesc(deduplicatedParticipatedDocs),
       normalizedInput.page,
       normalizedInput.pageSize
     );
+    await userDocsListCache.set(normalizedInput, paginatedResult);
+    return paginatedResult;
   }
 
   const mergedDocsById = new Map();
@@ -257,11 +392,13 @@ async function listDocsByUser(input = {}) {
     }
   }
 
-  return paginateRecords(
+  const paginatedResult = paginateRecords(
     sortDocsByUpdatedAtDesc(Array.from(mergedDocsById.values())),
     normalizedInput.page,
     normalizedInput.pageSize
   );
+  await userDocsListCache.set(normalizedInput, paginatedResult);
+  return paginatedResult;
 }
 
 // ==================== GET /docs/:docId ====================
@@ -276,13 +413,12 @@ function normalizeDocId(docId) {
 }
 
 // `GET /docs/:docId` 主流程：
-// 1. 先查 docsCache
+// 1. 先查文档快照缓存
 // 2. 未命中再查 docStore
-// 3. store 命中后回填缓存
+// 3. store 命中后同时回填 snapshot/meta 缓存
 async function getDocState(docId) {
   const normalizedDocId = normalizeDocId(docId);
-  const cacheKey = docStateKey(normalizedDocId);
-  const cachedDoc = docsCache.get(cacheKey);
+  const cachedDoc = await docSnapshotCache.get(normalizedDocId);
 
   if (cachedDoc) {
     return cachedDoc;
@@ -295,30 +431,40 @@ async function getDocState(docId) {
   }
 
   const docView = toDocView(storedDoc);
-  docsCache.set(cacheKey, docView);
+  await primeDocCaches(storedDoc);
   return docView;
 }
 
-async function applySetCell(command) {
-  const updatedDoc = await docStore.applySetCell(command);
-  if (updatedDoc) {
-    docsCache.set(docStateKey(command.docId), toDocView(updatedDoc));
-  }
-  return updatedDoc;
+async function getDocStateForWrite(docId, options = {}) {
+  const normalizedDocId = normalizeDocId(docId);
+  return docStore.getDocState(normalizedDocId, options);
 }
 
-async function applyImportSheet(command) {
-  const updatedDoc = await docStore.applyImportSheet(command);
-  if (updatedDoc) {
-    docsCache.set(docStateKey(command.docId), toDocView(updatedDoc));
-  }
-  return updatedDoc;
+async function applySetCell(command, options = {}) {
+  const { connection = null } = options;
+  return docStore.applySetCell(command, { connection });
+}
+
+async function applySetTitle(command, options = {}) {
+  const { connection = null } = options;
+  return docStore.applySetTitle(command, { connection });
+}
+
+async function applyImportSheet(command, options = {}) {
+  const { connection = null } = options;
+  return docStore.applyImportSheet(command, { connection });
 }
 
 module.exports = {
   createDoc,
   listDocsByUser,
   getDocState,
+  getDocStateForWrite,
+  getDocMeta,
   applySetCell,
+  applySetTitle,
   applyImportSheet,
+  primeDocCaches,
+  invalidateDocCaches,
+  invalidateUserDocsListCaches,
 };
