@@ -1,19 +1,9 @@
 const { createWsSuccess, createWsError } = require('../../utils/response');
 const { ERROR_CODES } = require('../../protocol/errorCodes');
-const roomService = require('../../service/roomService');
 const historyStore = require('../../store/historyStore');
 const undoRedoService = require('../../service/undoRedoService');
 const { isNonEmptyString } = require('../../protocol/validators');
-
-async function isSocketAuthorizedForUndoRedo(socket, docId, clientId) {
-  const membership = await roomService.getSocketMembership(socket);
-  return Boolean(
-    membership
-    && membership.status === 'connected'
-    && membership.docId === docId
-    && membership.clientId === clientId
-  );
-}
+const roomService = require('../../service/roomService');
 
 async function broadcastBestEffort(docId, payload, broadcastToRoom) {
   try {
@@ -31,7 +21,15 @@ async function handleUndo({ socket, message, reply, broadcastToRoom }) {
     return;
   }
 
-  if (!(await isSocketAuthorizedForUndoRedo(socket, docId, clientId))) {
+  const membership = await roomService.getSocketMembership(socket);
+  const hasJoinedCurrentRoom = Boolean(
+    membership
+    && membership.status === 'connected'
+    && membership.docId === docId
+    && membership.clientId === clientId
+  );
+
+  if (!hasJoinedCurrentRoom) {
     reply(createWsError(ERROR_CODES.FORBIDDEN, 'socket has not joined this document as the specified client'));
     return;
   }

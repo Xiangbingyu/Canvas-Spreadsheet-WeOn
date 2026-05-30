@@ -5,7 +5,19 @@ import { GRID_CHROME } from '@/spreadsheet/render/chrome'
 import { updateCell } from '@/spreadsheet/store/workSheetStore'
 import { setSelectedCell } from '@/spreadsheet/store/selectStore'
 import type { RootState } from '@/spreadsheet/store'
+import type { Style } from '@/spreadsheet/model/types'
 import type { GrideCanvasHandle } from '@/components/grideCanvas/GrideCanvas'
+
+/**
+ * 单元格提交回调（由上层注入）。
+ * - 传入时：走协同链路（WS setCell → 后端广播 → 协同模块 dispatch → Canvas 重绘）。
+ * - 不传时：本地兜底 dispatch(updateCell)，保证无协同环境（单测/离线）仍可用。
+ */
+export type CommitCellFn = (row: number, col: number, value: string, style?: Style) => void
+
+export interface UseSpreadsheetInteractionOptions {
+  onCommitCell?: CommitCellFn
+}
 
 const ENGINE_CONFIG = {
   rowHeight: 26,
@@ -14,11 +26,34 @@ const ENGINE_CONFIG = {
   headerWidth: GRID_CHROME.headerColWidth,
 }
 
-export function useSpreadsheetInteraction() {
+export function useSpreadsheetInteraction(options: UseSpreadsheetInteractionOptions = {}) {
+  const { onCommitCell } = options
   const dispatch = useDispatch()
   const reduxStore = useStore<RootState>()
   const worksheet = useSelector((s: RootState) => s.workSheet)
   const selection = useSelector((s: RootState) => s.selection)
+
+  // 把 onCommitCell 放进 ref，避免它变化时重建依赖它的 useCallback / useEffect
+  const onCommitCellRef = useRef(onCommitCell)
+  useEffect(() => {
+    onCommitCellRef.current = onCommitCell
+  }, [onCommitCell])
+
+  /**
+   * 统一的单元格写入：优先走协同回调，否则本地 dispatch 兜底。
+   * 注意：走协同时不在此 dispatch(updateCell)，由协同模块收到广播后回写，避免双写。
+   */
+  const commitCell = useCallback(
+    (row: number, col: number, value: string, style?: Style) => {
+      const commit = onCommitCellRef.current
+      if (commit) {
+        commit(row, col, value, style)
+      } else {
+        dispatch(updateCell({ row, col, value, style }))
+      }
+    },
+    [dispatch]
+  )
 
   const [editingCell, setEditingCell] = useState<{ row: number; col: number } | null>(null)
   const [editValue, setEditValue] = useState('')
@@ -61,7 +96,8 @@ export function useSpreadsheetInteraction() {
       const target = editingCellRef.current
       if (!target) return
       const value = textareaRef.current?.value ?? ''
-      dispatch(updateCell({ row: target.row, col: target.col, value }))
+      // 走协同链路（或本地兜底）；选中态本地即时更新以保证 UI 响应
+      commitCell(target.row, target.col, value)
       dispatch(setSelectedCell({ row: target.row, col: target.col, value, style: undefined }))
       setEditingCell(null)
       editingCellRef.current = null
@@ -70,7 +106,7 @@ export function useSpreadsheetInteraction() {
       }
       canvasHandleRef.current?.focus()
     },
-    [dispatch, engine]
+    [commitCell, dispatch, engine]
   )
 
   const cancelEdit = useCallback(() => {
@@ -128,13 +164,13 @@ export function useSpreadsheetInteraction() {
           return
         }
         if (event.key === 'Delete' || event.key === 'Backspace') {
-          dispatch(updateCell({ row: sel.row, col: sel.col, value: '' }))
+          commitCell(sel.row, sel.col, '')
           dispatch(setSelectedCell({ row: sel.row, col: sel.col, value: '' }))
           event.preventDefault()
         }
       },
     })
-  }, [engine, worksheet, dispatch, startEdit, reduxStore])
+  }, [engine, worksheet, dispatch, startEdit, reduxStore, commitCell])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {

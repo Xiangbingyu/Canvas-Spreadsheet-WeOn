@@ -102,6 +102,8 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
   useEffect(() => {
     return () => {
       clientRef.current?.disconnect()
+      // 卸载时清空引用，否则 StrictMode 重挂载时 connect() 会因 clientRef 非空而跳过，导致再也连不上
+      clientRef.current = null
     }
   }, [])
 

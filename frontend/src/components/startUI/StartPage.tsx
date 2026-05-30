@@ -1,11 +1,17 @@
 import { Button, Spin, Table, Typography, message } from 'antd'
 import { useEffect, useMemo, useState } from 'react'
 import type { ColumnsType } from 'antd/es/table'
+import { useDispatch } from 'react-redux'
+import { CreateBlankSheetModal } from '@/components/startUI/CreateBlankSheetModal'
 import API, { ApiError } from '@/services/httpAPI'
-import type { DocListItem } from '@/services/httpType'
+import type { DocDetail, DocListItem } from '@/services/httpType'
+import { setWorksheet } from '@/spreadsheet/store'
+import { setDocSession } from '@/spreadsheet/store/userStore'
+import { fromServerSnapshot } from '@/spreadsheet/utils/fromServerSnapshot'
 
 type StartPageProps = {
-  onOpenDoc: (docId: string) => void
+  userId: string
+  onEnterSheet: () => void
 }
 
 function formatCreatedAt(value: string) {
@@ -19,9 +25,25 @@ function formatCreatedAt(value: string) {
   ).padStart(2, '0')}`
 }
 
-export function StartPage({ onOpenDoc }: StartPageProps) {
+export function StartPage({ userId, onEnterSheet }: StartPageProps) {
+  const dispatch = useDispatch()
   const [docs, setDocs] = useState<DocListItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [openingDocId, setOpeningDocId] = useState<string | null>(null)
+  const [createModalOpen, setCreateModalOpen] = useState(false)
+  const [creating, setCreating] = useState(false)
+
+  function enterSheetFromDoc(doc: DocDetail) {
+    const worksheet = fromServerSnapshot(doc.snapshot)
+    dispatch(
+      setWorksheet({
+        ...worksheet,
+        name: doc.title?.trim() || worksheet.name,
+      })
+    )
+    dispatch(setDocSession({ docId: doc.docId, clientId: userId }))
+    onEnterSheet()
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -30,14 +52,15 @@ export function StartPage({ onOpenDoc }: StartPageProps) {
       setLoading(true)
       try {
         const data = await API.listDocs({
-          userId: 'system', //后续会分配id的！！
+          userId,
           scope: 'all',
           page: 1,
           pageSize: 50,
         })
-        console.log(data)
+        console.log('[GET /docs]', data)
         if (!cancelled) setDocs(data.list)
       } catch (error) {
+        console.log('[GET /docs] error', error)
         if (!cancelled) {
           const text =
             error instanceof ApiError ? `${error.message} (code ${error.code})` : '加载文档列表失败'
@@ -52,7 +75,40 @@ export function StartPage({ onOpenDoc }: StartPageProps) {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [userId])
+
+  async function handleOpenDoc(docId: string) {
+    setOpeningDocId(docId)
+    try {
+      const doc = await API.getDoc(docId)
+      console.log('[GET /docs/:docId]', doc)
+      enterSheetFromDoc(doc)
+    } catch (error) {
+      console.log('[GET /docs/:docId] error', error)
+      const text =
+        error instanceof ApiError ? `${error.message} (code ${error.code})` : '加载文档失败'
+      message.error(text)
+    } finally {
+      setOpeningDocId(null)
+    }
+  }
+
+  async function handleCreateBlankSheet(title: string) {
+    setCreating(true)
+    try {
+      const doc = await API.createDoc({ title, createdBy: userId })
+      console.log('[POST /docs]', doc)
+      setCreateModalOpen(false)
+      enterSheetFromDoc(doc)
+    } catch (error) {
+      console.log('[POST /docs] error', error)
+      const text =
+        error instanceof ApiError ? `${error.message} (code ${error.code})` : '创建文档失败'
+      message.error(text)
+    } finally {
+      setCreating(false)
+    }
+  }
 
   const dataSource = useMemo(() => {
     return [...docs].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
@@ -85,21 +141,30 @@ export function StartPage({ onOpenDoc }: StartPageProps) {
       key: 'action',
       width: 90,
       render: (_, record) => (
-        <Button type="link" onClick={() => onOpenDoc(record.docId)}>
+        <Button
+          type="link"
+          loading={openingDocId === record.docId}
+          disabled={openingDocId !== null && openingDocId !== record.docId}
+          onClick={() => void handleOpenDoc(record.docId)}
+        >
           打开
         </Button>
       ),
     },
   ]
 
+  const listBusy = openingDocId !== null || creating
+
   return (
     <div className="flex min-h-screen items-start justify-center bg-[#f5f7fb] px-6 py-12">
       <div className="w-full max-w-4xl rounded-xl border border-[#e5e7eb] bg-white p-6 shadow-sm">
-        <div className="mb-4 flex items-center justify-between">
+        <div className="mb-4 flex items-center justify-between gap-4">
           <Typography.Title level={4} style={{ margin: 0 }}>
             文档列表
           </Typography.Title>
-          <Typography.Text type="secondary">点击文档进入表格</Typography.Text>
+          <Button type="primary" disabled={listBusy} onClick={() => setCreateModalOpen(true)}>
+            新建空白表
+          </Button>
         </div>
 
         <Spin spinning={loading}>
@@ -112,6 +177,13 @@ export function StartPage({ onOpenDoc }: StartPageProps) {
           />
         </Spin>
       </div>
+
+      <CreateBlankSheetModal
+        open={createModalOpen}
+        loading={creating}
+        onClose={() => setCreateModalOpen(false)}
+        onConfirm={(title) => void handleCreateBlankSheet(title)}
+      />
     </div>
   )
 }

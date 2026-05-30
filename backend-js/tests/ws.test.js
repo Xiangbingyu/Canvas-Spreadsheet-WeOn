@@ -6,16 +6,67 @@ const { once } = require('node:events');
 const path = require('node:path');
 const test = require('node:test');
 const WebSocket = require('ws');
+const { resetMysqlDatabase } = require('../scripts/dbReset');
 
 const projectRoot = path.resolve(__dirname, '..');
+
+async function resetTestStore() {
+  if (process.env.STORE_DRIVER !== 'mysql') {
+    return;
+  }
+
+  await resetMysqlDatabase({
+    closePoolAfterReset: false,
+    silent: true,
+  });
+}
+
+async function teardownTestStore() {
+  if (process.env.STORE_DRIVER !== 'mysql') {
+    return;
+  }
+
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  const { closePool } = require('../db/mysql');
+  await closePool();
+}
+
+async function closeProjectResources() {
+  const cacheModulePath = path.join(projectRoot, 'cache', 'index.js');
+  const roomServiceModulePath = path.join(projectRoot, 'service', 'roomService.js');
+  const idempotencyServiceModulePath = path.join(projectRoot, 'idempotency', 'idempotencyService.js');
+  const lockModulePath = path.join(projectRoot, 'infra', 'redis', 'lock.js');
+
+  if (require.cache[cacheModulePath]) {
+    await require(cacheModulePath).close();
+  }
+
+  if (require.cache[roomServiceModulePath]) {
+    await require(roomServiceModulePath).closeRuntimeState();
+  }
+
+  if (require.cache[idempotencyServiceModulePath]) {
+    await require(idempotencyServiceModulePath).close();
+  }
+
+  if (require.cache[lockModulePath]) {
+    await require(lockModulePath).close();
+  }
+}
 
 // ==================== 基础设施 ====================
 
 function clearBackendRequireCache() {
   for (const key of Object.keys(require.cache)) {
+    const keepMysqlModules = process.env.STORE_DRIVER === 'mysql'
+      && key.includes(`${path.sep}db${path.sep}mysql${path.sep}`);
+
     if (
       key.startsWith(projectRoot) &&
       !key.includes(`${path.sep}node_modules${path.sep}`) &&
+      !keepMysqlModules &&
       key !== __filename
     ) {
       delete require.cache[key];
@@ -23,23 +74,42 @@ function clearBackendRequireCache() {
   }
 }
 
-async function createTestServer() {
+test.beforeEach(async () => {
+  await resetTestStore();
+  await closeProjectResources();
   clearBackendRequireCache();
+});
 
+test.after(async () => {
+  await closeProjectResources();
+  await teardownTestStore();
+  clearBackendRequireCache();
+});
+
+async function createTestServer() {
   const app = require('../app');
   const { createWebSocketServer } = require('../ws');
 
   const server = http.createServer(app);
-  createWebSocketServer(server);
+  const wss = createWebSocketServer(server);
   server.listen(0);
   await once(server, 'listening');
+  if (wss.ready && typeof wss.ready.then === 'function') {
+    await wss.ready;
+  }
 
   const { port } = server.address();
   return {
     wsUrl: `ws://127.0.0.1:${port}`,
     server,
     async close() {
-      server.closeAllConnections?.();
+      if (typeof wss.shutdown === 'function') {
+        await wss.shutdown();
+      } else {
+        await new Promise((resolve) => {
+          wss.close(() => resolve());
+        });
+      }
       server.close();
       await Promise.race([
         once(server, 'close').catch(() => {}),
@@ -98,6 +168,33 @@ async function connect(wsUrl) {
   }
 
   return { ws, received, send: (m) => ws.send(JSON.stringify(m)), waitFor, noMoreFor, close };
+}
+
+async function joinDoc(client, docId, clientId, extra = {}) {
+  const base = client.received.length;
+  client.send({
+    type: 'join',
+    docId,
+    clientId,
+    ...extra,
+  });
+  await client.waitFor(base + 2);
+  return client.received[base];
+}
+
+async function waitForCondition(check, { timeoutMs = 1000, intervalMs = 20 } = {}) {
+  const start = Date.now();
+
+  while (Date.now() - start < timeoutMs) {
+    const result = await check();
+    if (result) {
+      return result;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+
+  return null;
 }
 
 function assertSnapshotMatchesDocFormat(snapshot, expected) {
@@ -759,11 +856,14 @@ test('leave: clientId 完全断开写入 leave audit', async () => {
     c.send({ type: 'join', docId: 'doc_sys_001', clientId: 'u_leave' });
     await c.waitFor(1);
     await c.close();
-    // leaveRoom 在 close 事件里异步执行，等事件循环完成
-    await new Promise((r) => setTimeout(r, 50));
 
     const auditLogStore = require('../store/auditLogStore');
-    const logs = await auditLogStore.listByEventType('leave');
+    const logs = await waitForCondition(async () => {
+      const rows = await auditLogStore.listByEventType('leave');
+      return rows.length > 0 ? rows : null;
+    });
+
+    assert.ok(logs);
     assert.equal(logs.length, 1);
     assert.equal(logs[0].clientId, 'u_leave');
     assert.equal(logs[0].docId, 'doc_sys_001');
@@ -895,10 +995,12 @@ test('presence: 写入 audit 日志', async () => {
 
     c.send({ type: 'presence', docId: 'doc_sys_001' });
     await c.waitFor(base + 2); // reply + broadcast
-    await new Promise((r) => setImmediate(r));
-
     const auditLogStore = require('../store/auditLogStore');
-    const logs = await auditLogStore.listByEventType('presence');
+    const logs = await waitForCondition(async () => {
+      const rows = await auditLogStore.listByEventType('presence');
+      return rows.length > 0 ? rows : null;
+    });
+    assert.ok(logs);
     assert.equal(logs.length, 1);
     assert.equal(logs[0].docId, 'doc_sys_001');
   } finally {
@@ -959,13 +1061,299 @@ test('ws: 不支持的消息类型返回 error 4001', async () => {
 
 // ==================== set_cell ====================
 
+// ==================== set_title ====================
+
+test('set_title: 返回 title_updated，data 字段结构完整', async () => {
+  const srv = await createTestServer();
+  const c = await connect(srv.wsUrl);
+  try {
+    await joinDoc(c, 'doc_sys_001', 'u1');
+    c.send({ type: 'set_title', docId: 'doc_sys_001', clientId: 'u1', title: '新的文档标题' });
+    await c.waitFor(3);
+    const msg = c.received[2];
+    assert.equal(msg.type, 'title_updated');
+    assert.equal(msg.code, 0);
+    assert.equal(msg.message, 'ok');
+    assert.equal(msg.data.docId, 'doc_sys_001');
+    assert.equal(msg.data.clientId, 'u1');
+    assert.equal(typeof msg.data.seq, 'number');
+    assert.ok(msg.data.seq >= 1);
+    assert.equal(msg.data.title, '新的文档标题');
+    assert.equal('canUndo' in msg.data, false);
+    assert.equal('canRedo' in msg.data, false);
+
+    const { getDocState } = require('../service/docsService');
+    const docState = await getDocState('doc_sys_001');
+    assert.equal(docState.title, '新的文档标题');
+  } finally {
+    await c.close();
+    await srv.close();
+  }
+});
+
+test('set_title: title 会自动 trim', async () => {
+  const srv = await createTestServer();
+  const c = await connect(srv.wsUrl);
+  try {
+    await joinDoc(c, 'doc_sys_001', 'u1');
+    c.send({ type: 'set_title', docId: 'doc_sys_001', clientId: 'u1', title: '  标题已修正  ' });
+    await c.waitFor(3);
+    assert.equal(c.received[2].data.title, '标题已修正');
+  } finally {
+    await c.close();
+    await srv.close();
+  }
+});
+
+test('set_title: 显式 baseSeq 会写入 history', async () => {
+  const srv = await createTestServer();
+  const c = await connect(srv.wsUrl);
+  try {
+    const joinAck = await joinDoc(c, 'doc_sys_001', 'u_title_base_seq');
+    const baseSeq = joinAck.data.currentSeq;
+    const base = c.received.length;
+
+    c.send({
+      type: 'set_title',
+      docId: 'doc_sys_001',
+      clientId: 'u_title_base_seq',
+      title: 'title-base-seq',
+      baseSeq,
+    });
+    await c.waitFor(base + 2);
+
+    const reply = c.received[base];
+    assert.equal(reply.type, 'title_updated');
+    assert.equal('baseSeq' in reply.data, false);
+    assert.equal('rebased' in reply.data, false);
+
+    const historyStore = require('../store/historyStore');
+    const entry = await historyStore.findByDocIdAndSeq('doc_sys_001', reply.data.seq);
+    assert.equal(entry.baseSeq, baseSeq);
+  } finally {
+    await c.close();
+    await srv.close();
+  }
+});
+
+test('set_title: stale baseSeq 会在最新标题上继续重放', async () => {
+  const srv = await createTestServer();
+  const owner = await connect(srv.wsUrl);
+  const other = await connect(srv.wsUrl);
+  try {
+    const joinAck = await joinDoc(owner, 'doc_sys_001', 'u_title_ot_owner');
+    await joinDoc(other, 'doc_sys_001', 'u_title_ot_other');
+    const sharedBaseSeq = joinAck.data.currentSeq;
+
+    let ownerBase = owner.received.length;
+    let otherBase = other.received.length;
+    owner.send({
+      type: 'set_title',
+      docId: 'doc_sys_001',
+      clientId: 'u_title_ot_owner',
+      title: 'first-title',
+      baseSeq: sharedBaseSeq,
+    });
+    await Promise.all([
+      owner.waitFor(ownerBase + 2),
+      other.waitFor(otherBase + 1),
+    ]);
+
+    ownerBase = owner.received.length;
+    otherBase = other.received.length;
+    other.send({
+      type: 'set_title',
+      docId: 'doc_sys_001',
+      clientId: 'u_title_ot_other',
+      title: 'second-title',
+      baseSeq: sharedBaseSeq,
+    });
+    await Promise.all([
+      owner.waitFor(ownerBase + 1),
+      other.waitFor(otherBase + 2),
+    ]);
+
+    const reply = other.received[otherBase];
+    assert.equal(reply.type, 'title_updated');
+    assert.equal('baseSeq' in reply.data, false);
+    assert.equal('rebased' in reply.data, false);
+    assert.equal(reply.data.title, 'second-title');
+
+    const { getDocState } = require('../service/docsService');
+    const docState = await getDocState('doc_sys_001');
+    assert.equal(docState.title, 'second-title');
+  } finally {
+    await owner.close();
+    await other.close();
+    await srv.close();
+  }
+});
+
+test('set_title: stale baseSeq 在 import_sheet 之后仍可继续应用', async () => {
+  const srv = await createTestServer();
+  const owner = await connect(srv.wsUrl);
+  const other = await connect(srv.wsUrl);
+  try {
+    const joinAck = await joinDoc(owner, 'doc_sys_001', 'u_title_after_import');
+    await joinDoc(other, 'doc_sys_001', 'u_title_import_other');
+    const staleBaseSeq = joinAck.data.currentSeq;
+
+    let ownerBase = owner.received.length;
+    let otherBase = other.received.length;
+    other.send({
+      type: 'import_sheet',
+      docId: 'doc_sys_001',
+      clientId: 'u_title_import_other',
+      snapshot: {
+        id: 'sheet_title_after_import',
+        name: 'TitleAfterImport',
+        defaultRowHeight: 25,
+        defaultColWidth: 100,
+        cells: {
+          '1:1': { row: 1, col: 1, value: 'imported-title-test', styleId: null },
+        },
+        styles: {},
+        rowCount: 1,
+        colCount: 1,
+      },
+    });
+    await Promise.all([
+      owner.waitFor(ownerBase + 1),
+      other.waitFor(otherBase + 2),
+    ]);
+
+    ownerBase = owner.received.length;
+    owner.send({
+      type: 'set_title',
+      docId: 'doc_sys_001',
+      clientId: 'u_title_after_import',
+      title: 'title-after-import',
+      baseSeq: staleBaseSeq,
+    });
+    await owner.waitFor(ownerBase + 2);
+
+    const reply = owner.received[ownerBase];
+    assert.equal(reply.type, 'title_updated');
+    assert.equal('rebased' in reply.data, false);
+    assert.equal(reply.data.title, 'title-after-import');
+  } finally {
+    await owner.close();
+    await other.close();
+    await srv.close();
+  }
+});
+
+test('set_title: 发送方收 2 条（reply + broadcast），其他成员收 1 条', async () => {
+  const srv = await createTestServer();
+  const sender = await connect(srv.wsUrl);
+  const other = await connect(srv.wsUrl);
+  try {
+    sender.send({ type: 'join', docId: 'doc_sys_001', clientId: 'u1' });
+    await sender.waitFor(2);
+    other.send({ type: 'join', docId: 'doc_sys_001', clientId: 'u2' });
+    await Promise.all([other.waitFor(2), sender.waitFor(3)]);
+
+    const baseS = sender.received.length;
+    const baseO = other.received.length;
+    sender.send({ type: 'set_title', docId: 'doc_sys_001', clientId: 'u1', title: '广播标题' });
+    await Promise.all([sender.waitFor(baseS + 2), other.waitFor(baseO + 1)]);
+
+    const senderMsgs = sender.received.slice(baseS);
+    const otherMsgs = other.received.slice(baseO);
+    assert.equal(senderMsgs.filter((m) => m.type === 'title_updated').length, 2);
+    assert.equal(otherMsgs.filter((m) => m.type === 'title_updated').length, 1);
+    assert.deepEqual(senderMsgs[0].data, senderMsgs[1].data);
+  } finally {
+    await sender.close();
+    await other.close();
+    await srv.close();
+  }
+});
+
+test('set_title: 缺少 docId/clientId 或 title 非法返回 4000', async () => {
+  const srv = await createTestServer();
+  const c = await connect(srv.wsUrl);
+  try {
+    c.send({ type: 'set_title', docId: 'doc_sys_001', clientId: 'u1' });
+    await c.waitFor(1);
+    assert.equal(c.received[0].type, 'error');
+    assert.equal(c.received[0].code, 4000);
+    assert.match(c.received[0].message, /title must be a string/);
+
+    c.send({ type: 'set_title', docId: 'doc_sys_001', clientId: '', title: 'x' });
+    await c.waitFor(2);
+    assert.equal(c.received[1].type, 'error');
+    assert.equal(c.received[1].code, 4000);
+
+    c.send({ type: 'set_title', docId: 'doc_sys_001', clientId: 'u1', title: '   ' });
+    await c.waitFor(3);
+    assert.equal(c.received[2].type, 'error');
+    assert.equal(c.received[2].code, 4000);
+    assert.match(c.received[2].message, /title must be a non-empty string/);
+  } finally {
+    await c.close();
+    await srv.close();
+  }
+});
+
+test('set_title: 未 join 或离开房间后返回 4003', async () => {
+  const srv = await createTestServer();
+  const outsider = await connect(srv.wsUrl);
+  const owner = await connect(srv.wsUrl);
+  try {
+    outsider.send({ type: 'set_title', docId: 'doc_sys_001', clientId: 'u1', title: 'x' });
+    await outsider.waitFor(1);
+    assert.equal(outsider.received[0].type, 'error');
+    assert.equal(outsider.received[0].code, 4003);
+
+    const { createDoc } = require('../service/docsService');
+    const docB = await createDoc({ title: 'title-switch-doc' });
+
+    await joinDoc(owner, 'doc_sys_001', 'u1');
+    owner.send({ type: 'join', docId: docB.docId, clientId: 'u1' });
+    await owner.waitFor(4);
+
+    owner.send({ type: 'set_title', docId: 'doc_sys_001', clientId: 'u1', title: 'should-fail' });
+    await owner.waitFor(5);
+    const last = owner.received.at(-1);
+    assert.equal(last.type, 'error');
+    assert.equal(last.code, 4003);
+  } finally {
+    await outsider.close();
+    await owner.close();
+    await srv.close();
+  }
+});
+
+test('set_title: 写入 audit 日志', async () => {
+  const srv = await createTestServer();
+  const c = await connect(srv.wsUrl);
+  try {
+    await joinDoc(c, 'doc_sys_001', 'u_title_audit');
+    c.send({ type: 'set_title', docId: 'doc_sys_001', clientId: 'u_title_audit', title: '审计标题' });
+    await c.waitFor(3);
+    await new Promise((r) => setImmediate(r));
+    const auditLogStore = require('../store/auditLogStore');
+    const logs = await auditLogStore.listByEventType('set_title');
+    assert.equal(logs.length, 1);
+    assert.equal(logs[0].docId, 'doc_sys_001');
+    assert.equal(logs[0].clientId, 'u_title_audit');
+    assert.equal(logs[0].payloadJson.title, '审计标题');
+  } finally {
+    await c.close();
+    await srv.close();
+  }
+});
+
 test('set_cell: 返回 cell_updated，data 字段结构完整', async () => {
   const srv = await createTestServer();
   const c = await connect(srv.wsUrl);
   try {
+    await joinDoc(c, 'doc_sys_001', 'u1');
+    const base = c.received.length;
     c.send({ type: 'set_cell', docId: 'doc_sys_001', clientId: 'u1', row: 1, col: 1, value: '姓名', style: { bold: true } });
-    await c.waitFor(1);
-    const msg = c.received[0];
+    await c.waitFor(base + 2);
+    const msg = c.received[base];
     assert.equal(msg.type, 'cell_updated');
     assert.equal(msg.code, 0);
     assert.equal(msg.message, 'ok');
@@ -990,9 +1378,11 @@ test('set_cell: value 未传时视为空字符串', async () => {
   const srv = await createTestServer();
   const c = await connect(srv.wsUrl);
   try {
+    await joinDoc(c, 'doc_sys_001', 'u1');
+    const base = c.received.length;
     c.send({ type: 'set_cell', docId: 'doc_sys_001', clientId: 'u1', row: 2, col: 3 });
-    await c.waitFor(1);
-    assert.equal(c.received[0].data.value, '');
+    await c.waitFor(base + 2);
+    assert.equal(c.received[base].data.value, '');
   } finally {
     await c.close();
     await srv.close();
@@ -1003,9 +1393,11 @@ test('set_cell: style 未传时为 null', async () => {
   const srv = await createTestServer();
   const c = await connect(srv.wsUrl);
   try {
+    await joinDoc(c, 'doc_sys_001', 'u1');
+    const base = c.received.length;
     c.send({ type: 'set_cell', docId: 'doc_sys_001', clientId: 'u1', row: 1, col: 1, value: 'x' });
-    await c.waitFor(1);
-    assert.equal(c.received[0].data.style, null);
+    await c.waitFor(base + 2);
+    assert.equal(c.received[base].data.style, null);
   } finally {
     await c.close();
     await srv.close();
@@ -1016,11 +1408,13 @@ test('set_cell: seq 全文档单调递增', async () => {
   const srv = await createTestServer();
   const c = await connect(srv.wsUrl);
   try {
+    await joinDoc(c, 'doc_sys_001', 'u1');
+    const base = c.received.length;
     c.send({ type: 'set_cell', docId: 'doc_sys_001', clientId: 'u1', row: 1, col: 1, value: 'a' });
     c.send({ type: 'set_cell', docId: 'doc_sys_001', clientId: 'u1', row: 1, col: 2, value: 'b' });
     c.send({ type: 'set_cell', docId: 'doc_sys_001', clientId: 'u1', row: 2, col: 1, value: 'c' });
-    await c.waitFor(3);
-    const seqs = c.received.map((m) => m.data.seq);
+    await c.waitFor(base + 6);
+    const seqs = Array.from(new Set(c.received.slice(base).map((m) => m.data.seq)));
     assert.ok(seqs[1] > seqs[0], `seq not increasing: ${seqs}`);
     assert.ok(seqs[2] > seqs[1], `seq not increasing: ${seqs}`);
   } finally {
@@ -1056,22 +1450,31 @@ test('set_cell: 发送方收 2 条（reply + broadcast），其他成员收 1 �
   }
 });
 
-test('set_cell: 未 join 的 socket 可直接写入并收到响应，但不在广播列表', async () => {
+test('set_cell: 未 join 或离开房间后返回 4003', async () => {
   const srv = await createTestServer();
-  const member = await connect(srv.wsUrl);
   const outsider = await connect(srv.wsUrl);
+  const owner = await connect(srv.wsUrl);
   try {
-    member.send({ type: 'join', docId: 'doc_sys_001', clientId: 'u1' });
-    await member.waitFor(2);
-
     outsider.send({ type: 'set_cell', docId: 'doc_sys_001', clientId: 'u_out', row: 1, col: 1, value: 'out' });
     await outsider.waitFor(1);
-    assert.equal(outsider.received[0].type, 'cell_updated');
+    assert.equal(outsider.received[0].type, 'error');
+    assert.equal(outsider.received[0].code, 4003);
 
-    await member.noMoreFor(150);
+    const { createDoc } = require('../service/docsService');
+    const docB = await createDoc({ title: 'set-cell-switch-doc' });
+
+    await joinDoc(owner, 'doc_sys_001', 'u1');
+    owner.send({ type: 'join', docId: docB.docId, clientId: 'u1' });
+    await owner.waitFor(4);
+
+    owner.send({ type: 'set_cell', docId: 'doc_sys_001', clientId: 'u1', row: 1, col: 1, value: 'out' });
+    await owner.waitFor(5);
+    const last = owner.received.at(-1);
+    assert.equal(last.type, 'error');
+    assert.equal(last.code, 4003);
   } finally {
-    await member.close();
     await outsider.close();
+    await owner.close();
     await srv.close();
   }
 });
@@ -1101,15 +1504,15 @@ test('set_cell: 缺少 docId/clientId/row/col 返回 4000', async () => {
   }
 });
 
-test('set_cell: 文档不存在返回 4004', async () => {
+test('set_cell: clientId 与当前 socket 身份不一致返回 4003', async () => {
   const srv = await createTestServer();
   const c = await connect(srv.wsUrl);
   try {
-    c.send({ type: 'set_cell', docId: 'doc_nonexistent', clientId: 'u1', row: 1, col: 1, value: 'x' });
-    await c.waitFor(1);
-    assert.equal(c.received[0].type, 'error');
-    assert.equal(c.received[0].code, 4004);
-    assert.match(c.received[0].message, /document not found/);
+    await joinDoc(c, 'doc_sys_001', 'u1');
+    c.send({ type: 'set_cell', docId: 'doc_sys_001', clientId: 'u2', row: 1, col: 1, value: 'x' });
+    await c.waitFor(3);
+    assert.equal(c.received[2].type, 'error');
+    assert.equal(c.received[2].code, 4003);
   } finally {
     await c.close();
     await srv.close();
@@ -1120,8 +1523,9 @@ test('set_cell: 写入 audit 日志', async () => {
   const srv = await createTestServer();
   const c = await connect(srv.wsUrl);
   try {
+    await joinDoc(c, 'doc_sys_001', 'u_sc_audit');
     c.send({ type: 'set_cell', docId: 'doc_sys_001', clientId: 'u_sc_audit', row: 1, col: 1, value: 'v' });
-    await c.waitFor(1);
+    await c.waitFor(4);
     await new Promise((r) => setImmediate(r));
     const auditLogStore = require('../store/auditLogStore');
     const logs = await auditLogStore.listByEventType('set_cell');
@@ -1138,16 +1542,18 @@ test('set_cell: 同一单元格连续写后写覆盖', async () => {
   const srv = await createTestServer();
   const c = await connect(srv.wsUrl);
   try {
+    await joinDoc(c, 'doc_sys_001', 'u1');
+    const base = c.received.length;
     c.send({ type: 'set_cell', docId: 'doc_sys_001', clientId: 'u1', row: 3, col: 3, value: 'first' });
-    await c.waitFor(1);
-    const seq1 = c.received[0].data.seq;
+    await c.waitFor(base + 2);
+    const seq1 = c.received[base].data.seq;
 
     c.send({ type: 'set_cell', docId: 'doc_sys_001', clientId: 'u1', row: 3, col: 3, value: 'second' });
-    await c.waitFor(2);
-    const seq2 = c.received[1].data.seq;
+    await c.waitFor(base + 4);
+    const seq2 = c.received[base + 2].data.seq;
 
     assert.ok(seq2 > seq1);
-    assert.equal(c.received[1].data.value, 'second');
+    assert.equal(c.received[base + 2].data.value, 'second');
   } finally {
     await c.close();
     await srv.close();
@@ -1186,15 +1592,17 @@ test('set_cell: style 显式传 null 后再 join 快照中该 cell style 为 nul
   const srv = await createTestServer();
   const c = await connect(srv.wsUrl);
   try {
+    await joinDoc(c, 'doc_sys_001', 'u1');
+    const base = c.received.length;
     // 先写入有样式的值
     c.send({ type: 'set_cell', docId: 'doc_sys_001', clientId: 'u1', row: 5, col: 5, value: 'v', style: { bold: true } });
-    await c.waitFor(1);
-    assert.deepEqual(c.received[0].data.style, { bold: true });
+    await c.waitFor(base + 2);
+    assert.deepEqual(c.received[base].data.style, { bold: true });
 
     // 再写同一格，显式 null 清除样式
     c.send({ type: 'set_cell', docId: 'doc_sys_001', clientId: 'u1', row: 5, col: 5, value: 'v', style: null });
-    await c.waitFor(2);
-    assert.equal(c.received[1].data.style, null);
+    await c.waitFor(base + 4);
+    assert.equal(c.received[base + 2].data.style, null);
 
     // join 后快照中该格 style 应为 null
     const c2 = await connect(srv.wsUrl);
@@ -1279,13 +1687,15 @@ test('set_cell: 已有样式时省略 style 也会清空样式', async () => {
   const srv = await createTestServer();
   const c = await connect(srv.wsUrl);
   try {
+    await joinDoc(c, 'doc_sys_001', 'u1');
+    const base = c.received.length;
     c.send({ type: 'set_cell', docId: 'doc_sys_001', clientId: 'u1', row: 7, col: 7, value: 'styled', style: { bold: true, color: '#333333' } });
-    await c.waitFor(1);
-    assert.deepEqual(c.received[0].data.style, { bold: true, color: '#333333' });
+    await c.waitFor(base + 2);
+    assert.deepEqual(c.received[base].data.style, { bold: true, color: '#333333' });
 
     c.send({ type: 'set_cell', docId: 'doc_sys_001', clientId: 'u1', row: 7, col: 7, value: 'unstyled' });
-    await c.waitFor(2);
-    assert.equal(c.received[1].data.style, null);
+    await c.waitFor(base + 4);
+    assert.equal(c.received[base + 2].data.style, null);
 
     const c2 = await connect(srv.wsUrl);
     c2.send({ type: 'join', docId: 'doc_sys_001', clientId: 'u2' });
@@ -1305,15 +1715,22 @@ test('set_cell: 并发写同一格，history 记录的 oldValue 是前一次写�
   const c1 = await connect(srv.wsUrl);
   const c2 = await connect(srv.wsUrl);
   try {
+    await joinDoc(c1, 'doc_sys_001', 'u1');
+    await joinDoc(c2, 'doc_sys_001', 'u2');
+
     // c1 先写入，确立 oldValue 基线
+    const base1 = c1.received.length;
+    const base2 = c2.received.length;
     c1.send({ type: 'set_cell', docId: 'doc_sys_001', clientId: 'u1', row: 6, col: 6, value: 'first' });
-    await c1.waitFor(1);
-    const seq1 = c1.received[0].data.seq;
+    await Promise.all([c1.waitFor(base1 + 2), c2.waitFor(base2 + 1)]);
+    const seq1 = c1.received[base1].data.seq;
 
     // c2 在 c1 写入后写同一格
+    const afterFirstC1 = c1.received.length;
+    const afterFirstC2 = c2.received.length;
     c2.send({ type: 'set_cell', docId: 'doc_sys_001', clientId: 'u2', row: 6, col: 6, value: 'second' });
-    await c2.waitFor(1);
-    const seq2 = c2.received[0].data.seq;
+    await Promise.all([c2.waitFor(afterFirstC2 + 2), c1.waitFor(afterFirstC1 + 1)]);
+    const seq2 = c2.received[afterFirstC2].data.seq;
     assert.ok(seq2 > seq1);
 
     // 检查 historyStore 中 seq2 记录的 oldValue 应是 'first'（c1 写入的值），而非更早的值
@@ -1323,6 +1740,87 @@ test('set_cell: 并发写同一格，history 记录的 oldValue 是前一次写�
   } finally {
     await c1.close();
     await c2.close();
+    await srv.close();
+  }
+});
+
+test('set_cell: 显式 baseSeq 会写入 history', async () => {
+  const srv = await createTestServer();
+  const c = await connect(srv.wsUrl);
+  try {
+    const joinAck = await joinDoc(c, 'doc_sys_001', 'u_ot_base_seq');
+    const baseSeq = joinAck.data.currentSeq;
+    const base = c.received.length;
+
+    c.send({
+      type: 'set_cell',
+      docId: 'doc_sys_001',
+      clientId: 'u_ot_base_seq',
+      row: 8,
+      col: 8,
+      value: 'ot-base-seq',
+      baseSeq,
+    });
+    await c.waitFor(base + 2);
+
+    const reply = c.received[base];
+    assert.equal(reply.type, 'cell_updated');
+    assert.equal('baseSeq' in reply.data, false);
+    assert.equal('rebased' in reply.data, false);
+
+    const historyStore = require('../store/historyStore');
+    const entry = await historyStore.findByDocIdAndSeq('doc_sys_001', reply.data.seq);
+    assert.equal(entry.baseSeq, baseSeq);
+  } finally {
+    await c.close();
+    await srv.close();
+  }
+});
+
+test('set_cell: stale baseSeq after import_sheet returns conflict barrier error', async () => {
+  const srv = await createTestServer();
+  const c = await connect(srv.wsUrl);
+  try {
+    const joinAck = await joinDoc(c, 'doc_sys_001', 'u_ot_barrier');
+    const staleBaseSeq = joinAck.data.currentSeq;
+
+    c.send({
+      type: 'import_sheet',
+      docId: 'doc_sys_001',
+      clientId: 'u_ot_barrier',
+      snapshot: {
+        id: 'sheet_ot_barrier',
+        name: 'OTBarrier',
+        defaultRowHeight: 25,
+        defaultColWidth: 100,
+        cells: {
+          '2:2': { row: 2, col: 2, value: 'imported', styleId: null },
+        },
+        styles: {},
+        rowCount: 2,
+        colCount: 2,
+      },
+    });
+    await c.waitFor(c.received.length + 1);
+
+    const base = c.received.length;
+    c.send({
+      type: 'set_cell',
+      docId: 'doc_sys_001',
+      clientId: 'u_ot_barrier',
+      row: 2,
+      col: 2,
+      value: 'should-conflict',
+      baseSeq: staleBaseSeq,
+    });
+    await c.waitFor(base + 1);
+
+    const errorMessage = c.received[base];
+    assert.equal(errorMessage.type, 'error');
+    assert.equal(errorMessage.code, 4090);
+    assert.match(errorMessage.message, /import_sheet/);
+  } finally {
+    await c.close();
     await srv.close();
   }
 });
@@ -1379,9 +1877,11 @@ test('set_cell: undo 栈超过上限时仅保留最近操作', async () => {
   const c = await connect(srv.wsUrl);
 
   try {
+    await joinDoc(c, 'doc_sys_001', 'u_stack_limit');
+    const base = c.received.length;
     for (let row = 1; row <= 5; row += 1) {
       c.send({ type: 'set_cell', docId: 'doc_sys_001', clientId: 'u_stack_limit', row, col: 1, value: `v${row}`, style: null });
-      await c.waitFor(row);
+      await c.waitFor(base + row * 2);
     }
 
     const userOpStateStore = require('../store/userOpStateStore');
@@ -1531,14 +2031,16 @@ test('import_sheet: seq 在 set_cell 之后继续递增（后写覆盖）', asyn
   const srv = await createTestServer();
   const c = await connect(srv.wsUrl);
   try {
+    await joinDoc(c, 'doc_sys_001', 'u1');
+    const base = c.received.length;
     c.send({ type: 'set_cell', docId: 'doc_sys_001', clientId: 'u1', row: 1, col: 1, value: 'a' });
-    await c.waitFor(1);
-    const seq1 = c.received[0].data.seq;
+    await c.waitFor(base + 2);
+    const seq1 = c.received[base].data.seq;
 
     const snapshot = { id: 'sheet_import_003', name: '空表', defaultRowHeight: 25, defaultColWidth: 100, cells: {}, styles: {}, rowCount: 0, colCount: 0 };
     c.send({ type: 'import_sheet', docId: 'doc_sys_001', clientId: 'u1', snapshot });
-    await c.waitFor(2);
-    const seq2 = c.received[1].data.seq;
+    await c.waitFor(base + 4);
+    const seq2 = c.received[base + 2].data.seq;
 
     assert.ok(seq2 > seq1);
   } finally {
@@ -1551,6 +2053,8 @@ test('import_sheet: import 后 set_cell seq 继续递增（后写覆盖）', asy
   const srv = await createTestServer();
   const c = await connect(srv.wsUrl);
   try {
+    await joinDoc(c, 'doc_sys_001', 'u1');
+    const base = c.received.length;
     const snapshot = {
       id: 'sheet_import_004',
       name: '导入表',
@@ -1562,15 +2066,15 @@ test('import_sheet: import 后 set_cell seq 继续递增（后写覆盖）', asy
       colCount: 1,
     };
     c.send({ type: 'import_sheet', docId: 'doc_sys_001', clientId: 'u1', snapshot });
-    await c.waitFor(1);
-    const seq1 = c.received[0].data.seq;
+    await c.waitFor(base + 2);
+    const seq1 = c.received[base].data.seq;
 
     c.send({ type: 'set_cell', docId: 'doc_sys_001', clientId: 'u1', row: 2, col: 1, value: 'after' });
-    await c.waitFor(2);
-    const seq2 = c.received[1].data.seq;
+    await c.waitFor(base + 4);
+    const seq2 = c.received[base + 2].data.seq;
 
     assert.ok(seq2 > seq1);
-    assert.equal(c.received[1].data.value, 'after');
+    assert.equal(c.received[base + 2].data.value, 'after');
   } finally {
     await c.close();
     await srv.close();
@@ -1754,9 +2258,11 @@ test('set_cell 后 import_sheet 清空 undo 栈，canUndo 恒为 false', async (
   const srv = await createTestServer();
   const c = await connect(srv.wsUrl);
   try {
+    await joinDoc(c, 'doc_sys_001', 'u1');
+    const base = c.received.length;
     c.send({ type: 'set_cell', docId: 'doc_sys_001', clientId: 'u1', row: 1, col: 1, value: 'a' });
-    await c.waitFor(1);
-    assert.equal(c.received[0].data.canUndo, true);
+    await c.waitFor(base + 2);
+    assert.equal(c.received[base].data.canUndo, true);
 
     const snapshot = {
       id: 'sheet_import_013',
@@ -1769,9 +2275,9 @@ test('set_cell 后 import_sheet 清空 undo 栈，canUndo 恒为 false', async (
       colCount: 1,
     };
     c.send({ type: 'import_sheet', docId: 'doc_sys_001', clientId: 'u1', snapshot });
-    await c.waitFor(2);
-    assert.equal(c.received[1].data.canUndo, false);
-    assert.equal(c.received[1].data.canRedo, false);
+    await c.waitFor(base + 4);
+    assert.equal(c.received[base + 2].data.canUndo, false);
+    assert.equal(c.received[base + 2].data.canRedo, false);
   } finally {
     await c.close();
     await srv.close();
@@ -1805,6 +2311,138 @@ test('undo: set_cell 후 undo 하면 값이 복원되고 undo_applied 반환', a
     assert.equal(typeof undo.data.seq, 'number');
   } finally {
     await c.close();
+    await srv.close();
+  }
+});
+
+test('undo: 同单元格已有后续写入时会重放为 noop，不覆盖最新值', async () => {
+  const srv = await createTestServer();
+  const owner = await connect(srv.wsUrl);
+  const other = await connect(srv.wsUrl);
+  try {
+    await joinDoc(owner, 'doc_sys_001', 'u_undo_ot_owner');
+    await joinDoc(other, 'doc_sys_001', 'u_undo_ot_other');
+
+    let ownerBase = owner.received.length;
+    let otherBase = other.received.length;
+    owner.send({
+      type: 'set_cell',
+      docId: 'doc_sys_001',
+      clientId: 'u_undo_ot_owner',
+      row: 31,
+      col: 1,
+      value: 'owner-first',
+    });
+    await Promise.all([
+      owner.waitFor(ownerBase + 2),
+      other.waitFor(otherBase + 1),
+    ]);
+
+    ownerBase = owner.received.length;
+    otherBase = other.received.length;
+    other.send({
+      type: 'set_cell',
+      docId: 'doc_sys_001',
+      clientId: 'u_undo_ot_other',
+      row: 31,
+      col: 1,
+      value: 'other-latest',
+    });
+    await Promise.all([
+      owner.waitFor(ownerBase + 1),
+      other.waitFor(otherBase + 2),
+    ]);
+
+    ownerBase = owner.received.length;
+    otherBase = other.received.length;
+    owner.send({
+      type: 'undo',
+      docId: 'doc_sys_001',
+      clientId: 'u_undo_ot_owner',
+    });
+    await Promise.all([
+      owner.waitFor(ownerBase + 2),
+      other.waitFor(otherBase + 1),
+    ]);
+
+    const undoReply = owner.received[ownerBase];
+    assert.equal(undoReply.type, 'undo_applied');
+    assert.equal(undoReply.data.value, 'other-latest');
+    assert.equal('rebased' in undoReply.data, false);
+    assert.equal('noop' in undoReply.data, false);
+
+    const docStore = require('../store/docStore');
+    const doc = await docStore.getDocState('doc_sys_001');
+    assert.equal(doc.snapshotJson.cells['31:1'].value, 'other-latest');
+  } finally {
+    await owner.close();
+    await other.close();
+    await srv.close();
+  }
+});
+
+test('undo: sourceSeq 之后遇到 import_sheet barrier 时返回 4090', async () => {
+  const srv = await createTestServer();
+  const owner = await connect(srv.wsUrl);
+  const other = await connect(srv.wsUrl);
+  try {
+    await joinDoc(owner, 'doc_sys_001', 'u_undo_barrier_owner');
+    await joinDoc(other, 'doc_sys_001', 'u_undo_barrier_other');
+
+    let ownerBase = owner.received.length;
+    let otherBase = other.received.length;
+    owner.send({
+      type: 'set_cell',
+      docId: 'doc_sys_001',
+      clientId: 'u_undo_barrier_owner',
+      row: 32,
+      col: 1,
+      value: 'owner-before-import',
+    });
+    await Promise.all([
+      owner.waitFor(ownerBase + 2),
+      other.waitFor(otherBase + 1),
+    ]);
+
+    ownerBase = owner.received.length;
+    otherBase = other.received.length;
+    other.send({
+      type: 'import_sheet',
+      docId: 'doc_sys_001',
+      clientId: 'u_undo_barrier_other',
+      snapshot: {
+        id: 'sheet_undo_barrier',
+        name: 'UndoBarrier',
+        defaultRowHeight: 25,
+        defaultColWidth: 100,
+        cells: {
+          '1:1': { row: 1, col: 1, value: 'imported-barrier', styleId: null },
+        },
+        styles: {},
+        rowCount: 1,
+        colCount: 1,
+      },
+    });
+    await Promise.all([
+      owner.waitFor(ownerBase + 1),
+      other.waitFor(otherBase + 2),
+    ]);
+
+    ownerBase = owner.received.length;
+    owner.send({
+      type: 'undo',
+      docId: 'doc_sys_001',
+      clientId: 'u_undo_barrier_owner',
+    });
+    await owner.waitFor(ownerBase + 1);
+
+    const errorReply = owner.received[ownerBase];
+    assert.equal(errorReply.type, 'error');
+    assert.equal(errorReply.code, 4090);
+    assert.match(errorReply.message, /import_sheet/);
+  } finally {
+    await owner.close();
+    await other.close();
     await srv.close();
   }
 });
@@ -1843,7 +2481,7 @@ test('undo: docId/clientId 비어있으면 4000 반환', async () => {
   }
 });
 
-test('undo: 未 join 或 clientId 与当前 socket 身份不一致时返回 4003', async () => {
+test('undo: 未 join、离开房间或 clientId 与当前 socket 身份不一致时返回 4003', async () => {
   const srv = await createTestServer();
   const outsider = await connect(srv.wsUrl);
   const owner = await connect(srv.wsUrl);
@@ -1863,6 +2501,17 @@ test('undo: 未 join 或 clientId 与当前 socket 身份不一致时返回 4003
     const last = owner.received.at(-1);
     assert.equal(last.type, 'error');
     assert.equal(last.code, 4003);
+
+    const { createDoc } = require('../service/docsService');
+    const docB = await createDoc({ title: 'undo-switch-doc' });
+    owner.send({ type: 'join', docId: docB.docId, clientId: 'u1' });
+    await owner.waitFor(7);
+
+    owner.send({ type: 'undo', docId: 'doc_sys_001', clientId: 'u1' });
+    await owner.waitFor(8);
+    const afterSwitch = owner.received.at(-1);
+    assert.equal(afterSwitch.type, 'error');
+    assert.equal(afterSwitch.code, 4003);
   } finally {
     await outsider.close();
     await owner.close();
@@ -1870,16 +2519,19 @@ test('undo: 未 join 或 clientId 与当前 socket 身份不一致时返回 4003
   }
 });
 
-test('undo: applySetCell 成功后 history 失败仍返回 undo_applied，不补发 500', async () => {
+test('undo: history 失败时按当前驱动策略处理', async () => {
   const srv = await createTestServer();
   const c = await connect(srv.wsUrl);
   const historyStore = require('../store/historyStore');
+  const docStore = require('../store/docStore');
+  const userOpStateStore = require('../store/userOpStateStore');
+  const isMysqlDriver = process.env.STORE_DRIVER === 'mysql';
   const originalAppend = historyStore.append;
   historyStore.append = async (entry) => {
     if (entry.opType === 'undo') {
       throw new Error('history unavailable');
     }
-    return originalAppend(entry);
+    return originalAppend.call(historyStore, entry);
   };
 
   try {
@@ -1889,12 +2541,26 @@ test('undo: applySetCell 成功后 history 失败仍返回 undo_applied，不补
     await c.waitFor(4);
 
     c.send({ type: 'undo', docId: 'doc_sys_001', clientId: 'u1' });
-    await c.waitFor(6);
+    await c.waitFor(5);
     await c.noMoreFor(150);
 
     const undoMsgs = c.received.filter((m) => m.type === 'undo_applied');
-    assert.equal(undoMsgs.length, 2);
-    assert.equal(c.received.filter((m) => m.type === 'error').length, 0);
+    const errorMsgs = c.received.filter((m) => m.type === 'error');
+    const doc = await docStore.getDocState('doc_sys_001');
+    const opState = await userOpStateStore.getState('doc_sys_001', 'u1');
+
+    if (isMysqlDriver) {
+      assert.equal(undoMsgs.length, 0);
+      assert.equal(errorMsgs.length, 1);
+      assert.equal(errorMsgs[0].code, 5000);
+      assert.equal(doc.snapshotJson.cells['3:1'].value, 'undo-me');
+      assert.equal(opState.undoStackJson.length, 1);
+    } else {
+      assert.equal(undoMsgs.length, 2);
+      assert.equal(errorMsgs.length, 0);
+      assert.equal(doc.snapshotJson.cells['3:1'].value, '');
+      assert.equal(opState.undoStackJson.length, 0);
+    }
   } finally {
     historyStore.append = originalAppend;
     await c.close();
@@ -1962,6 +2628,161 @@ test('redo: undo 후 redo 하면 값이 재적용되고 redo_applied 반환', as
   }
 });
 
+test('redo: noop undo 之后继续 redo 也保持 noop，不覆盖最新值', async () => {
+  const srv = await createTestServer();
+  const owner = await connect(srv.wsUrl);
+  const other = await connect(srv.wsUrl);
+  try {
+    await joinDoc(owner, 'doc_sys_001', 'u_redo_ot_owner');
+    await joinDoc(other, 'doc_sys_001', 'u_redo_ot_other');
+
+    let ownerBase = owner.received.length;
+    let otherBase = other.received.length;
+    owner.send({
+      type: 'set_cell',
+      docId: 'doc_sys_001',
+      clientId: 'u_redo_ot_owner',
+      row: 33,
+      col: 1,
+      value: 'owner-first-redo',
+    });
+    await Promise.all([
+      owner.waitFor(ownerBase + 2),
+      other.waitFor(otherBase + 1),
+    ]);
+
+    ownerBase = owner.received.length;
+    otherBase = other.received.length;
+    other.send({
+      type: 'set_cell',
+      docId: 'doc_sys_001',
+      clientId: 'u_redo_ot_other',
+      row: 33,
+      col: 1,
+      value: 'other-latest-redo',
+    });
+    await Promise.all([
+      owner.waitFor(ownerBase + 1),
+      other.waitFor(otherBase + 2),
+    ]);
+
+    ownerBase = owner.received.length;
+    otherBase = other.received.length;
+    owner.send({
+      type: 'undo',
+      docId: 'doc_sys_001',
+      clientId: 'u_redo_ot_owner',
+    });
+    await Promise.all([
+      owner.waitFor(ownerBase + 2),
+      other.waitFor(otherBase + 1),
+    ]);
+
+    ownerBase = owner.received.length;
+    otherBase = other.received.length;
+    owner.send({
+      type: 'redo',
+      docId: 'doc_sys_001',
+      clientId: 'u_redo_ot_owner',
+    });
+    await Promise.all([
+      owner.waitFor(ownerBase + 2),
+      other.waitFor(otherBase + 1),
+    ]);
+
+    const redoReply = owner.received[ownerBase];
+    assert.equal(redoReply.type, 'redo_applied');
+    assert.equal(redoReply.data.value, 'other-latest-redo');
+    assert.equal('noop' in redoReply.data, false);
+
+    const docStore = require('../store/docStore');
+    const doc = await docStore.getDocState('doc_sys_001');
+    assert.equal(doc.snapshotJson.cells['33:1'].value, 'other-latest-redo');
+  } finally {
+    await owner.close();
+    await other.close();
+    await srv.close();
+  }
+});
+
+test('redo: undo 之后若遇到 import_sheet barrier 则返回 4090', async () => {
+  const srv = await createTestServer();
+  const owner = await connect(srv.wsUrl);
+  const other = await connect(srv.wsUrl);
+  try {
+    await joinDoc(owner, 'doc_sys_001', 'u_redo_barrier_owner');
+    await joinDoc(other, 'doc_sys_001', 'u_redo_barrier_other');
+
+    let ownerBase = owner.received.length;
+    let otherBase = other.received.length;
+    owner.send({
+      type: 'set_cell',
+      docId: 'doc_sys_001',
+      clientId: 'u_redo_barrier_owner',
+      row: 34,
+      col: 1,
+      value: 'owner-before-redo-barrier',
+    });
+    await Promise.all([
+      owner.waitFor(ownerBase + 2),
+      other.waitFor(otherBase + 1),
+    ]);
+
+    ownerBase = owner.received.length;
+    otherBase = other.received.length;
+    owner.send({
+      type: 'undo',
+      docId: 'doc_sys_001',
+      clientId: 'u_redo_barrier_owner',
+    });
+    await Promise.all([
+      owner.waitFor(ownerBase + 2),
+      other.waitFor(otherBase + 1),
+    ]);
+
+    ownerBase = owner.received.length;
+    otherBase = other.received.length;
+    other.send({
+      type: 'import_sheet',
+      docId: 'doc_sys_001',
+      clientId: 'u_redo_barrier_other',
+      snapshot: {
+        id: 'sheet_redo_barrier',
+        name: 'RedoBarrier',
+        defaultRowHeight: 25,
+        defaultColWidth: 100,
+        cells: {
+          '1:1': { row: 1, col: 1, value: 'redo-imported-barrier', styleId: null },
+        },
+        styles: {},
+        rowCount: 1,
+        colCount: 1,
+      },
+    });
+    await Promise.all([
+      owner.waitFor(ownerBase + 1),
+      other.waitFor(otherBase + 2),
+    ]);
+
+    ownerBase = owner.received.length;
+    owner.send({
+      type: 'redo',
+      docId: 'doc_sys_001',
+      clientId: 'u_redo_barrier_owner',
+    });
+    await owner.waitFor(ownerBase + 1);
+
+    const errorReply = owner.received[ownerBase];
+    assert.equal(errorReply.type, 'error');
+    assert.equal(errorReply.code, 4090);
+    assert.match(errorReply.message, /import_sheet/);
+  } finally {
+    await owner.close();
+    await other.close();
+    await srv.close();
+  }
+});
+
 test('redo: redo 스택이 비어 있으면 4000 반환', async () => {
   const srv = await createTestServer();
   const c = await connect(srv.wsUrl);
@@ -1982,7 +2803,7 @@ test('redo: redo 스택이 비어 있으면 4000 반환', async () => {
   }
 });
 
-test('redo: 未 join 或 clientId 与当前 socket 身份不一致时返回 4003', async () => {
+test('redo: 未 join、离开房间或 clientId 与当前 socket 身份不一致时返回 4003', async () => {
   const srv = await createTestServer();
   const outsider = await connect(srv.wsUrl);
   const owner = await connect(srv.wsUrl);
@@ -2004,6 +2825,17 @@ test('redo: 未 join 或 clientId 与当前 socket 身份不一致时返回 4003
     const last = owner.received.at(-1);
     assert.equal(last.type, 'error');
     assert.equal(last.code, 4003);
+
+    const { createDoc } = require('../service/docsService');
+    const docB = await createDoc({ title: 'redo-switch-doc' });
+    owner.send({ type: 'join', docId: docB.docId, clientId: 'u1' });
+    await owner.waitFor(9);
+
+    owner.send({ type: 'redo', docId: 'doc_sys_001', clientId: 'u1' });
+    await owner.waitFor(10);
+    const afterSwitch = owner.received.at(-1);
+    assert.equal(afterSwitch.type, 'error');
+    assert.equal(afterSwitch.code, 4003);
   } finally {
     await outsider.close();
     await owner.close();

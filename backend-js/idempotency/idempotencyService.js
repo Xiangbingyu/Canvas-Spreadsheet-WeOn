@@ -1,14 +1,7 @@
 const eventIdStore = require('./eventIdStore');
+const idempotencyConfig = require('../config/idempotencyConfig');
 
-function isProcessed(eventId) {
-  if (!eventId) {
-    return false;
-  }
-
-  return eventIdStore.has(eventId);
-}
-
-function getRemembered(eventId) {
+async function getRecord(eventId) {
   if (!eventId) {
     return null;
   }
@@ -16,25 +9,69 @@ function getRemembered(eventId) {
   return eventIdStore.get(eventId);
 }
 
-function remember(eventId, record) {
+async function beginProcessing(eventId) {
   if (!eventId) {
-    return;
+    return true;
   }
 
-  eventIdStore.set(eventId, record);
+  return eventIdStore.begin(eventId, {
+    ttlMs: idempotencyConfig.ttlMs,
+  });
 }
 
-function forget(eventId) {
+async function completeProcessing(eventId, response) {
   if (!eventId) {
     return;
   }
 
-  eventIdStore.delete(eventId);
+  await eventIdStore.complete(eventId, response, {
+    ttlMs: idempotencyConfig.ttlMs,
+  });
+}
+
+async function waitForCompleted(eventId) {
+  if (!eventId) {
+    return null;
+  }
+
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < idempotencyConfig.processingWaitTimeoutMs) {
+    const current = await getRecord(eventId);
+
+    if (!current) {
+      return null;
+    }
+
+    if (current.status === 'completed') {
+      return current;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, idempotencyConfig.processingPollIntervalMs));
+  }
+
+  return getRecord(eventId);
+}
+
+async function deleteRecord(eventId) {
+  if (!eventId) {
+    return;
+  }
+
+  await eventIdStore.delete(eventId);
+}
+
+async function close() {
+  if (typeof eventIdStore.close === 'function') {
+    await eventIdStore.close();
+  }
 }
 
 module.exports = {
-  isProcessed,
-  getRemembered,
-  remember,
-  forget,
+  getRecord,
+  beginProcessing,
+  completeProcessing,
+  waitForCompleted,
+  deleteRecord,
+  close,
 };
