@@ -8,14 +8,15 @@ import { CellEditOverlay } from '@/components/cellEditor/CellEditOverlay'
 import GrideCanvas from '@/components/grideCanvas/GrideCanvas'
 import { useSpreadsheetInteraction } from '@/hooks/useSpreadsheetInteraction'
 import { useCommitCell } from '@/hooks/useCommitCell'
-import { useHistory } from '@/hooks/useHistory'
+import { useUnifiedHistory } from '@/hooks/useUnifiedHistory'
 
 export function SpreadsheetPage() {
   // 单元格提交（协同 WS / 本地兜底，开关在 useCommitCell 内）
   const onCommitCell = useCommitCell()
 
-  // 本地撤销/重做：包装 onCommitCell，编辑与样式变更都经此入栈；Ctrl+Z / Ctrl+Shift+Z
-  const { commitWithHistory, undo, redo } = useHistory(onCommitCell)
+  // 统一的撤销/重做：支持单元格编辑和行列操作；Ctrl+Z / Ctrl+Shift+Z
+  const { commitWithHistory, executeRowColWithHistory, undo, redo } =
+    useUnifiedHistory(onCommitCell)
 
   const {
     engine,
@@ -43,6 +44,7 @@ export function SpreadsheetPage() {
           ref={canvasHandleRef}
           interactionEngine={engine}
           onScrollChange={onScrollChange}
+          executeRowColWithHistory={executeRowColWithHistory}
         />
 
         <CellEditOverlay

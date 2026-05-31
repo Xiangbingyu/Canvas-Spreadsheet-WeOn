@@ -1,1 +1,8 @@
-export { HistoryStack, isSameSnapshot, type CellOperation, type CellSnapshot } from './historyStack'
+export {
+  HistoryStack,
+  isSameSnapshot,
+  type CellOperation,
+  type CellSnapshot,
+  type RowColOperation,
+  type Operation,
+} from './historyStack'

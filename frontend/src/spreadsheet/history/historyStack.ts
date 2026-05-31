@@ -4,6 +4,7 @@
 // 远端协同广播（cell_updated）不经此模块，天然不入栈。
 
 import type { Style } from '@/spreadsheet/model/types'
+import type { Cell } from '@/spreadsheet/model/types'
 
 /** 单元格某一时刻的内容快照（值 + 完整样式） */
 export interface CellSnapshot {
@@ -22,6 +23,20 @@ export interface CellOperation {
   after: CellSnapshot
 }
 
+/** 行列操作：插入/删除行或列，保存完整行/列数据用于恢复 */
+export interface RowColOperation {
+  type: 'insert_row' | 'delete_row' | 'insert_col' | 'delete_col'
+  index: number
+  data?: Record<string, Cell | undefined> // 删除时保存的完整行/列数据
+}
+
+/** 统一的操作类型 */
+export type Operation = CellOperation | RowColOperation
+
+function isCellOperation(op: Operation): op is CellOperation {
+  return 'before' in op && 'after' in op
+}
+
 /** 两个快照是否等价（值与样式都相同），用于过滤 no-op */
 export function isSameSnapshot(a: CellSnapshot, b: CellSnapshot): boolean {
   if (a.value !== b.value) return false
@@ -35,17 +50,17 @@ export function isSameSnapshot(a: CellSnapshot, b: CellSnapshot): boolean {
  * - redo：弹出最近被撤销的操作，返回它（调用方据 after 回放），并压回 undo 栈。
  */
 export class HistoryStack {
-  private undoStack: CellOperation[] = []
-  private redoStack: CellOperation[] = []
+  private undoStack: Operation[] = []
+  private redoStack: Operation[] = []
   private readonly limit: number
 
   constructor(limit = 200) {
     this.limit = limit
   }
 
-  push(op: CellOperation): void {
-    // 过滤无变化的操作，避免污染历史
-    if (isSameSnapshot(op.before, op.after)) return
+  push(op: Operation): void {
+    // 过滤无变化的单元格操作，避免污染历史
+    if (isCellOperation(op) && isSameSnapshot(op.before, op.after)) return
     this.undoStack.push(op)
     if (this.undoStack.length > this.limit) {
       this.undoStack.shift()
@@ -55,7 +70,7 @@ export class HistoryStack {
   }
 
   /** 弹出一个可撤销操作；无则返回 null */
-  popUndo(): CellOperation | null {
+  popUndo(): Operation | null {
     const op = this.undoStack.pop()
     if (!op) return null
     this.redoStack.push(op)
@@ -63,7 +78,7 @@ export class HistoryStack {
   }
 
   /** 弹出一个可重做操作；无则返回 null */
-  popRedo(): CellOperation | null {
+  popRedo(): Operation | null {
     const op = this.redoStack.pop()
     if (!op) return null
     this.undoStack.push(op)

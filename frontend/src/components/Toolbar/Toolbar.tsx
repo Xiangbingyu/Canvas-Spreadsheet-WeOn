@@ -132,16 +132,29 @@ export function Toolbar({ onCommitCell, onUndo, onRedo }: ToolbarProps) {
   // 避免 selection.style 过期导致连续点击样式按钮时互相覆盖。
   const cell = worksheet.cells[`${selection.row}:${selection.col}`]
   const style: Style = cell?.styleId ? (worksheet.styles[cell.styleId] ?? {}) : {}
-  const cellValue = cell?.value ?? ''
   const disabled = !onCommitCell
   const colorInputRef = useRef<HTMLInputElement>(null)
   const bgColorInputRef = useRef<HTMLInputElement>(null)
 
-  // 合并样式补丁并提交（走协同链路）。value 保持不变，只改 style。
+  // 合并样式补丁并提交（走协同链路）。对 selection.range 内所有单元格应用样式。
   const commitStyle = (patch: Partial<Style>) => {
     if (!onCommitCell) return
-    const next: Style = { ...style, ...patch }
-    onCommitCell(selection.row, selection.col, cellValue, next)
+    const { start, end } = selection.range
+    const minRow = Math.min(start.row, end.row)
+    const maxRow = Math.max(start.row, end.row)
+    const minCol = Math.min(start.col, end.col)
+    const maxCol = Math.max(start.col, end.col)
+
+    // 遍历选中范围内的所有单元格
+    for (let row = minRow; row <= maxRow; row++) {
+      for (let col = minCol; col <= maxCol; col++) {
+        const cell = worksheet.cells[`${row}:${col}`]
+        const cellStyle: Style = cell?.styleId ? (worksheet.styles[cell.styleId] ?? {}) : {}
+        const cellValue = cell?.value ?? ''
+        const next: Style = { ...cellStyle, ...patch }
+        onCommitCell(row, col, cellValue, next)
+      }
+    }
   }
 
   const toggle = (key: 'bold' | 'italic' | 'underline') => commitStyle({ [key]: !style[key] })

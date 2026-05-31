@@ -87,6 +87,14 @@ export function useSpreadsheetInteraction(options: UseSpreadsheetInteractionOpti
       setEditingCell({ row, col })
       editingCellRef.current = { row, col }
       setEditValue(initialValue !== undefined ? initialValue : (cell?.value ?? ''))
+      // 立即 focus textarea，确保中文输入法能正确进入 composition
+      setTimeout(() => {
+        if (textareaRef.current) {
+          textareaRef.current.focus()
+          const len = textareaRef.current.value.length
+          textareaRef.current.setSelectionRange(len, len)
+        }
+      }, 0)
     },
     [reduxStore]
   )
@@ -158,18 +166,37 @@ export function useSpreadsheetInteraction(options: UseSpreadsheetInteractionOpti
           event.preventDefault()
           return
         }
-        if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
-          startEdit(sel.row, sel.col, event.key)
-          event.preventDefault()
-          return
-        }
+        // 不在这里处理单个字符输入，让输入法自己处理 composition
+        // 中文输入法的第一个 keydown 不应该进入编辑态，应该等 composition 事件
         if (event.key === 'Delete' || event.key === 'Backspace') {
           commitCell(sel.row, sel.col, '')
           dispatch(setSelectedCell({ row: sel.row, col: sel.col, value: '' }))
           event.preventDefault()
         }
       },
+      onCellCompositionStart: () => {
+        // 中文输入法开始时进入编辑态
+        const sel = reduxStore.getState().selection
+        console.log(
+          '[useSpreadsheetInteraction] composition start, entering edit mode for',
+          sel.row,
+          sel.col
+        )
+        startEdit(sel.row, sel.col)
+      },
     })
+    // 注入 ViewportController
+    if (canvasHandleRef.current) {
+      engine.setViewportController({
+        scrollBy: (deltaX: number, deltaY: number) => {
+          canvasHandleRef.current?.scrollBy(deltaX, deltaY)
+        },
+        getViewport: () => {
+          const viewport = canvasHandleRef.current?.getViewport()
+          return viewport || { scrollX: 0, scrollY: 0, viewportWidth: 0, viewportHeight: 0 }
+        },
+      })
+    }
   }, [engine, worksheet, dispatch, startEdit, reduxStore, commitCell])
 
   useEffect(() => {

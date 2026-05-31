@@ -51,7 +51,19 @@ const workSheetSlice = createSlice({
 
       //如果值为空，则删除该单元格
       if (value === '') {
-        delete state.cells[key]
+        // 如果有新样式或之前有样式，保留单元格；否则删除
+        if (style !== undefined || prev?.styleId) {
+          let styleId: string | undefined
+          if (style !== undefined) {
+            styleId = findOrCreateStyleId(state.styles, style)
+          } else {
+            styleId = prev?.styleId
+          }
+          state.cells[key] = { row, col, value: '', styleId }
+        } else {
+          delete state.cells[key]
+        }
+        console.log('[updateCell] 空单元格设置样式后，state.cells[key]:', state.cells[key])
         return
       }
       //
@@ -72,9 +84,93 @@ const workSheetSlice = createSlice({
       }
       //更新单元格数据
       state.cells[key] = nextCell
+      console.log('[updateCell] 非空单元格设置样式后，state.cells[key]:', state.cells[key])
+    },
+
+    /** 在指定行前插入一行 */
+    insertRow(state, action: PayloadAction<{ row: number }>) {
+      const { row } = action.payload
+      if (row < 1 || row > state.rowCount + 1) return
+
+      // 重新映射单元格坐标：row 及以后的行号 +1
+      const newCells: Record<string, Cell> = {}
+      for (const [key, cell] of Object.entries(state.cells)) {
+        if (cell.row >= row) {
+          const newKey = `${cell.row + 1}:${cell.col}`
+          newCells[newKey] = { ...cell, row: cell.row + 1 }
+        } else {
+          newCells[key] = cell
+        }
+      }
+      state.cells = newCells
+      state.rowCount += 1
+    },
+
+    /** 删除指定行 */
+    deleteRow(state, action: PayloadAction<{ row: number }>) {
+      const { row } = action.payload
+      if (row < 1 || row > state.rowCount) return
+
+      // 删除该行的所有单元格，后续行号 -1
+      const newCells: Record<string, Cell> = {}
+      for (const [key, cell] of Object.entries(state.cells)) {
+        if (cell.row === row) {
+          // 删除该行
+          continue
+        } else if (cell.row > row) {
+          const newKey = `${cell.row - 1}:${cell.col}`
+          newCells[newKey] = { ...cell, row: cell.row - 1 }
+        } else {
+          newCells[key] = cell
+        }
+      }
+      state.cells = newCells
+      state.rowCount -= 1
+    },
+
+    /** 在指定列前插入一列 */
+    insertCol(state, action: PayloadAction<{ col: number }>) {
+      const { col } = action.payload
+      if (col < 1 || col > state.colCount + 1) return
+
+      // 重新映射单元格坐标：col 及以后的列号 +1
+      const newCells: Record<string, Cell> = {}
+      for (const [key, cell] of Object.entries(state.cells)) {
+        if (cell.col >= col) {
+          const newKey = `${cell.row}:${cell.col + 1}`
+          newCells[newKey] = { ...cell, col: cell.col + 1 }
+        } else {
+          newCells[key] = cell
+        }
+      }
+      state.cells = newCells
+      state.colCount += 1
+    },
+
+    /** 删除指定列 */
+    deleteCol(state, action: PayloadAction<{ col: number }>) {
+      const { col } = action.payload
+      if (col < 1 || col > state.colCount) return
+
+      // 删除该列的所有单元格，后续列号 -1
+      const newCells: Record<string, Cell> = {}
+      for (const [key, cell] of Object.entries(state.cells)) {
+        if (cell.col === col) {
+          // 删除该列
+          continue
+        } else if (cell.col > col) {
+          const newKey = `${cell.row}:${cell.col - 1}`
+          newCells[newKey] = { ...cell, col: cell.col - 1 }
+        } else {
+          newCells[key] = cell
+        }
+      }
+      state.cells = newCells
+      state.colCount -= 1
     },
   },
 })
 
-export const { setWorksheet, updateCell } = workSheetSlice.actions
+export const { setWorksheet, updateCell, insertRow, deleteRow, insertCol, deleteCol } =
+  workSheetSlice.actions
 export const workSheetReducer = workSheetSlice.reducer
