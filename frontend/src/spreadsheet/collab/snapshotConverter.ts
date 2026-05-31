@@ -1,4 +1,4 @@
-import type { Snapshot, Cell } from './protocol'
+import type { Snapshot, Cell } from '../model/collabProtocol'
 
 /** snapshot cells Record → Map（方便渲染查询） */
 export function convertSnapshotToCells(snapshot: Snapshot): Map<string, Cell> {

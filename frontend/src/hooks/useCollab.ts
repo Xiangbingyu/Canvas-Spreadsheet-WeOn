@@ -1,11 +1,18 @@
 import { useEffect, useRef, useCallback, useMemo } from 'react'
 import { useDispatch } from 'react-redux'
+import { message } from 'antd'
 import { CollabClient } from '../spreadsheet/collab/CollabClient'
 import type { CollabCallbacks } from '../spreadsheet/collab/CollabClient'
-import type { Snapshot, CellUpdated, SheetImported } from '../spreadsheet/collab/protocol'
+import type {
+  Snapshot,
+  CellUpdated,
+  TitleUpdated,
+  SheetImported,
+} from '../spreadsheet/model/collabProtocol'
 import {
   setWorksheet,
   updateCell,
+  setDocTitle,
   setOnlineUsers,
   setCurrentSeq,
   setConnectionStatus,
@@ -44,7 +51,13 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
         dispatch(setCurrentSeq(data.seq))
       },
 
+      onTitleUpdated(data: TitleUpdated['data']) {
+        dispatch(setDocTitle(data.title))
+        dispatch(setCurrentSeq(data.seq))
+      },
+
       onSheetImported(data: SheetImported['data']) {
+        dispatch(setWorksheet(fromServerSnapshot(data.snapshot)))
         dispatch(setCurrentSeq(data.seq))
       },
 
@@ -76,8 +89,11 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
         dispatch(setOnlineUsers(users))
       },
 
-      onError(code, message) {
-        console.error(`[Collab] ${code}: ${message}`)
+      onError(code) {
+        if (code === 4090) {
+          message.warning('文档已被他人修改，请刷新页面后重试')
+        }
+        console.error(`[Collab] code=${code}`)
       },
 
       onConnectionChange(status) {
@@ -102,7 +118,6 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
   useEffect(() => {
     return () => {
       clientRef.current?.disconnect()
-      // 卸载时清空引用，否则 StrictMode 重挂载时 connect() 会因 clientRef 非空而跳过，导致再也连不上
       clientRef.current = null
     }
   }, [])
@@ -110,8 +125,16 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
   return {
     connect,
     disconnect,
-    setCell: (row: number, col: number, value?: string, style?: Record<string, unknown> | null) =>
-      clientRef.current?.setCell(row, col, value, style),
+    setCell: (row: number, col: number, value: string, style: Record<string, unknown> | null) => {
+      const client = clientRef.current
+      if (!client) return
+      client.setCell(row, col, value, style, client.currentSeq)
+    },
+    setTitle: (title: string) => {
+      const client = clientRef.current
+      if (!client) return
+      client.setTitle(title, client.currentSeq)
+    },
     importSheet: (snapshot: Snapshot, eventId?: string) =>
       clientRef.current?.importSheet(snapshot, eventId),
     undo: () => clientRef.current?.undo(),
