@@ -655,8 +655,8 @@
 
     let ws = null;
 
-    httpBaseInput.value = httpBase;
-    wsBaseInput.value = wsBase;
+    httpBaseInput.value = 'http://120.48.16.108:3000';
+    wsBaseInput.value = 'ws://120.48.16.108:3000';
 
     function formatJson(value) {
       if (typeof value === 'string') {
@@ -688,10 +688,30 @@
     }
 
     function appendWsLog(kind, payload) {
-      const entry = document.createElement('div');
+      const entry = document.createElement('details');
       entry.className = `log-entry ${kind}`;
       const stamp = new Date().toLocaleTimeString();
-      entry.innerHTML = `<div class="meta">${stamp} · ${kind}</div><pre>${escapeHtml(typeof payload === 'string' ? payload : formatJson(payload))}</pre>`;
+      
+      let summaryText = '';
+      let fullText = '';
+      
+      if (typeof payload === 'string') {
+        summaryText = payload.length > 60 ? payload.substring(0, 60) + '...' : payload;
+        fullText = payload;
+      } else {
+        const typeStr = payload.type ? `[${payload.type}] ` : '';
+        const codeStr = payload.code !== undefined ? `(code: ${payload.code}) ` : '';
+        summaryText = `${typeStr}${codeStr}`;
+        if (!summaryText) {
+          summaryText = 'JSON Payload';
+        } else if (payload.message) {
+          summaryText += payload.message;
+        }
+        if (summaryText.length > 80) summaryText = summaryText.substring(0, 80) + '...';
+        fullText = formatJson(payload);
+      }
+
+      entry.innerHTML = `<summary style="cursor: pointer; outline: none; user-select: none;"><span class="meta">${stamp} &middot; ${kind}</span><span style="margin-left: 8px; font-family: var(--mono); font-size: 12px; color: #9ca3af;">${escapeHtml(summaryText)}</span></summary><pre style="margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(248, 250, 252, 0.1);">${escapeHtml(fullText)}</pre>`;
       wsLog.prepend(entry);
     }
 
