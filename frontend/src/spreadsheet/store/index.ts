@@ -30,6 +30,12 @@ export const store = configureStore({
     selection: selectionReducer,
     collab: collabReducer,
   },
+  // 大表 cells 较多时，开发态 immutable/serializable 检查会明显拖慢 dispatch
+  middleware: (getDefaultMiddleware) =>
+    getDefaultMiddleware({
+      immutableCheck: false,
+      serializableCheck: false,
+    }),
 })
 
 export type RootState = ReturnType<typeof store.getState>
