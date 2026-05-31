@@ -123,6 +123,12 @@
       display: grid;
       gap: 24px;
       grid-template-columns: minmax(0, 1.2fr) minmax(340px, 0.8fr);
+      align-items: start;
+    }
+
+    .sticky-panel {
+      position: sticky;
+      top: 24px;
     }
 
     .stack {
@@ -229,6 +235,7 @@
       border-radius: 14px;
       padding: 16px;
       min-height: 180px;
+      max-height: calc(100vh - 200px);
       overflow: auto;
     }
 
@@ -325,8 +332,8 @@
       </div>
     </section>
 
-    <div class="layout">
-      <div class="stack">
+    <div class="stack">
+      <div class="layout">
         <section class="panel">
           <div class="section-head">
             <div>
@@ -337,6 +344,22 @@
           <div id="http-endpoints" class="grid"></div>
         </section>
 
+        <section class="panel sticky-panel">
+          <div class="section-head">
+            <div>
+              <h2>Latest HTTP Response</h2>
+              <p class="status-line">The most recent HTTP call appears here with status and payload.</p>
+            </div>
+            <button id="clear-http-response-button" type="button" class="ghost">Clear</button>
+          </div>
+          <div id="http-response-meta" class="meta">No request sent yet.</div>
+          <div id="http-response-box" class="response-box" style="margin-top: 12px;">
+            <pre id="http-response-output">{}</pre>
+          </div>
+        </section>
+      </div>
+
+      <div class="layout">
         <section class="panel">
           <div class="section-head">
             <div>
@@ -357,24 +380,8 @@
           </div>
           <div id="ws-messages" class="grid"></div>
         </section>
-      </div>
 
-      <div class="stack">
-        <section class="panel">
-          <div class="section-head">
-            <div>
-              <h2>Latest HTTP Response</h2>
-              <p class="status-line">The most recent HTTP call appears here with status and payload.</p>
-            </div>
-            <button id="clear-http-response-button" type="button" class="ghost">Clear</button>
-          </div>
-          <div id="http-response-meta" class="meta">No request sent yet.</div>
-          <div id="http-response-box" class="response-box" style="margin-top: 12px;">
-            <pre id="http-response-output">{}</pre>
-          </div>
-        </section>
-
-        <section class="panel">
+        <section class="panel sticky-panel">
           <div class="section-head">
             <div>
               <h2>WebSocket Log</h2>
