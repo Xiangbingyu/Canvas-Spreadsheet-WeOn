@@ -34,6 +34,8 @@ import { canvasPerf } from '@/spreadsheet/render/perfMonitor'
 import type { Viewport } from '@/spreadsheet/render'
 import type { RootState } from '@/spreadsheet/store'
 import type { InteractionEngine } from '@/spreadsheet/interaction/interactionEngine'
+import { ContextMenu } from '@/components/ContextMenu/ContextMenu'
+import { GRID_CHROME } from '@/spreadsheet/utils/coordinates'
 
 const MIN_THUMB_SIZE = 24
 
@@ -50,6 +52,11 @@ export type GrideCanvasProps = {
   interactionEngine: InteractionEngine
   /** 滚动变化时上报，父组件用于定位 textarea */
   onScrollChange?: (scrollX: number, scrollY: number) => void
+  /** 行列操作的 undo/redo 包装函数 */
+  executeRowColWithHistory?: (
+    action: 'insert_row' | 'delete_row' | 'insert_col' | 'delete_col',
+    index: number
+  ) => void
 }
 
 export type GrideCanvasHandle = {
@@ -311,7 +318,7 @@ function GridScrollBar({
  * 返回结果：返回三层 Canvas 和滚动条 UI；不直接修改 Redux 数据。
  */
 function GrideCanvas(
-  { interactionEngine, onScrollChange }: GrideCanvasProps,
+  { interactionEngine, onScrollChange, executeRowColWithHistory }: GrideCanvasProps,
   ref: Ref<GrideCanvasHandle>
 ) {
   const reduxStore = useStore<RootState>()
@@ -336,6 +343,20 @@ function GrideCanvas(
     dataViewportHeight: 0,
     sheetWidth: 0,
     sheetHeight: 0,
+  })
+
+  const [contextMenu, setContextMenu] = useState<{
+    visible: boolean
+    x: number
+    y: number
+    type: 'row' | 'col' | null
+    index: number | null
+  }>({
+    visible: false,
+    x: 0,
+    y: 0,
+    type: null,
+    index: null,
   })
 
   const { containerRef, gridCanvasRef, contentCanvasRef, overlayCanvasRef, layoutVersion } =
@@ -492,6 +513,51 @@ function GrideCanvas(
     [applyScroll]
   )
 
+  const handleCanvasContextMenu = useCallback(
+    (event: React.MouseEvent<HTMLCanvasElement>) => {
+      event.preventDefault()
+      const canvas = event.currentTarget
+      const rect = canvas.getBoundingClientRect()
+      const x = event.clientX - rect.left
+      const y = event.clientY - rect.top
+
+      let type: 'row' | 'col' | null = null
+      let index: number | null = null
+
+      // 判断是否点在行号区（左侧表头）
+      if (x < GRID_CHROME.headerColWidth && y >= GRID_CHROME.headerRowHeight) {
+        type = 'row'
+        const rowHeight = worksheet.defaultRowHeight
+        const sheetY = viewportRef.current.scrollY + (y - GRID_CHROME.headerRowHeight)
+        index = Math.floor(sheetY / rowHeight) + 1
+        if (index < 1 || index > worksheet.rowCount) {
+          index = null
+        }
+      }
+      // 判断是否点在列号区（顶部表头）
+      else if (y < GRID_CHROME.headerRowHeight && x >= GRID_CHROME.headerColWidth) {
+        type = 'col'
+        const colWidth = worksheet.defaultColWidth
+        const sheetX = viewportRef.current.scrollX + (x - GRID_CHROME.headerColWidth)
+        index = Math.floor(sheetX / colWidth) + 1
+        if (index < 1 || index > worksheet.colCount) {
+          index = null
+        }
+      }
+
+      if (type && index !== null) {
+        setContextMenu({
+          visible: true,
+          x: event.clientX,
+          y: event.clientY,
+          type,
+          index,
+        })
+      }
+    },
+    [worksheet.defaultRowHeight, worksheet.defaultColWidth, worksheet.rowCount, worksheet.colCount]
+  )
+
   useCanvasInteraction({
     interactionCanvasRef: overlayCanvasRef,
     wheelTargetRef: containerRef,
@@ -529,7 +595,7 @@ function GrideCanvas(
 
   useEffect(() => {
     scheduleRender(ALL_CANVAS_LAYERS)
-  }, [scheduleRender, worksheet])
+  }, [scheduleRender, worksheet.cells, worksheet.styles])
 
   useEffect(() => {
     const overlayOnly: CanvasLayer[] = ['overlay']
@@ -549,7 +615,10 @@ function GrideCanvas(
   const canvasClass = 'absolute inset-0 h-full w-full touch-none outline-none focus:outline-none'
 
   return (
-    <div className="absolute inset-0 flex flex-col bg-[#f8f9fa]">
+    <div
+      className="absolute inset-0 flex flex-col bg-[#f8f9fa]"
+      onClick={() => setContextMenu({ ...contextMenu, visible: false })}
+    >
       <div className="flex min-h-0 min-w-0 flex-1">
         <div ref={containerRef} className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
           <canvas ref={gridCanvasRef} className={`${canvasClass} pointer-events-none`} />
@@ -560,6 +629,9 @@ function GrideCanvas(
             tabIndex={0}
             aria-label="电子表格画布"
             onDoubleClick={(event) => interactionEngine.handleCanvasDoubleClick(event)}
+            onContextMenu={handleCanvasContextMenu}
+            onCompositionStart={() => interactionEngine.handleCompositionStart()}
+            onCompositionEnd={() => interactionEngine.handleCompositionEnd()}
           />
         </div>
 
@@ -584,6 +656,16 @@ function GrideCanvas(
         />
         <div className="h-[14px] w-[14px] shrink-0 border-l border-t border-[#dadce0] bg-[#f1f3f4]" />
       </div>
+
+      <ContextMenu
+        visible={contextMenu.visible}
+        x={contextMenu.x}
+        y={contextMenu.y}
+        type={contextMenu.type}
+        index={contextMenu.index}
+        onClose={() => setContextMenu({ ...contextMenu, visible: false })}
+        executeWithHistory={executeRowColWithHistory}
+      />
     </div>
   )
 }
