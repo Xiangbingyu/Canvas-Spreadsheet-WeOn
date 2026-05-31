@@ -15,6 +15,7 @@ export interface CollabState {
   clientId: string
   docTitle: string
   users: OnlineUser[]
+  userCursors: Record<string, { row: number; col: number }>
   currentSeq: number
   connectionStatus: 'disconnected' | 'connected' | 'reconnecting'
 }
@@ -24,6 +25,7 @@ const initialState: CollabState = {
   clientId: '',
   docTitle: '',
   users: [],
+  userCursors: {},
   currentSeq: 0,
   connectionStatus: 'disconnected',
 }
@@ -53,6 +55,19 @@ const collabSlice = createSlice({
       state.docTitle = action.payload
     },
 
+    /** 更新单个用户的光标位置 */
+    setUserCursor(state, action: PayloadAction<{ clientId: string; row: number; col: number }>) {
+      state.userCursors[action.payload.clientId] = {
+        row: action.payload.row,
+        col: action.payload.col,
+      }
+    },
+
+    /** 移除用户的光标（用户离开时清） */
+    removeUserCursor(state, action: PayloadAction<string>) {
+      delete state.userCursors[action.payload]
+    },
+
     /** 更新连接状态 */
     setConnectionStatus(
       state,
@@ -63,6 +78,13 @@ const collabSlice = createSlice({
   },
 })
 
-export const { setDocSession, setDocTitle, setOnlineUsers, setCurrentSeq, setConnectionStatus } =
-  collabSlice.actions
+export const {
+  setDocSession,
+  setDocTitle,
+  setOnlineUsers,
+  setUserCursor,
+  removeUserCursor,
+  setCurrentSeq,
+  setConnectionStatus,
+} = collabSlice.actions
 export const collabReducer = collabSlice.reducer

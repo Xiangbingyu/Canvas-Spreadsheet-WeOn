@@ -7,6 +7,7 @@ import type {
   Snapshot,
   CellUpdated,
   TitleUpdated,
+  CursorUpdate,
   SheetImported,
 } from '../spreadsheet/model/collabProtocol'
 import {
@@ -14,6 +15,7 @@ import {
   updateCell,
   setDocTitle,
   setOnlineUsers,
+  setUserCursor,
   setCurrentSeq,
   setConnectionStatus,
 } from '@/spreadsheet/store'
@@ -85,6 +87,10 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
         dispatch(setCurrentSeq(data.seq))
       },
 
+      onCursor(data: CursorUpdate['data']) {
+        dispatch(setUserCursor({ clientId: data.clientId, row: data.row, col: data.col }))
+      },
+
       onPresence(users) {
         dispatch(setOnlineUsers(users))
       },
@@ -139,6 +145,7 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
       dispatch(setWorksheet(fromServerSnapshot(snapshot)))
       clientRef.current?.importSheet(snapshot, eventId)
     },
+    sendCursor: (row: number, col: number) => clientRef.current?.sendCursor(row, col),
     undo: () => clientRef.current?.undo(),
     redo: () => clientRef.current?.redo(),
     getClient: () => clientRef.current,
