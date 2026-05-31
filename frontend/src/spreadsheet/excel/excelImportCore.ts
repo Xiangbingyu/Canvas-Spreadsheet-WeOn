@@ -108,8 +108,8 @@ function buildWorksheetFromRows(
   })
 
   return {
-    id: '01',
-    name: sheetName || 'Sheet1',
+    sheetId: '01',
+    sheetName: sheetName || 'Sheet1',
     defaultRowHeight: 25,
     defaultColWidth: 100,
     rowCount: Math.max(DEFAULT_ROW_COUNT, parsedRow),

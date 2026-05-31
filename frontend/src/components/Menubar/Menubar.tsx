@@ -8,18 +8,26 @@ import { ExportExcelModal } from './ExportExcelModal'
 import { ImportExcelModal } from './ImportExcelModal'
 import type { RootState } from '@/spreadsheet/store'
 import { buildDocShareUrl } from '@/spreadsheet/utils/shareLink'
+import type { Snapshot } from '@/spreadsheet/collab/protocol'
+import { toServerSnapshot } from '@/spreadsheet/utils/fromServerSnapshot'
+import type { WorksheetData } from '@/spreadsheet/model/types'
 
 type MenubarProps = {
   userInitial?: string
+  importSheet: (snapshot: Snapshot, eventId?: string) => void
+}
+
+function handleImportSheet(importSheet: MenubarProps['importSheet'], worksheet: WorksheetData) {
+  importSheet(toServerSnapshot(worksheet) as Snapshot)
 }
 
 const menuBtnClass = 'rounded px-2 py-0.5 text-[13px] leading-6 text-[#202124] hover:bg-[#f1f3f4]'
 
-export function Menubar({ userInitial = 'd' }: MenubarProps) {
+export function Menubar({ userInitial = 'd', importSheet }: MenubarProps) {
   const navigate = useNavigate()
   const clientId = useSelector((s: RootState) => s.collab.clientId) || 'system'
   const docId = useSelector((s: RootState) => s.collab.docId)
-  const docTitle = useSelector((s: RootState) => s.workSheet.name)
+  const docTitle = useSelector((s: RootState) => s.workbook.docTitle)
   const [title, setTitle] = useState(docTitle)
   const [prevDocTitle, setPrevDocTitle] = useState(docTitle)
   const [importOpen, setImportOpen] = useState(false)
@@ -105,7 +113,6 @@ export function Menubar({ userInitial = 'd' }: MenubarProps) {
             className="flex h-9 items-center gap-1.5 rounded-full bg-[#c2e7ff] px-4 text-[14px] font-medium text-[#001d35] hover:bg-[#a8d5f5]"
             onClick={() => void handleShare()}
           >
-            <LockIcon />
             共享
           </button>
           <div
@@ -117,7 +124,11 @@ export function Menubar({ userInitial = 'd' }: MenubarProps) {
         </div>
       </div>
 
-      <ImportExcelModal open={importOpen} onClose={() => setImportOpen(false)} />
+      <ImportExcelModal
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        onImport={(worksheet) => handleImportSheet(importSheet, worksheet)}
+      />
       <CreateBlankSheetModal
         open={createModalOpen}
         loading={creating}
@@ -126,13 +137,5 @@ export function Menubar({ userInitial = 'd' }: MenubarProps) {
       />
       <ExportExcelModal open={exportOpen} fileName={title} onClose={() => setExportOpen(false)} />
     </header>
-  )
-}
-
-function LockIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
-      <path d="M18 8h-1V6a5 5 0 0 0-10 0v2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2zm-7-2a3 3 0 0 1 6 0v2h-6V6zm7 16H6V10h12v12z" />
-    </svg>
   )
 }

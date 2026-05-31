@@ -13,10 +13,10 @@ export type UpdateCellPayload = {
   style?: Style
 }
 
-// 初始化工作表（name 为文档标题）
+// 初始化工作表
 const initialWorksheet: WorksheetData = {
-  id: '01',
-  name: '未命名表格',
+  sheetId: '01',
+  sheetName: 'Sheet1',
   defaultRowHeight: 25,
   defaultColWidth: 100,
   rowCount: 1000,

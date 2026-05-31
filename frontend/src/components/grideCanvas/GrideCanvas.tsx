@@ -355,6 +355,7 @@ function GrideCanvas(
           start: { row: state.selection.row, col: state.selection.col },
           end: { row: state.selection.row, col: state.selection.col },
         } satisfies RenderGridOptions['selection']),
+      activeCell: { row: state.selection.row, col: state.selection.col },
     }
   }, [reduxStore])
 
@@ -545,7 +546,7 @@ function GrideCanvas(
 
   const maxScrollX = Math.max(0, scrollUi.sheetWidth - scrollUi.dataViewportWidth)
   const maxScrollY = Math.max(0, scrollUi.sheetHeight - scrollUi.dataViewportHeight)
-  const canvasClass = 'absolute inset-0 h-full w-full touch-none'
+  const canvasClass = 'absolute inset-0 h-full w-full touch-none outline-none focus:outline-none'
 
   return (
     <div className="absolute inset-0 flex flex-col bg-[#f8f9fa]">

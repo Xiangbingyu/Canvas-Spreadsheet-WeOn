@@ -2,7 +2,7 @@
 // 输入工作表、视口和选区快照，输出绘制到各层画布的像素。
 
 import type { WorksheetData } from '@/spreadsheet/model/types'
-import type { SelectionRange } from '@/spreadsheet/model/selection'
+import type { CellCoord, SelectionRange } from '@/spreadsheet/model/selection'
 import { colNumberToLetters, GRID_CHROME } from '@/spreadsheet/utils/coordinates'
 import { fitTextToWidth, measureTextCached } from './textMeasureCache'
 import {
@@ -28,6 +28,7 @@ export type RenderGridOptions = {
   worksheet: WorksheetData
   viewport: Viewport
   selection: GridSelection
+  activeCell: CellCoord | null
 }
 
 type DrawContext = {
@@ -40,6 +41,7 @@ type DrawContext = {
   scrollX: number
   scrollY: number
   selection: GridSelection
+  activeCell: CellCoord | null
 }
 
 const COLORS = {
@@ -52,6 +54,7 @@ const COLORS = {
   selectionBorder: '#1a73e8',
   selectionFill: 'rgba(26, 115, 232, 0.1)',
   fillHandle: '#1a73e8',
+  fillHandleBorder: '#ffffff',
   text: '#202124',
 } as const
 
@@ -78,7 +81,7 @@ function createDrawContext(
   options: RenderGridOptions,
   rangeOverride?: VisibleRange
 ): DrawContext {
-  const { worksheet, viewport, selection } = options
+  const { worksheet, viewport, selection, activeCell } = options
   const rowHeight = worksheet.defaultRowHeight
   const colWidth = worksheet.defaultColWidth
   const range =
@@ -95,6 +98,7 @@ function createDrawContext(
     scrollX: viewport.scrollX,
     scrollY: viewport.scrollY,
     selection,
+    activeCell,
   }
 }
 
@@ -228,6 +232,62 @@ function strokeCellBorder(
   const strokeHeight = Math.max(0, height - inset * 2 - (lineWidth > 1 ? 0 : 1))
   const offset = inset + 0.5
   ctx.strokeRect(x + offset, y + offset, strokeWidth, strokeHeight)
+}
+
+/**
+ * 作用：判断活动单元格是否处于当前选区范围内。
+ * 传入参数：activeCell 为 Redux selection.row/col，rowStart/rowEnd/colStart/colEnd 为规范化后的选区边界。
+ * 返回结果：在范围内返回 true，否则返回 false；只做纯计算，不修改外部状态。
+ */
+function isActiveCellInSelection(
+  activeCell: CellCoord | null,
+  rowStart: number,
+  rowEnd: number,
+  colStart: number,
+  colEnd: number
+): activeCell is CellCoord {
+  return (
+    activeCell !== null &&
+    activeCell.row >= rowStart &&
+    activeCell.row <= rowEnd &&
+    activeCell.col >= colStart &&
+    activeCell.col <= colEnd
+  )
+}
+
+/**
+ * 作用：绘制 Google Sheet 风格的圆形填充柄。
+ * 传入参数：ctx 为 overlay 上下文，selectionRect 为当前选区矩形，viewport 用于判断填充柄是否可见。
+ * 返回结果：无返回值，只在 overlay 层绘制填充点。
+ */
+function drawFillHandle(
+  ctx: CanvasRenderingContext2D,
+  selectionRect: RenderRect,
+  viewport: Viewport
+): void {
+  const radius = 4
+  const centerX = selectionRect.x + selectionRect.width
+  const centerY = selectionRect.y + selectionRect.height
+  const handleRect: RenderRect = {
+    x: centerX - radius,
+    y: centerY - radius,
+    width: radius * 2,
+    height: radius * 2,
+  }
+
+  if (!isRectInDataArea(handleRect, viewport)) {
+    return
+  }
+
+  ctx.save()
+  ctx.beginPath()
+  ctx.arc(centerX, centerY, radius, 0, Math.PI * 2)
+  ctx.fillStyle = COLORS.fillHandle
+  ctx.fill()
+  ctx.lineWidth = 1
+  ctx.strokeStyle = COLORS.fillHandleBorder
+  ctx.stroke()
+  ctx.restore()
 }
 
 /**
@@ -586,7 +646,8 @@ function drawCellTexts(draw: DrawContext): void {
  * 返回结果：无返回值，只绘制 overlay 层。
  */
 function drawSelectionOverlay(draw: DrawContext): void {
-  const { ctx, viewport, selection, worksheet, rowHeight, colWidth, scrollX, scrollY } = draw
+  const { ctx, viewport, selection, activeCell, worksheet, rowHeight, colWidth, scrollX, scrollY } =
+    draw
   if (!selection) {
     return
   }
@@ -628,6 +689,29 @@ function drawSelectionOverlay(draw: DrawContext): void {
     Math.max(0, selectionRect.width - 2),
     Math.max(0, selectionRect.height - 2)
   )
+
+  if (isActiveCellInSelection(activeCell, rowStart, rowEnd, colStart, colEnd)) {
+    const activeRect = getCellRect(
+      activeCell.row,
+      activeCell.col,
+      scrollX,
+      scrollY,
+      rowHeight,
+      colWidth
+    )
+    if (isRectInDataArea(activeRect, viewport)) {
+      strokeCellBorder(
+        ctx,
+        activeRect.x,
+        activeRect.y,
+        activeRect.width,
+        activeRect.height,
+        COLORS.selectionBorder,
+        2
+      )
+    }
+  }
+
   strokeCellBorder(
     ctx,
     selectionRect.x,
@@ -635,20 +719,10 @@ function drawSelectionOverlay(draw: DrawContext): void {
     selectionRect.width,
     selectionRect.height,
     COLORS.selectionBorder,
-    2
+    1
   )
 
-  const handleSize = 6
-  const handleRect: RenderRect = {
-    x: selectionRect.x + selectionRect.width - handleSize / 2,
-    y: selectionRect.y + selectionRect.height - handleSize / 2,
-    width: handleSize,
-    height: handleSize,
-  }
-  if (isRectInDataArea(handleRect, viewport)) {
-    ctx.fillStyle = COLORS.fillHandle
-    ctx.fillRect(handleRect.x, handleRect.y, handleRect.width, handleRect.height)
-  }
+  drawFillHandle(ctx, selectionRect, viewport)
   ctx.restore()
 }
 
