@@ -135,8 +135,10 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
       if (!client) return
       client.setTitle(title, client.currentSeq)
     },
-    importSheet: (snapshot: Snapshot, eventId?: string) =>
-      clientRef.current?.importSheet(snapshot, eventId),
+    importSheet: (snapshot: Snapshot, eventId?: string) => {
+      dispatch(setWorksheet(fromServerSnapshot(snapshot)))
+      clientRef.current?.importSheet(snapshot, eventId)
+    },
     undo: () => clientRef.current?.undo(),
     redo: () => clientRef.current?.redo(),
     getClient: () => clientRef.current,
