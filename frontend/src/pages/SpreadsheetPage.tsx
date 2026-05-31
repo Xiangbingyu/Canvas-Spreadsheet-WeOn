@@ -4,7 +4,7 @@ import { useDispatch } from 'react-redux'
 import { useNavigate, useParams } from 'react-router-dom'
 import { SpreadsheetWorkspace } from '@/components/spreadsheetLayout/SpreadsheetWorkspace'
 import API, { ApiError } from '@/services/httpAPI'
-import { initFromDoc, setWorksheet } from '@/spreadsheet/store'
+import { initFromDoc, setDocTitle, setWorksheet } from '@/spreadsheet/store'
 import { setDocSession } from '@/spreadsheet/store/userStore'
 import { allocateClientId } from '@/spreadsheet/utils/allocateClientId'
 import { fromServerSnapshot } from '@/spreadsheet/utils/fromServerSnapshot'
@@ -27,6 +27,7 @@ export function SpreadsheetPage() {
         const docTitle = doc.title?.trim() || '未命名表格'
         dispatch(initFromDoc({ docTitle, worksheet }))
         dispatch(setWorksheet(worksheet))
+        dispatch(setDocTitle(docTitle))
         dispatch(setDocSession({ docId: doc.docId, clientId: userId }))
       } catch (error) {
         if (cancelled) return

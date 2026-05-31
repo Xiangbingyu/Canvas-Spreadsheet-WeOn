@@ -14,7 +14,13 @@ import {
   type UpdateCellPayload,
 } from './workSheetStore'
 
-import { collabReducer, setDocTitle,setOnlineUsers, setCurrentSeq, setConnectionStatus } from './userStore'
+import {
+  collabReducer,
+  setDocTitle,
+  setOnlineUsers,
+  setCurrentSeq,
+  setConnectionStatus,
+} from './userStore'
 import {
   addSheet,
   initFromDoc,
@@ -22,7 +28,6 @@ import {
   syncActiveSheetCache,
   workbookReducer,
 } from './workbookStore'
-
 
 export const store = configureStore({
   reducer: {
@@ -51,7 +56,6 @@ export {
   setCurrentSeq,
   setConnectionStatus,
   initFromDoc,
-  setDocTitle,
   syncActiveSheetCache,
   switchSheet,
   addSheet,

@@ -23,7 +23,7 @@ export function SpreadsheetWorkspace() {
   const docId = useSelector((s: RootState) => s.collab.docId)
   const clientId = useSelector((s: RootState) => s.collab.clientId)
 
-  const { connect, disconnect, setCell, importSheet } = useCollab({
+  const { connect, disconnect, setCell, setTitle, importSheet } = useCollab({
     url: COLLAB_WS_URL,
     docId,
     clientId,
@@ -63,7 +63,7 @@ export function SpreadsheetWorkspace() {
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-white font-[Roboto,Arial,sans-serif]">
-      <Menubar importSheet={importSheet} />
+      <Menubar importSheet={importSheet} onSetTitle={setTitle} />
       <Toolbar onCommitCell={commitWithHistory} onUndo={undo} onRedo={redo} />
       <FormulaBar value={formulaBarValue} onCommitCell={commitWithHistory} />
 

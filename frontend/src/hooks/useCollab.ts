@@ -17,8 +17,8 @@ import {
   setCurrentSeq,
   setConnectionStatus,
 } from '@/spreadsheet/store'
-import { fromServerSnapshot } from '@/spreadsheet/utils/fromServerSnapshot'
-import type { Style } from '@/spreadsheet/model/types'
+import { fromServerSnapshot, toServerSnapshot } from '@/spreadsheet/utils/fromServerSnapshot'
+import type { Style, WorksheetData } from '@/spreadsheet/model/types'
 
 interface UseCollabOptions {
   url: string
@@ -131,13 +131,18 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
       client.setCell(row, col, value, style, client.currentSeq)
     },
     setTitle: (title: string) => {
+      const trimmed = title.trim() || '未命名表格'
+      dispatch(setDocTitle(trimmed))
       const client = clientRef.current
       if (!client) return
-      client.setTitle(title, client.currentSeq)
+      client.setTitle(trimmed, client.currentSeq)
     },
-    importSheet: (snapshot: Snapshot, eventId?: string) => {
-      dispatch(setWorksheet(fromServerSnapshot(snapshot)))
-      clientRef.current?.importSheet(snapshot, eventId)
+    importSheet: (worksheet: WorksheetData, eventId?: string): boolean => {
+      dispatch(setWorksheet(worksheet))
+      const client = clientRef.current
+      if (!client) return false
+      client.importSheet(toServerSnapshot(worksheet) as Snapshot, eventId)
+      return true
     },
     undo: () => clientRef.current?.undo(),
     redo: () => clientRef.current?.redo(),

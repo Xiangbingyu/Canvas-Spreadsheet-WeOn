@@ -1,5 +1,5 @@
 import { message } from 'antd'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useSelector } from 'react-redux'
 import { useNavigate } from 'react-router-dom'
 import { CreateBlankSheetModal } from '@/components/startUI/CreateBlankSheetModal'
@@ -8,36 +8,46 @@ import { ExportExcelModal } from './ExportExcelModal'
 import { ImportExcelModal } from './ImportExcelModal'
 import type { RootState } from '@/spreadsheet/store'
 import { buildDocShareUrl } from '@/spreadsheet/utils/shareLink'
-import type { Snapshot } from '@/spreadsheet/collab/protocol'
-import { toServerSnapshot } from '@/spreadsheet/utils/fromServerSnapshot'
 import type { WorksheetData } from '@/spreadsheet/model/types'
 
 type MenubarProps = {
   userInitial?: string
-  importSheet: (snapshot: Snapshot, eventId?: string) => void
-}
-
-function handleImportSheet(importSheet: MenubarProps['importSheet'], worksheet: WorksheetData) {
-  importSheet(toServerSnapshot(worksheet) as Snapshot)
+  importSheet: (worksheet: WorksheetData, eventId?: string) => boolean
+  /** 提交文档标题（WS set_title）；缺省时标题只读 */
+  onSetTitle?: (title: string) => void
 }
 
 const menuBtnClass = 'rounded px-2 py-0.5 text-[13px] leading-6 text-[#202124] hover:bg-[#f1f3f4]'
 
-export function Menubar({ userInitial = 'd', importSheet }: MenubarProps) {
+const DEFAULT_DOC_TITLE = '未命名表格'
+
+export function Menubar({ userInitial = 'd', importSheet, onSetTitle }: MenubarProps) {
   const navigate = useNavigate()
   const clientId = useSelector((s: RootState) => s.collab.clientId) || 'system'
   const docId = useSelector((s: RootState) => s.collab.docId)
-  const docTitle = useSelector((s: RootState) => s.workbook.docTitle)
-  const [title, setTitle] = useState(docTitle)
-  const [prevDocTitle, setPrevDocTitle] = useState(docTitle)
+  const docTitle = useSelector((s: RootState) => s.collab.docTitle)
+  const [draft, setDraft] = useState(docTitle)
+  const [focused, setFocused] = useState(false)
+  const titleInputRef = useRef<HTMLInputElement>(null)
   const [importOpen, setImportOpen] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
   const [createModalOpen, setCreateModalOpen] = useState(false)
   const [creating, setCreating] = useState(false)
+  const editable = !!onSetTitle
+  const displayTitle = focused ? draft : docTitle
 
-  if (docTitle !== prevDocTitle) {
-    setPrevDocTitle(docTitle)
-    setTitle(docTitle)
+  const commitTitle = () => {
+    setFocused(false)
+    if (!onSetTitle) return
+    const next = draft.trim() || DEFAULT_DOC_TITLE
+    if (next === docTitle) return
+    onSetTitle(next)
+  }
+
+  const cancelTitle = () => {
+    setFocused(false)
+    setDraft(docTitle)
+    titleInputRef.current?.blur()
   }
 
   async function handleShare() {
@@ -83,9 +93,26 @@ export function Menubar({ userInitial = 'd', importSheet }: MenubarProps) {
 
         <div className="flex min-w-0 flex-1 flex-col justify-center gap-0">
           <input
+            ref={titleInputRef}
             type="text"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
+            readOnly={!editable}
+            value={displayTitle}
+            onChange={(e) => setDraft(e.target.value)}
+            onFocus={() => {
+              setDraft(docTitle)
+              setFocused(true)
+            }}
+            onBlur={commitTitle}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                commitTitle()
+                titleInputRef.current?.blur()
+              } else if (e.key === 'Escape') {
+                e.preventDefault()
+                cancelTitle()
+              }
+            }}
             aria-label="文档标题"
             className="h-7 w-full min-w-0 max-w-md truncate border-0 bg-transparent text-[20px] leading-7 font-normal text-[#202124] outline-none ring-0 focus:rounded-sm focus:bg-[#f1f3f4] focus:px-2 focus:-ml-2"
           />
@@ -127,7 +154,7 @@ export function Menubar({ userInitial = 'd', importSheet }: MenubarProps) {
       <ImportExcelModal
         open={importOpen}
         onClose={() => setImportOpen(false)}
-        onImport={(worksheet) => handleImportSheet(importSheet, worksheet)}
+        onImport={(worksheet) => importSheet(worksheet)}
       />
       <CreateBlankSheetModal
         open={createModalOpen}
@@ -135,7 +162,11 @@ export function Menubar({ userInitial = 'd', importSheet }: MenubarProps) {
         onClose={() => setCreateModalOpen(false)}
         onConfirm={(sheetTitle) => void handleCreateBlankSheet(sheetTitle)}
       />
-      <ExportExcelModal open={exportOpen} fileName={title} onClose={() => setExportOpen(false)} />
+      <ExportExcelModal
+        open={exportOpen}
+        fileName={docTitle}
+        onClose={() => setExportOpen(false)}
+      />
     </header>
   )
 }
