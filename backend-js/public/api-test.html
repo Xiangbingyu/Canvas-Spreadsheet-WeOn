@@ -316,11 +316,11 @@
         </div>
         <div class="hero-card">
           <div class="hero-label">HTTP endpoints</div>
-          <div class="hero-value">4 callable routes</div>
+          <div class="hero-value">5 callable routes</div>
         </div>
         <div class="hero-card">
           <div class="hero-label">WebSocket message types</div>
-          <div class="hero-value">join, presence, set_cell, set_title, import_sheet, undo, redo</div>
+          <div class="hero-value">join, presence, set_cell, set_title, add_sheet, import_sheet, undo, redo</div>
         </div>
       </div>
     </section>
@@ -540,11 +540,12 @@
       {
         title: 'Set Cell',
         type: 'set_cell',
-        description: 'Write a cell value and optional style. row and col are 1-based integers.',
+        description: 'Write a cell value and optional style to the specified sheet. row and col are 1-based integers.',
         template: {
           type: 'set_cell',
           docId: 'doc_sys_001',
           clientId: 'user_001',
+          sheetId: 'sheet_20260527_001',
           row: 1,
           col: 1,
           value: 'Hello from test page',
@@ -567,27 +568,44 @@
         },
       },
       {
+        title: 'Add Sheet',
+        type: 'add_sheet',
+        description: 'Create a new empty sheet, append it to sheetOrder and switch activeSheetId to the new sheet.',
+        template: {
+          type: 'add_sheet',
+          docId: 'doc_sys_001',
+          clientId: 'user_001',
+          sheetName: 'New Sheet From Test Page',
+        },
+      },
+      {
         title: 'Import Sheet',
         type: 'import_sheet',
-        description: 'Replace a document snapshot with a full sheet payload.',
+        description: 'Replace a document snapshot with a full workbook payload.',
         template: {
           type: 'import_sheet',
           docId: 'doc_sys_001',
           clientId: 'user_001',
           eventId: 'evt_import_test_001',
           snapshot: {
-            id: 'sheet_import_001',
-            name: 'Imported Sheet',
-            defaultRowHeight: 25,
-            defaultColWidth: 100,
-            rowCount: 2,
-            colCount: 2,
-            styles: {},
-            cells: {
-              '0:0': { row: 0, col: 0, value: 'Name' },
-              '0:1': { row: 0, col: 1, value: 'Value' },
-              '1:0': { row: 1, col: 0, value: 'Status' },
-              '1:1': { row: 1, col: 1, value: 'Imported' },
+            activeSheetId: 'sheet_import_001',
+            sheetOrder: ['sheet_import_001'],
+            sheets: {
+              sheet_import_001: {
+                id: 'sheet_import_001',
+                name: 'Imported Sheet',
+                defaultRowHeight: 25,
+                defaultColWidth: 100,
+                rowCount: 2,
+                colCount: 2,
+                styles: {},
+                cells: {
+                  '0:0': { row: 0, col: 0, value: 'Name' },
+                  '0:1': { row: 0, col: 1, value: 'Value' },
+                  '1:0': { row: 1, col: 0, value: 'Status' },
+                  '1:1': { row: 1, col: 1, value: 'Imported' },
+                },
+              },
             },
           },
         },

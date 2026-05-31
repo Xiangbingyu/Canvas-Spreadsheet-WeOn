@@ -23,10 +23,35 @@ function normalizeCellState(state = {}) {
   };
 }
 
-function getCurrentCellState(doc, row, col) {
+function resolveSheetFromDoc(doc, preferredSheetId = null) {
   const snapshot = doc && doc.snapshotJson ? doc.snapshotJson : {};
-  const cells = snapshot.cells || {};
-  const styles = snapshot.styles || {};
+  const hasPreferredSheetId = typeof preferredSheetId === 'string' && preferredSheetId;
+  const requestedSheetId = hasPreferredSheetId ? preferredSheetId : snapshot.activeSheetId;
+  const sheets = snapshot.sheets || {};
+  const sheetId = requestedSheetId && sheets[requestedSheetId]
+    ? requestedSheetId
+    : (hasPreferredSheetId ? null : Object.keys(sheets)[0]);
+  const sheet = sheetId ? sheets[sheetId] || null : null;
+
+  return {
+    requestedSheetId,
+    sheetId: sheet ? sheet.id : null,
+    sheet: sheet || null,
+  };
+}
+
+function getCurrentCellState(doc, row, col, sheetId = null) {
+  const { sheet, requestedSheetId } = resolveSheetFromDoc(doc, sheetId);
+
+  if (!sheet && requestedSheetId) {
+    throw createServiceError(ERROR_CODES.INVALID_PARAMS, `sheet not found: ${requestedSheetId}`, {
+      docId: doc && doc.docId ? doc.docId : null,
+      sheetId: requestedSheetId,
+    });
+  }
+
+  const cells = sheet && sheet.cells ? sheet.cells : {};
+  const styles = sheet && sheet.styles ? sheet.styles : {};
   const cell = cells[`${row}:${col}`] || {};
   const styleId = typeof cell.styleId === 'string' ? cell.styleId : null;
 
@@ -36,8 +61,9 @@ function getCurrentCellState(doc, row, col) {
   });
 }
 
-function isSameCellTouched(historyEntry, row, col) {
+function isSameCellTouched(historyEntry, sheetId, row, col) {
   return historyEntry
+    && (historyEntry.targetSheetId || null) === (sheetId || null)
     && historyEntry.targetRow === row
     && historyEntry.targetCol === col;
 }
@@ -71,10 +97,10 @@ async function resolveUndoRedoOperation({
     });
   }
 
-  const currentState = getCurrentCellState(currentDoc, entry.row, entry.col);
-  const normalizedDesiredState = normalizeCellState(desiredState);
-
   if (referenceSeq === currentDoc.currentSeq) {
+    const currentState = getCurrentCellState(currentDoc, entry.row, entry.col, entry.sheetId);
+    const normalizedDesiredState = normalizeCellState(desiredState);
+
     return {
       sourceSeq: referenceSeq,
       baseSeq: currentDoc.currentSeq,
@@ -104,7 +130,9 @@ async function resolveUndoRedoOperation({
     });
   }
 
-  const sameCellTouched = historyEntries.some((historyEntry) => isSameCellTouched(historyEntry, entry.row, entry.col));
+  const currentState = getCurrentCellState(currentDoc, entry.row, entry.col, entry.sheetId);
+  const normalizedDesiredState = normalizeCellState(desiredState);
+  const sameCellTouched = historyEntries.some((historyEntry) => isSameCellTouched(historyEntry, entry.sheetId, entry.row, entry.col));
   const targetState = sameCellTouched ? currentState : normalizedDesiredState;
 
   return {
@@ -122,6 +150,7 @@ function createAppliedStackEntry({
   sourceSeq,
   docId,
   clientId,
+  sheetId = null,
   row,
   col,
   beforeState,
@@ -135,6 +164,7 @@ function createAppliedStackEntry({
     docId,
     clientId,
     opType: 'set_cell',
+    sheetId,
     row,
     col,
     oldValue: normalizedBeforeState.value,
@@ -148,6 +178,7 @@ function createRedoStackEntry({
   sourceSeq,
   docId,
   clientId,
+  sheetId = null,
   row,
   col,
   beforeState,
@@ -157,6 +188,7 @@ function createRedoStackEntry({
     sourceSeq,
     docId,
     clientId,
+    sheetId,
     row,
     col,
     beforeState: afterState,

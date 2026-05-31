@@ -5,6 +5,7 @@ const AUDIT_EVENT_TYPES = {
   PRESENCE: 'presence',
   SET_CELL: 'set_cell',
   SET_TITLE: 'set_title',
+  ADD_SHEET: 'add_sheet',
   IMPORT_SHEET: 'import_sheet',
   UNDO: 'undo',
   REDO: 'redo',

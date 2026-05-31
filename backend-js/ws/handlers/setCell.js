@@ -7,17 +7,28 @@ function isValidCellPosition(value) {
   return Number.isInteger(value) && value >= 1;
 }
 
-async function handleSetCell({ socket, message, reply, broadcastToRoom }) {
-  const { docId, clientId } = message;
+function isValidSheetId(value) {
+  return typeof value === 'string' && value.trim();
+}
 
-  if (
+async function handleSetCell({ socket, message, reply, broadcastToRoom }) {
+  const { docId, clientId, sheetId } = message;
+  const hasValidParams = (
     typeof docId === 'string'
     && docId.trim()
     && typeof clientId === 'string'
     && clientId.trim()
+    && isValidSheetId(sheetId)
     && isValidCellPosition(message.row)
     && isValidCellPosition(message.col)
-  ) {
+  );
+
+  if (!hasValidParams) {
+    reply(createWsError(ERROR_CODES.INVALID_PARAMS, 'docId, clientId, sheetId, row and col are required'));
+    return;
+  }
+
+  if (hasValidParams) {
     const membership = await roomService.getSocketMembership(socket);
     const hasJoinedCurrentRoom = Boolean(
       membership
@@ -33,7 +44,10 @@ async function handleSetCell({ socket, message, reply, broadcastToRoom }) {
   }
 
   try {
-    const responseData = await cellService.applySetCell(message);
+    const responseData = await cellService.applySetCell({
+      ...message,
+      sheetId: sheetId.trim(),
+    });
     const payload = createWsSuccess('cell_updated', responseData);
     reply(payload);
     await broadcastToRoom(responseData.docId, payload);

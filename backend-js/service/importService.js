@@ -6,6 +6,7 @@ const docsService = require('./docsService');
 const historyStore = require('../store/historyStore');
 const userOpStateStore = require('../store/userOpStateStore');
 const auditService = require('../audit/auditService');
+const { normalizeDocSnapshot } = require('../domain/entities/doc');
 
 function createServiceError(code, message, details = null) {
   const error = new Error(message);
@@ -20,16 +21,18 @@ function isValidSnapshot(snapshot) {
 
 function normalizeImportSheetCommand(command = {}) {
   const { docId, clientId, snapshot, snapshotJson, eventId } = command;
-  const normalizedSnapshot = snapshotJson || snapshot;
+  const rawSnapshot = snapshotJson || snapshot;
 
-  if (typeof docId !== 'string' || !docId.trim() || typeof clientId !== 'string' || !clientId.trim() || !isValidSnapshot(normalizedSnapshot)) {
+  if (typeof docId !== 'string' || !docId.trim() || typeof clientId !== 'string' || !clientId.trim() || !isValidSnapshot(rawSnapshot)) {
     throw createServiceError(ERROR_CODES.INVALID_PARAMS, 'docId, clientId and snapshot are required');
   }
 
+  const normalizedDocId = docId.trim();
+
   return {
-    docId: docId.trim(),
+    docId: normalizedDocId,
     clientId: clientId.trim(),
-    snapshot: normalizedSnapshot,
+    snapshot: normalizeDocSnapshot(rawSnapshot, { docId: normalizedDocId }),
     eventId,
   };
 }
