@@ -9,11 +9,19 @@ export type Snapshot = WorksheetData
 export type CellStyle = Style
 export type { Cell }
 
-export type ClientMessageType = 'join' | 'set_cell' | 'import_sheet' | 'presence' | 'undo' | 'redo'
+export type ClientMessageType =
+  | 'join'
+  | 'set_cell'
+  | 'set_title'
+  | 'import_sheet'
+  | 'presence'
+  | 'undo'
+  | 'redo'
 
 export type ServerMessageType =
   | 'join_ack'
   | 'cell_updated'
+  | 'title_updated'
   | 'sheet_imported'
   | 'presence'
   | 'undo_applied'
@@ -36,8 +44,17 @@ export interface SetCellRequest {
   clientId: string
   row: number // 1-indexed
   col: number // 1-indexed
-  value?: string
-  style?: Record<string, unknown> | null
+  value: string
+  style: Record<string, unknown> | null
+  baseSeq: number
+}
+
+export interface SetTitleRequest {
+  type: 'set_title'
+  docId: string
+  clientId: string
+  title: string
+  baseSeq: number
 }
 
 export interface ImportSheetRequest {
@@ -63,6 +80,7 @@ export interface RedoRequest {
 export type WsRequest =
   | JoinRequest
   | SetCellRequest
+  | SetTitleRequest
   | ImportSheetRequest
   | UndoRequest
   | RedoRequest
@@ -99,6 +117,18 @@ export interface CellUpdated {
   }
 }
 
+export interface TitleUpdated {
+  type: 'title_updated'
+  code: 0
+  message: 'ok'
+  data: {
+    docId: string
+    clientId: string
+    seq: number
+    title: string
+  }
+}
+
 export interface SheetImported {
   type: 'sheet_imported'
   code: 0
@@ -107,6 +137,7 @@ export interface SheetImported {
     docId: string
     clientId: string
     seq: number
+    snapshot: Snapshot
     canUndo: boolean
     canRedo: boolean
   }
@@ -148,7 +179,7 @@ export interface PresenceMessage {
 
 export interface ErrorMessage {
   type: 'error'
-  code: number // 4000 | 4001 | 4003 | 4004 | 5000
+  code: number // 4000 | 4001 | 4003 | 4004 | 4090 | 5000
   message: string
   data: null
 }
@@ -156,6 +187,7 @@ export interface ErrorMessage {
 export type WsResponse =
   | JoinAck
   | CellUpdated
+  | TitleUpdated
   | SheetImported
   | PresenceMessage
   | UndoApplied
@@ -183,5 +215,6 @@ export const ERROR_CODES = {
   UNSUPPORTED_MESSAGE_TYPE: 4001,
   FORBIDDEN: 4003,
   DOCUMENT_NOT_FOUND: 4004,
+  CONFLICT: 4090,
   INTERNAL_ERROR: 5000,
 } as const
