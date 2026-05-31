@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react'
-import { useRef } from 'react'
-import { useSelector } from 'react-redux'
+import { useEffect, useRef, useState } from 'react'
+import { useDispatch, useSelector } from 'react-redux'
 import { IconButton } from '@/components/IconButton/IconButton'
+import { setSelectedCell } from '@/spreadsheet/store/selectStore'
 import type { RootState } from '@/spreadsheet/store'
 import type { Style } from '@/spreadsheet/model/types'
 import type { CommitCellFn } from '@/hooks/useSpreadsheetInteraction'
@@ -9,6 +10,15 @@ import type { CommitCellFn } from '@/hooks/useSpreadsheetInteraction'
 export interface ToolbarProps {
   /** 提交单元格样式（走协同链路）。缺省时按钮为只读，不直接改 Redux。 */
   onCommitCell?: CommitCellFn
+  /** 批量提交函数：多个单元格的修改作为一个原子操作 */
+  onCommitBatch?: (
+    updates: Array<{
+      row: number
+      col: number
+      value: string
+      style?: import('@/spreadsheet/model/types').Style
+    }>
+  ) => void
   /** 撤销 / 重做（本地历史栈） */
   onUndo?: () => void
   onRedo?: () => void
@@ -18,7 +28,8 @@ function Divider() {
   return <span className="mx-0.5 h-5 w-px shrink-0 bg-[#dadce0]" aria-hidden />
 }
 
-const FONT_SIZES = [8, 9, 10, 11, 12, 14, 16, 18, 20, 24]
+const FONT_SIZE_MIN = 8
+const FONT_SIZE_MAX = 96
 
 const formatBtnClass =
   'inline-flex h-7 min-w-7 shrink-0 items-center justify-center rounded-sm text-[#3c4043] hover:bg-[#e8eaed] active:bg-[#f0f4f9]'
@@ -53,7 +64,12 @@ function FormatButton({
   )
 }
 
-function FontSizeSelect({
+/**
+ * 字号输入框：可显示任意字号，支持手动输入。
+ * 用本地草稿状态承接编辑过程，避免每敲一个字符就提交；
+ * 失焦或回车时夹取到 [8, 96] 区间再提交。外部 value 变化（+/- 按钮、切换选区）会同步回草稿。
+ */
+function FontSizeInput({
   value,
   disabled = false,
   onChange,
@@ -62,20 +78,45 @@ function FontSizeSelect({
   disabled?: boolean
   onChange?: (size: number) => void
 }) {
+  const [draft, setDraft] = useState(String(value))
+  const prevValueRef = useRef(value)
+
+  // 外部 value 变化时同步草稿（+/- 步进、切换选区）
+  useEffect(() => {
+    if (prevValueRef.current !== value) {
+      prevValueRef.current = value
+      setDraft(String(value))
+    }
+  }, [value])
+
+  const commit = () => {
+    const parsed = Number(draft)
+    if (!Number.isFinite(parsed) || draft.trim() === '') {
+      setDraft(String(value)) // 非法输入回退
+      return
+    }
+    const clamped = Math.min(FONT_SIZE_MAX, Math.max(FONT_SIZE_MIN, Math.round(parsed)))
+    setDraft(String(clamped))
+    if (clamped !== value) onChange?.(clamped)
+  }
+
   return (
-    <select
-      className="h-7 w-12 cursor-default rounded border-0 bg-transparent px-1 text-center text-[13px] text-[#202124] hover:bg-[#e8eaed] disabled:opacity-40"
-      value={value}
+    <input
+      type="text"
+      inputMode="numeric"
+      className="h-7 w-12 rounded border-0 bg-transparent px-1 text-center text-[13px] text-[#202124] hover:bg-[#e8eaed] disabled:opacity-40"
+      value={draft}
       disabled={disabled}
-      onChange={(e) => onChange?.(Number(e.target.value))}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          commit()
+          e.currentTarget.blur()
+        }
+      }}
       aria-label="字号"
-    >
-      {FONT_SIZES.map((size) => (
-        <option key={size} value={size}>
-          {size}
-        </option>
-      ))}
-    </select>
+    />
   )
 }
 
@@ -125,7 +166,8 @@ function TextColorMark({ barColor = '#202124' }: { barColor?: string }) {
 
 const DEFAULT_FONT_SIZE = 10
 
-export function Toolbar({ onCommitCell, onUndo, onRedo }: ToolbarProps) {
+export function Toolbar({ onCommitCell, onCommitBatch, onUndo, onRedo }: ToolbarProps) {
+  const dispatch = useDispatch()
   const selection = useSelector((s: RootState) => s.selection)
   const worksheet = useSelector((s: RootState) => s.workSheet)
   // 读取当前选中格的「已提交」值与样式，直接取自 workSheet，
@@ -145,14 +187,54 @@ export function Toolbar({ onCommitCell, onUndo, onRedo }: ToolbarProps) {
     const minCol = Math.min(start.col, end.col)
     const maxCol = Math.max(start.col, end.col)
 
-    // 遍历选中范围内的所有单元格
+    // 收集所有需要更新的单元格
+    const updates: Array<{ row: number; col: number; value: string; style: Style }> = []
     for (let row = minRow; row <= maxRow; row++) {
       for (let col = minCol; col <= maxCol; col++) {
         const cell = worksheet.cells[`${row}:${col}`]
         const cellStyle: Style = cell?.styleId ? (worksheet.styles[cell.styleId] ?? {}) : {}
         const cellValue = cell?.value ?? ''
         const next: Style = { ...cellStyle, ...patch }
-        onCommitCell(row, col, cellValue, next)
+        updates.push({ row, col, value: cellValue, style: next })
+      }
+    }
+
+    // 如果只有一个单元格，直接用 onCommitCell；否则用批量提交
+    if (updates.length === 1) {
+      const { row, col, value, style } = updates[0]
+      onCommitCell(row, col, value, style)
+      // 立即更新 selectStore，保证 Toolbar 显示的值同步
+      dispatch(setSelectedCell({ row, col, value, style }))
+    } else if (onCommitBatch) {
+      onCommitBatch(updates)
+      // 批量提交后，更新 selectStore 中 active cell 的样式
+      const activeCell = updates.find((u) => u.row === selection.row && u.col === selection.col)
+      if (activeCell) {
+        dispatch(
+          setSelectedCell({
+            row: activeCell.row,
+            col: activeCell.col,
+            value: activeCell.value,
+            style: activeCell.style,
+          })
+        )
+      }
+    } else {
+      // 降级：没有批量提交函数时，逐个提交（会产生多个历史记录）
+      for (const { row, col, value, style } of updates) {
+        onCommitCell(row, col, value, style)
+      }
+      // 更新 selectStore
+      const activeCell = updates.find((u) => u.row === selection.row && u.col === selection.col)
+      if (activeCell) {
+        dispatch(
+          setSelectedCell({
+            row: activeCell.row,
+            col: activeCell.col,
+            value: activeCell.value,
+            style: activeCell.style,
+          })
+        )
       }
     }
   }
@@ -174,12 +256,14 @@ export function Toolbar({ onCommitCell, onUndo, onRedo }: ToolbarProps) {
         label="减小字号"
         disabled={disabled}
         onClick={() =>
-          commitStyle({ fontSize: Math.max(8, (style.fontSize ?? DEFAULT_FONT_SIZE) - 1) })
+          commitStyle({
+            fontSize: Math.max(FONT_SIZE_MIN, (style.fontSize ?? DEFAULT_FONT_SIZE) - 1),
+          })
         }
       >
         −
       </IconButton>
-      <FontSizeSelect
+      <FontSizeInput
         value={style.fontSize ?? DEFAULT_FONT_SIZE}
         disabled={disabled}
         onChange={(size) => commitStyle({ fontSize: size })}
@@ -188,7 +272,9 @@ export function Toolbar({ onCommitCell, onUndo, onRedo }: ToolbarProps) {
         label="增大字号"
         disabled={disabled}
         onClick={() =>
-          commitStyle({ fontSize: Math.min(96, (style.fontSize ?? DEFAULT_FONT_SIZE) + 1) })
+          commitStyle({
+            fontSize: Math.min(FONT_SIZE_MAX, (style.fontSize ?? DEFAULT_FONT_SIZE) + 1),
+          })
         }
       >
         +

@@ -15,7 +15,7 @@ export function SpreadsheetPage() {
   const onCommitCell = useCommitCell()
 
   // 统一的撤销/重做：支持单元格编辑和行列操作；Ctrl+Z / Ctrl+Shift+Z
-  const { commitWithHistory, executeRowColWithHistory, undo, redo } =
+  const { commitWithHistory, commitBatchWithHistory, executeRowColWithHistory, undo, redo } =
     useUnifiedHistory(onCommitCell)
 
   const {
@@ -36,7 +36,12 @@ export function SpreadsheetPage() {
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-white font-[Roboto,Arial,sans-serif]">
       <Menubar />
-      <Toolbar onCommitCell={commitWithHistory} onUndo={undo} onRedo={redo} />
+      <Toolbar
+        onCommitCell={commitWithHistory}
+        onCommitBatch={commitBatchWithHistory}
+        onUndo={undo}
+        onRedo={redo}
+      />
       <FormulaBar value={formulaBarValue} onCommitCell={commitWithHistory} />
 
       <div className="relative min-h-0 flex-1 overflow-hidden">

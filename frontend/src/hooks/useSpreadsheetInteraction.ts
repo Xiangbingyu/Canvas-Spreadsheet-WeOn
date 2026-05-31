@@ -232,6 +232,11 @@ export function useSpreadsheetInteraction(options: UseSpreadsheetInteractionOpti
     const colWidth = worksheet.defaultColWidth
     const x = GRID_CHROME.headerColWidth + (editingCell.col - 1) * colWidth - scroll.x
     const y = GRID_CHROME.headerRowHeight + (editingCell.row - 1) * rowHeight - scroll.y
+
+    // 从当前单元格读取样式
+    const cell = worksheet.cells[`${editingCell.row}:${editingCell.col}`]
+    const cellStyle = cell?.styleId ? worksheet.styles[cell.styleId] : undefined
+
     return {
       position: 'absolute',
       left: x + 1,
@@ -241,15 +246,28 @@ export function useSpreadsheetInteraction(options: UseSpreadsheetInteractionOpti
       border: '2px solid #1a73e8',
       outline: 'none',
       padding: '0 4px',
-      fontSize: '13px',
+      fontSize: cellStyle?.fontSize ? `${cellStyle.fontSize}px` : '13px',
+      fontFamily: cellStyle?.fontFamily ?? 'Roboto, Arial, sans-serif',
+      fontWeight: cellStyle?.bold ? 'bold' : 'normal',
+      fontStyle: cellStyle?.italic ? 'italic' : 'normal',
+      textDecoration: cellStyle?.underline ? 'underline' : 'none',
+      color: cellStyle?.color ?? '#202124',
+      backgroundColor: cellStyle?.bgColor ?? '#fff',
+      textAlign: cellStyle?.hAlign ?? 'left',
       lineHeight: `${rowHeight - 6}px`,
       zIndex: 100,
       resize: 'none',
       overflow: 'hidden',
       boxSizing: 'border-box',
-      background: '#fff',
     }
-  }, [editingCell, worksheet.defaultRowHeight, worksheet.defaultColWidth, scroll])
+  }, [
+    editingCell,
+    worksheet.defaultRowHeight,
+    worksheet.defaultColWidth,
+    scroll,
+    worksheet.cells,
+    worksheet.styles,
+  ])
 
   const onScrollChange = useCallback((x: number, y: number) => {
     setScroll((prev) => (prev.x === x && prev.y === y ? prev : { x, y }))

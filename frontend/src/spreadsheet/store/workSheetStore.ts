@@ -63,7 +63,6 @@ const workSheetSlice = createSlice({
         } else {
           delete state.cells[key]
         }
-        console.log('[updateCell] 空单元格设置样式后，state.cells[key]:', state.cells[key])
         return
       }
       //
@@ -84,7 +83,6 @@ const workSheetSlice = createSlice({
       }
       //更新单元格数据
       state.cells[key] = nextCell
-      console.log('[updateCell] 非空单元格设置样式后，state.cells[key]:', state.cells[key])
     },
 
     /** 在指定行前插入一行 */

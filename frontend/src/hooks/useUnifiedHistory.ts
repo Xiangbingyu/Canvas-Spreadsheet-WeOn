@@ -12,6 +12,7 @@ import {
   type CellOperation,
   type CellSnapshot,
   type RowColOperation,
+  type BatchCellOperation,
 } from '@/spreadsheet/history'
 import { insertRow, deleteRow, insertCol, deleteCol } from '@/spreadsheet/store/workSheetStore'
 import type { RootState } from '@/spreadsheet/store'
@@ -22,6 +23,10 @@ import type { CommitCellFn } from '@/hooks/useSpreadsheetInteraction'
 export interface UseUnifiedHistoryResult {
   /** 包装后的提交函数：执行写入并记录历史。替代直接调用 onCommitCell。 */
   commitWithHistory: CommitCellFn
+  /** 批量提交函数：多个单元格的修改作为一个原子操作 */
+  commitBatchWithHistory: (
+    updates: Array<{ row: number; col: number; value: string; style?: Style }>
+  ) => void
   /** 行列操作的包装函数 */
   executeRowColWithHistory: (
     action: 'insert_row' | 'delete_row' | 'insert_col' | 'delete_col',
@@ -103,6 +108,23 @@ export function useUnifiedHistory(onCommitCell?: CommitCellFn): UseUnifiedHistor
     [readSnapshot, rawCommit]
   )
 
+  // 批量提交入口：多个单元格的修改作为一个原子操作
+  const commitBatchWithHistory = useCallback(
+    (updates: Array<{ row: number; col: number; value: string; style?: Style }>) => {
+      const operations: CellOperation[] = []
+      for (const { row, col, value, style } of updates) {
+        const before = readSnapshot(row, col)
+        rawCommit(row, col, value, style)
+        const after: CellSnapshot = { value, style: style ?? before.style }
+        operations.push({ row, col, before, after })
+      }
+      if (operations.length > 0) {
+        historyRef.current.push({ type: 'batch_cell', operations })
+      }
+    },
+    [readSnapshot, rawCommit]
+  )
+
   // 行列操作入口
   const executeRowColWithHistory = useCallback(
     (action: 'insert_row' | 'delete_row' | 'insert_col' | 'delete_col', index: number) => {
@@ -165,11 +187,21 @@ export function useUnifiedHistory(onCommitCell?: CommitCellFn): UseUnifiedHistor
     console.log('[useUnifiedHistory] popped operation:', op)
     if (!op) return
 
-    if ('before' in op) {
-      // 单元格操作
+    if ('before' in op && 'after' in op) {
+      // 单个单元格操作
       const cellOp = op as CellOperation
       console.log('[useUnifiedHistory] replaying cell undo')
       replayCellOp(cellOp, cellOp.before)
+    } else if ('type' in op && op.type === 'batch_cell') {
+      // 批量单元格操作
+      const batchOp = op as BatchCellOperation
+      console.log(
+        '[useUnifiedHistory] replaying batch cell undo, count:',
+        batchOp.operations.length
+      )
+      for (const cellOp of batchOp.operations) {
+        replayCellOp(cellOp, cellOp.before)
+      }
     } else if ('type' in op) {
       // 行列操作
       const rowColOp = op as RowColOperation
@@ -193,11 +225,21 @@ export function useUnifiedHistory(onCommitCell?: CommitCellFn): UseUnifiedHistor
     console.log('[useUnifiedHistory] popped redo operation:', op)
     if (!op) return
 
-    if ('after' in op) {
-      // 单元格操作
+    if ('after' in op && 'before' in op) {
+      // 单个单元格操作
       const cellOp = op as CellOperation
       console.log('[useUnifiedHistory] replaying cell redo')
       replayCellOp(cellOp, cellOp.after)
+    } else if ('type' in op && op.type === 'batch_cell') {
+      // 批量单元格操作
+      const batchOp = op as BatchCellOperation
+      console.log(
+        '[useUnifiedHistory] replaying batch cell redo, count:',
+        batchOp.operations.length
+      )
+      for (const cellOp of batchOp.operations) {
+        replayCellOp(cellOp, cellOp.after)
+      }
     } else if ('type' in op) {
       // 行列操作
       console.log('[useUnifiedHistory] replaying row/col operation:', op.type)
@@ -221,5 +263,5 @@ export function useUnifiedHistory(onCommitCell?: CommitCellFn): UseUnifiedHistor
     return () => window.removeEventListener('keydown', handler)
   }, [undo, redo])
 
-  return { commitWithHistory, executeRowColWithHistory, undo, redo }
+  return { commitWithHistory, commitBatchWithHistory, executeRowColWithHistory, undo, redo }
 }

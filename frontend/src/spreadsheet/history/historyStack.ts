@@ -30,8 +30,14 @@ export interface RowColOperation {
   data?: Record<string, Cell | undefined> // 删除时保存的完整行/列数据
 }
 
+/** 批量单元格操作：多个单元格的样式/内容修改作为一个原子操作 */
+export interface BatchCellOperation {
+  type: 'batch_cell'
+  operations: CellOperation[]
+}
+
 /** 统一的操作类型 */
-export type Operation = CellOperation | RowColOperation
+export type Operation = CellOperation | RowColOperation | BatchCellOperation
 
 function isCellOperation(op: Operation): op is CellOperation {
   return 'before' in op && 'after' in op
