@@ -44,7 +44,8 @@ export function SpreadsheetWorkspace() {
   }, [docId, clientId, connect, disconnect])
 
   const onCommitCell = useCommitCell(setCell)
-  const { commitWithHistory, commitBatchWithHistory, undo, redo } = useUnifiedHistory(onCommitCell)
+  const { commitWithHistory, commitBatchWithHistory, executeRowColWithHistory, undo, redo } =
+    useUnifiedHistory(onCommitCell)
 
   const {
     engine,
@@ -77,6 +78,7 @@ export function SpreadsheetWorkspace() {
           ref={canvasHandleRef}
           interactionEngine={engine}
           onScrollChange={onScrollChange}
+          executeRowColWithHistory={executeRowColWithHistory}
         />
 
         <CellEditOverlay
