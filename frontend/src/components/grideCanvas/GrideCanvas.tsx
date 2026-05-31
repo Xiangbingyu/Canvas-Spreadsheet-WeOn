@@ -30,7 +30,7 @@ import {
   renderOverlayLayer,
   type RenderGridOptions,
 } from '@/spreadsheet/render'
-import { canvasPerf } from '@/spreadsheet/render/perfMonitor'
+import { canvasPerf, sheetUpdatePerf } from '@/spreadsheet/render/perfMonitor'
 import type { Viewport } from '@/spreadsheet/render'
 import type { RootState } from '@/spreadsheet/store'
 import type { InteractionEngine } from '@/spreadsheet/interaction/interactionEngine'
@@ -377,6 +377,8 @@ function GrideCanvas(
 
       const options: RenderGridOptions = getRenderOptions()
       const renderStart = performance.now()
+      const dirtyLayerList = Array.from(dirtyLayers)
+      sheetUpdatePerf.markRenderStart(dirtyLayerList)
 
       if (dirtyLayers.has('grid')) {
         renderGridLayer(contexts.grid, options)
@@ -388,7 +390,9 @@ function GrideCanvas(
         renderOverlayLayer(contexts.overlay, options)
       }
 
-      canvasPerf.recordRender(performance.now() - renderStart)
+      const renderDuration = performance.now() - renderStart
+      canvasPerf.recordRender(renderDuration)
+      sheetUpdatePerf.markRenderEnd(renderDuration, dirtyLayerList)
     },
     [contentCanvasRef, getRenderOptions, gridCanvasRef, overlayCanvasRef]
   )
@@ -528,6 +532,7 @@ function GrideCanvas(
   }, [interactionEngine, layoutVersion, onScrollChange, publishScrollUi, scheduleRender])
 
   useEffect(() => {
+    sheetUpdatePerf.markWorksheetObserved()
     scheduleRender(ALL_CANVAS_LAYERS)
   }, [scheduleRender, worksheet])
 

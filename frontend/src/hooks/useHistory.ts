@@ -18,6 +18,20 @@ export interface UseHistoryResult {
   redo: () => void
 }
 
+type LocalSheetUpdateOperation = 'edit' | 'style' | 'delete' | 'unknown'
+
+function getUpdateOperation(value: string, style?: Style): LocalSheetUpdateOperation {
+  if (style !== undefined) {
+    return 'style'
+  }
+
+  return value === '' ? 'delete' : 'edit'
+}
+
+function getSheetUpdatePerf() {
+  return typeof window === 'undefined' ? undefined : window.__sheetUpdatePerf
+}
+
 /**
  * @param onCommitCell 真实提交（走 WS）。缺省时回放也无处可去，undo/redo 变为 no-op。
  */
@@ -53,10 +67,15 @@ export function useHistory(onCommitCell?: CommitCellFn): UseHistoryResult {
   // 用户编辑入口：先抓 before，提交后抓 after，入栈
   const commitWithHistory = useCallback<CommitCellFn>(
     (row, col, value, style) => {
+      const updatePerf = getSheetUpdatePerf()
+      const traceId = updatePerf?.start(getUpdateOperation(value, style), row, col) ?? null
       const before = readSnapshot(row, col)
+      updatePerf?.markHistorySnapshotDone(traceId)
       rawCommit(row, col, value, style)
+      updatePerf?.markCommitEnd(traceId)
       const after: CellSnapshot = { value, style: style ?? before.style }
       historyRef.current.push({ row, col, before, after })
+      updatePerf?.markHistoryPushDone(traceId)
     },
     [readSnapshot, rawCommit]
   )
