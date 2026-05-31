@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useDispatch, useSelector } from 'react-redux'
+import { useSelector } from 'react-redux'
 import { Modal, Typography, Upload, message } from 'antd'
 import type { UploadFile, UploadProps } from 'antd'
 import { Loading } from '@/components/Loading/Loading'
@@ -10,13 +10,12 @@ import {
 } from '@/spreadsheet/excel/excelImport'
 import type { WorksheetData } from '@/spreadsheet/model/types'
 import type { RootState } from '@/spreadsheet/store'
-import { setWorksheet, store, syncActiveSheetCache } from '@/spreadsheet/store'
 
 type ImportExcelModalProps = {
   open: boolean
   onClose: () => void
-  /** 解析并写入 Redux 后，由父组件走 WS import_sheet */
-  onImport: (worksheet: WorksheetData) => void
+  /** 解析完成后由父组件写入 store 并发送 WS import_sheet；返回 false 表示协同未发出 */
+  onImport: (worksheet: WorksheetData) => boolean
 }
 
 const INITIAL_PROGRESS: ParseExcelProgress = {
@@ -26,7 +25,6 @@ const INITIAL_PROGRESS: ParseExcelProgress = {
 }
 
 export function ImportExcelModal({ open, onClose, onImport }: ImportExcelModalProps) {
-  const dispatch = useDispatch<typeof store.dispatch>()
   const activeSheet = useSelector((s: RootState) => s.workSheet)
   const [fileList, setFileList] = useState<UploadFile[]>([])
   const [importing, setImporting] = useState(false)
@@ -101,10 +99,8 @@ export function ImportExcelModal({ open, onClose, onImport }: ImportExcelModalPr
         sheetId: activeSheet.sheetId,
         sheetName: activeSheet.sheetName,
       }
-      dispatch(setWorksheet(worksheet))
-      dispatch(syncActiveSheetCache(worksheet))
-      onImport(worksheet)
-      message.success('导入成功')
+      const sent = onImport(worksheet)
+      message.success(sent ? '导入成功' : '已更新本地表格，协同未连接，其他人暂不可见')
       setFileList([])
       onClose()
     } catch (error) {

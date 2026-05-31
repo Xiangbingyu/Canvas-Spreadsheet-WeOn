@@ -13,6 +13,7 @@ export interface OnlineUser {
 export interface CollabState {
   docId: string
   clientId: string
+  docTitle: string
   users: OnlineUser[]
   currentSeq: number
   connectionStatus: 'disconnected' | 'connected' | 'reconnecting'
@@ -21,6 +22,7 @@ export interface CollabState {
 const initialState: CollabState = {
   docId: '',
   clientId: '',
+  docTitle: '',
   users: [],
   currentSeq: 0,
   connectionStatus: 'disconnected',
@@ -46,6 +48,11 @@ const collabSlice = createSlice({
       state.currentSeq = action.payload
     },
 
+    /** 更新文档标题 */
+    setDocTitle(state, action: PayloadAction<string>) {
+      state.docTitle = action.payload
+    },
+
     /** 更新连接状态 */
     setConnectionStatus(
       state,
@@ -56,6 +63,6 @@ const collabSlice = createSlice({
   },
 })
 
-export const { setDocSession, setOnlineUsers, setCurrentSeq, setConnectionStatus } =
+export const { setDocSession, setDocTitle, setOnlineUsers, setCurrentSeq, setConnectionStatus } =
   collabSlice.actions
 export const collabReducer = collabSlice.reducer

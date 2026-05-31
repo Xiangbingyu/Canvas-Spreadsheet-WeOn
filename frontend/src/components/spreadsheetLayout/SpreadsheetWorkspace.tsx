@@ -11,7 +11,7 @@ import GrideCanvas from '@/components/grideCanvas/GrideCanvas'
 import { useSpreadsheetInteraction } from '@/hooks/useSpreadsheetInteraction'
 import { useCommitCell } from '@/hooks/useCommitCell'
 import { useCollab } from '@/hooks/useCollab'
-import { useHistory } from '@/hooks/useHistory'
+import { useUnifiedHistory } from '@/hooks/useUnifiedHistory'
 import type { RootState } from '@/spreadsheet/store'
 
 /** WS 地址：开发环境走 Vite 代理 /ws → 后端 3000 */
@@ -23,7 +23,7 @@ export function SpreadsheetWorkspace() {
   const docId = useSelector((s: RootState) => s.collab.docId)
   const clientId = useSelector((s: RootState) => s.collab.clientId)
 
-  const { connect, disconnect, setCell, importSheet } = useCollab({
+  const { connect, disconnect, setCell, setTitle, importSheet } = useCollab({
     url: COLLAB_WS_URL,
     docId,
     clientId,
@@ -44,7 +44,7 @@ export function SpreadsheetWorkspace() {
   }, [docId, clientId, connect, disconnect])
 
   const onCommitCell = useCommitCell(setCell)
-  const { commitWithHistory, undo, redo } = useHistory(onCommitCell)
+  const { commitWithHistory, commitBatchWithHistory, undo, redo } = useUnifiedHistory(onCommitCell)
 
   const {
     engine,
@@ -63,8 +63,13 @@ export function SpreadsheetWorkspace() {
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-white font-[Roboto,Arial,sans-serif]">
-      <Menubar importSheet={importSheet} />
-      <Toolbar onCommitCell={commitWithHistory} onUndo={undo} onRedo={redo} />
+      <Menubar importSheet={importSheet} onSetTitle={setTitle} />
+      <Toolbar
+        onCommitCell={commitWithHistory}
+        onCommitBatch={commitBatchWithHistory}
+        onUndo={undo}
+        onRedo={redo}
+      />
       <FormulaBar value={formulaBarValue} onCommitCell={commitWithHistory} />
 
       <div className="relative min-h-0 flex-1 overflow-hidden">

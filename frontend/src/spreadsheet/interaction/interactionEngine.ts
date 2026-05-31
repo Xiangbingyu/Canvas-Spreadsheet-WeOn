@@ -2,6 +2,7 @@
 
 import type { SelectionRange } from '../model/selection'
 import type { RenderConfig, WorksheetConfig } from '../model/renderConfig'
+import type { Viewport } from '../render/viewport'
 import type {
   CanvasClickEventArgs,
   CellClickEventArgs,
@@ -16,6 +17,11 @@ import type {
   CellInputChangeEventArgs,
   CellCompositionEventArgs,
 } from './interaction'
+
+export interface ViewportController {
+  scrollBy(deltaX: number, deltaY: number): void
+  getViewport(): Viewport
+}
 
 interface EngineCallbacks {
   onCellClick?: (args: CellClickEventArgs) => void
@@ -40,6 +46,11 @@ export class InteractionEngine {
   private worksheetConfig: WorksheetConfig
   private scrollX: number = 0
   private scrollY: number = 0
+  private viewportController: ViewportController | null = null
+  private autoScrollRafId: number | null = null
+  private lastMouseX: number = 0
+  private lastMouseY: number = 0
+  private canvasRect: DOMRect | null = null
 
   constructor(
     config: Required<RenderConfig>,
@@ -68,6 +79,10 @@ export class InteractionEngine {
   setScroll(scrollX: number, scrollY: number) {
     this.scrollX = scrollX
     this.scrollY = scrollY
+  }
+
+  setViewportController(controller: ViewportController) {
+    this.viewportController = controller
   }
 
   moveSelection(dr: number, dc: number, extend: boolean = false) {
@@ -167,8 +182,16 @@ export class InteractionEngine {
     }
 
     if (event.shiftKey) {
+      console.log(
+        '[interactionEngine] Shift+Click at',
+        coord,
+        'current selection.start:',
+        this.state.selection.start
+      )
       this.state.isSelecting = true
       this.state.isDragging = false
+      this.state.selectionStart = this.state.selection.start
+      console.log('[interactionEngine] set selectionStart to:', this.state.selectionStart)
       this.updateSelection(this.normalizeSelection(this.state.selection.start, coord), 'mouse')
     } else {
       this.state.isSelecting = true
@@ -188,19 +211,117 @@ export class InteractionEngine {
     const target = event.currentTarget
     if (!target) return
     const rect = target.getBoundingClientRect()
-    const x = Math.max(0, Math.min(event.clientX - rect.left, rect.width - 1))
-    const y = Math.max(0, Math.min(event.clientY - rect.top, rect.height - 1))
+    this.canvasRect = rect
+    const x = event.clientX - rect.left
+    const y = event.clientY - rect.top
+    this.lastMouseX = x
+    this.lastMouseY = y
+
+    // 保留原始坐标，不 clamp，用于判断是否越界
     const coord = hitTest(x, y, this.config, this.scrollX, this.scrollY, this.worksheetConfig)
+
+    // 判断是否越出数据区（超出视口边界）
+    const isOutOfBounds =
+      x < this.config.headerWidth ||
+      y < this.config.headerHeight ||
+      x >= rect.width ||
+      y >= rect.height
+
+    if (isOutOfBounds && this.state.isSelecting) {
+      // 启动自动滚动
+      this.startAutoScroll()
+    } else {
+      // 回到界内，停止自动滚动
+      this.stopAutoScroll()
+    }
+
     if (!coord) return
 
     const start = this.state.selectionStart ?? this.state.selection.start
+    console.log(
+      '[interactionEngine] pointerMove - selectionStart:',
+      this.state.selectionStart,
+      'selection.start:',
+      this.state.selection.start,
+      'using start:',
+      start,
+      'current coord:',
+      coord
+    )
     if (coord.row !== start.row || coord.col !== start.col) {
       this.state.isDragging = true
     }
-    this.updateSelection(this.normalizeSelection(start, coord), 'mouse')
+    // 不使用 normalizeSelection，直接使用 start 和 coord，保持 start 为 selectionStart
+    this.updateSelection({ start, end: coord }, 'mouse')
+  }
+
+  private startAutoScroll() {
+    if (this.autoScrollRafId !== null) return
+    if (!this.viewportController || !this.canvasRect) return
+
+    const autoScroll = () => {
+      if (!this.viewportController || !this.canvasRect) return
+
+      const x = this.lastMouseX
+      const y = this.lastMouseY
+      const rect = this.canvasRect
+      const headerWidth = this.config.headerWidth
+      const headerHeight = this.config.headerHeight
+
+      let deltaX = 0
+      let deltaY = 0
+      const scrollSpeed = 5
+
+      // 计算越界距离，按距离计算滚动速度
+      if (x < headerWidth) {
+        deltaX = -Math.max(1, (headerWidth - x) / 10) * scrollSpeed
+      } else if (x >= rect.width) {
+        deltaX = Math.max(1, (x - rect.width + 1) / 10) * scrollSpeed
+      }
+
+      if (y < headerHeight) {
+        deltaY = -Math.max(1, (headerHeight - y) / 10) * scrollSpeed
+      } else if (y >= rect.height) {
+        deltaY = Math.max(1, (y - rect.height + 1) / 10) * scrollSpeed
+      }
+
+      if (deltaX !== 0 || deltaY !== 0) {
+        this.viewportController.scrollBy(deltaX, deltaY)
+        const viewport = this.viewportController.getViewport()
+        this.setScroll(viewport.scrollX, viewport.scrollY)
+
+        // 重新 hitTest 并更新选区
+        const coord = hitTest(
+          this.lastMouseX,
+          this.lastMouseY,
+          this.config,
+          this.scrollX,
+          this.scrollY,
+          this.worksheetConfig
+        )
+        if (coord) {
+          const start = this.state.selectionStart ?? this.state.selection.start
+          // 不使用 normalizeSelection，直接使用 start 和 coord，保持 start 为 selectionStart
+          this.updateSelection({ start, end: coord }, 'mouse')
+        }
+      }
+
+      this.autoScrollRafId = requestAnimationFrame(autoScroll)
+    }
+
+    this.autoScrollRafId = requestAnimationFrame(autoScroll)
+  }
+
+  private stopAutoScroll() {
+    if (this.autoScrollRafId !== null) {
+      cancelAnimationFrame(this.autoScrollRafId)
+      this.autoScrollRafId = null
+    }
   }
 
   handleCanvasPointerUp() {
+    console.log('[interactionEngine] pointerUp - clearing selectionStart')
+    this.stopAutoScroll()
     this.state.isSelecting = false
     this.state.isDragging = false
     this.state.selectionStart = undefined
@@ -329,6 +450,28 @@ export class InteractionEngine {
     this.callbacks.onCellEditCancel?.({ coord: this.state.editingCoord })
     this.state.isEditing = false
     this.state.editingCoord = undefined
+  }
+
+  handleCompositionStart() {
+    console.log('[interactionEngine] composition start')
+    // 不需要 coord 和 event，直接调用回调
+    if (this.callbacks.onCellCompositionStart) {
+      this.callbacks.onCellCompositionStart({
+        coord: { row: 0, col: 0 },
+        event: new CompositionEvent('compositionstart'),
+      })
+    }
+  }
+
+  handleCompositionEnd() {
+    console.log('[interactionEngine] composition end')
+    // 不需要 coord 和 event，直接调用回调
+    if (this.callbacks.onCellCompositionEnd) {
+      this.callbacks.onCellCompositionEnd({
+        coord: { row: 0, col: 0 },
+        event: new CompositionEvent('compositionend'),
+      })
+    }
   }
 
   getSelection(): SelectionRange {

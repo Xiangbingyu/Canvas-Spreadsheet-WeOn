@@ -9,12 +9,15 @@ export type {
   WsResponse,
   JoinAck,
   CellUpdated,
+  TitleUpdated,
+  SetCellRequest,
+  SetTitleRequest,
   SheetImported,
   UndoApplied,
   RedoApplied,
   PresenceMessage,
   ErrorMessage,
-} from './protocol'
-export { ERROR_CODES } from './protocol'
+} from '../model/collabProtocol'
+export { ERROR_CODES } from '../model/collabProtocol'
 export { convertSnapshotToCells } from './snapshotConverter'
 export { useCollab } from '../../hooks/useCollab'

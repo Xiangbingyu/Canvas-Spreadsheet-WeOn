@@ -1,12 +1,13 @@
 import type {
   WsResponse,
   CellUpdated,
+  TitleUpdated,
   SheetImported,
   UndoApplied,
   RedoApplied,
   UserInfo,
   Snapshot,
-} from './protocol'
+} from '../model/collabProtocol'
 
 // ===== 回调接口 =====
 
@@ -15,6 +16,8 @@ export interface CollabCallbacks {
   onSnapshot: (snapshot: Snapshot, currentSeq: number) => void
   /** 单元格被更新（别人或自己的操作被服务端确认） */
   onCellUpdated: (data: CellUpdated['data']) => void
+  /** 标题被更新 */
+  onTitleUpdated: (data: TitleUpdated['data']) => void
   /** 整表导入 */
   onSheetImported: (data: SheetImported['data']) => void
   /** 撤销 */
@@ -55,6 +58,7 @@ export class CollabClient {
   private seq = 0
   private seenSeqs = new Set<number>()
   private pendingOps = new Map<number, () => void>()
+  private sendQueue: string[] = []
 
   private onSend?: (msg: Record<string, unknown>) => void
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
@@ -85,6 +89,7 @@ export class CollabClient {
     this.ws.onopen = () => {
       this.callbacks.onConnectionChange('connected')
       this.join()
+      this.flushSendQueue()
     }
 
     this.ws.onmessage = (event) => {
@@ -115,9 +120,18 @@ export class CollabClient {
     this.clearReconnectTimer()
     this.pendingOps.clear()
     this.seenSeqs.clear()
+    this.sendQueue = []
     if (this.ws) {
       this.ws.onclose = null
-      this.ws.close()
+      this.ws.onerror = null
+      if (this.ws.readyState === WebSocket.CONNECTING) {
+        // 握手未完成就 close 会报 "closed before established"
+        // 等 open 后立即关，规避 StrictMode 双挂载噪声
+        const ws = this.ws
+        ws.onopen = () => ws.close()
+      } else {
+        this.ws.close()
+      }
       this.ws = null
     }
   }
@@ -136,7 +150,13 @@ export class CollabClient {
     })
   }
 
-  setCell(row: number, col: number, value?: string, style?: Record<string, unknown> | null): void {
+  setCell(
+    row: number,
+    col: number,
+    value: string,
+    style: Record<string, unknown> | null,
+    baseSeq: number
+  ): void {
     this.send({
       type: 'set_cell',
       docId: this.docId,
@@ -145,6 +165,17 @@ export class CollabClient {
       col,
       value,
       style,
+      baseSeq,
+    })
+  }
+
+  setTitle(title: string, baseSeq: number): void {
+    this.send({
+      type: 'set_title',
+      docId: this.docId,
+      clientId: this.clientId,
+      title,
+      baseSeq,
     })
   }
 
@@ -192,6 +223,12 @@ export class CollabClient {
       case 'cell_updated':
         this.applyOrdered(msg.data.seq, () => {
           this.callbacks.onCellUpdated(msg.data)
+        })
+        break
+
+      case 'title_updated':
+        this.applyOrdered(msg.data.seq, () => {
+          this.callbacks.onTitleUpdated(msg.data)
         })
         break
 
@@ -269,9 +306,10 @@ export class CollabClient {
   private scheduleReconnect(): void {
     if (this.destroyed) return
     this.callbacks.onConnectionChange('reconnecting')
-    // 清理状态，重连后用全量 snapshot 重建
+    // 清理状态，重连后靠 join_ack 全量 snapshot 重建，不补发旧消息
     this.seenSeqs.clear()
     this.pendingOps.clear()
+    this.sendQueue = []
     this.reconnectTimer = setTimeout(() => {
       this.connect()
     }, this.reconnectInterval)
@@ -293,8 +331,20 @@ export class CollabClient {
       this.onSend(msg)
       return
     }
+    const data = JSON.stringify(msg)
     if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(msg))
+      this.ws.send(data)
+    } else {
+      this.sendQueue.push(data)
+    }
+  }
+
+  private flushSendQueue(): void {
+    if (this.ws?.readyState !== WebSocket.OPEN) return
+    const queue = this.sendQueue
+    this.sendQueue = []
+    for (const data of queue) {
+      this.ws.send(data)
     }
   }
 
