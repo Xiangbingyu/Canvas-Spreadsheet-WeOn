@@ -314,12 +314,16 @@
       </div>
       <div class="hero-grid">
         <div class="hero-card">
-          <div class="hero-label">HTTP base URL</div>
-          <div id="http-base" class="hero-value"></div>
+          <label class="hero-label" for="http-base-input">HTTP base URL</label>
+          <div class="hero-value" style="margin-top: 8px;">
+            <input id="http-base-input" type="text" style="font-family: var(--mono); font-size: 13px; padding: 8px 10px;">
+          </div>
         </div>
         <div class="hero-card">
-          <div class="hero-label">WebSocket URL</div>
-          <div id="ws-base" class="hero-value"></div>
+          <label class="hero-label" for="ws-base-input">WebSocket URL</label>
+          <div class="hero-value" style="margin-top: 8px;">
+            <input id="ws-base-input" type="text" style="font-family: var(--mono); font-size: 13px; padding: 8px 10px;">
+          </div>
         </div>
         <div class="hero-card">
           <div class="hero-label">HTTP endpoints</div>
@@ -371,12 +375,6 @@
               <button id="disconnect-ws-button" type="button" class="secondary">Disconnect</button>
               <button id="clear-ws-log-button" type="button" class="ghost">Clear log</button>
             </div>
-          </div>
-          <div class="request-grid">
-            <label>
-              WebSocket URL
-              <input id="ws-url-input" type="text">
-            </label>
           </div>
           <div id="ws-messages" class="grid"></div>
         </section>
@@ -647,7 +645,8 @@
     const wsTemplate = document.getElementById('ws-message-template');
     const wsMessageContainer = document.getElementById('ws-messages');
     const wsLog = document.getElementById('ws-log');
-    const wsUrlInput = document.getElementById('ws-url-input');
+    const httpBaseInput = document.getElementById('http-base-input');
+    const wsBaseInput = document.getElementById('ws-base-input');
     const wsStatusPill = document.getElementById('ws-status-pill');
     const connectWsButton = document.getElementById('connect-ws-button');
     const disconnectWsButton = document.getElementById('disconnect-ws-button');
@@ -656,9 +655,8 @@
 
     let ws = null;
 
-    document.getElementById('http-base').textContent = httpBase;
-    document.getElementById('ws-base').textContent = wsBase;
-    wsUrlInput.value = wsBase;
+    httpBaseInput.value = httpBase;
+    wsBaseInput.value = wsBase;
 
     function formatJson(value) {
       if (typeof value === 'string') {
@@ -713,7 +711,9 @@
       try {
         const fieldValues = collectFieldValues(fieldsElement);
         const request = endpoint.buildRequest(fieldValues, payloadElement.value);
-        const response = await fetch(request.url, request.options);
+        const baseUrl = httpBaseInput.value.replace(/\/+$/, '');
+        const url = request.url.startsWith('/') ? baseUrl + request.url : request.url;
+        const response = await fetch(url, request.options);
         const text = await response.text();
         let parsed = text;
 
@@ -721,7 +721,7 @@
           parsed = JSON.parse(text);
         } catch {}
 
-        setHttpResponse(`${endpoint.method} ${request.url} -> ${response.status}`, parsed, !response.ok);
+        setHttpResponse(`${endpoint.method} ${url} -> ${response.status}`, parsed, !response.ok);
       } catch (error) {
         setHttpResponse(`${endpoint.method} ${endpoint.path} -> request failed`, { message: error.message }, true);
       }
@@ -799,9 +799,9 @@
 
     function connectWs() {
       disconnectWs();
-      appendWsLog('system', `Connecting to ${wsUrlInput.value}`);
+      appendWsLog('system', `Connecting to ${wsBaseInput.value}`);
 
-      ws = new WebSocket(wsUrlInput.value);
+      ws = new WebSocket(wsBaseInput.value);
 
       ws.addEventListener('open', () => {
         updateWsStatus(true);
