@@ -690,7 +690,9 @@ function drawSelectionOverlay(draw: DrawContext): void {
     Math.max(0, selectionRect.height - 2)
   )
 
-  if (isActiveCellInSelection(activeCell, rowStart, rowEnd, colStart, colEnd)) {
+  const isSingleCell = rowStart === rowEnd && colStart === colEnd
+  // 多选时 active 常在左上角，与选区外框重合；只描一次边框，避免双重高亮
+  if (isSingleCell && isActiveCellInSelection(activeCell, rowStart, rowEnd, colStart, colEnd)) {
     const activeRect = getCellRect(
       activeCell.row,
       activeCell.col,
@@ -710,17 +712,17 @@ function drawSelectionOverlay(draw: DrawContext): void {
         2
       )
     }
+  } else {
+    strokeCellBorder(
+      ctx,
+      selectionRect.x,
+      selectionRect.y,
+      selectionRect.width,
+      selectionRect.height,
+      COLORS.selectionBorder,
+      2
+    )
   }
-
-  strokeCellBorder(
-    ctx,
-    selectionRect.x,
-    selectionRect.y,
-    selectionRect.width,
-    selectionRect.height,
-    COLORS.selectionBorder,
-    1
-  )
 
   drawFillHandle(ctx, selectionRect, viewport)
   ctx.restore()
