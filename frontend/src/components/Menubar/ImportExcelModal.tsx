@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useDispatch } from 'react-redux'
+import { useDispatch, useSelector } from 'react-redux'
 import { Modal, Typography, Upload, message } from 'antd'
 import type { UploadFile, UploadProps } from 'antd'
 import { Loading } from '@/components/Loading/Loading'
@@ -8,11 +8,15 @@ import {
   parseExcelFromBuffer,
   type ParseExcelProgress,
 } from '@/spreadsheet/excel/excelImport'
-import { setWorksheet, store } from '@/spreadsheet/store'
+import type { WorksheetData } from '@/spreadsheet/model/types'
+import type { RootState } from '@/spreadsheet/store'
+import { setWorksheet, store, syncActiveSheetCache } from '@/spreadsheet/store'
 
 type ImportExcelModalProps = {
   open: boolean
   onClose: () => void
+  /** 解析并写入 Redux 后，由父组件走 WS import_sheet */
+  onImport: (worksheet: WorksheetData) => void
 }
 
 const INITIAL_PROGRESS: ParseExcelProgress = {
@@ -21,8 +25,9 @@ const INITIAL_PROGRESS: ParseExcelProgress = {
   message: '准备导入…',
 }
 
-export function ImportExcelModal({ open, onClose }: ImportExcelModalProps) {
+export function ImportExcelModal({ open, onClose, onImport }: ImportExcelModalProps) {
   const dispatch = useDispatch<typeof store.dispatch>()
+  const activeSheet = useSelector((s: RootState) => s.workSheet)
   const [fileList, setFileList] = useState<UploadFile[]>([])
   const [importing, setImporting] = useState(false)
   const [progress, setProgress] = useState<ParseExcelProgress>(INITIAL_PROGRESS)
@@ -86,13 +91,19 @@ export function ImportExcelModal({ open, onClose }: ImportExcelModalProps) {
       const buffer = await file.arrayBuffer()
       assertNotAborted(controller.signal)
 
-      const result = await parseExcelFromBuffer(buffer, {
+      const parsed = await parseExcelFromBuffer(buffer, {
         signal: controller.signal,
         onProgress: setProgress,
       })
-
-      dispatch(setWorksheet(result))
-      console.log('result', result)
+      // 导入覆盖当前活动 sheet 内容，保留 tab 的 sheetId / sheetName
+      const worksheet: WorksheetData = {
+        ...parsed,
+        sheetId: activeSheet.sheetId,
+        sheetName: activeSheet.sheetName,
+      }
+      dispatch(setWorksheet(worksheet))
+      dispatch(syncActiveSheetCache(worksheet))
+      onImport(worksheet)
       message.success('导入成功')
       setFileList([])
       onClose()

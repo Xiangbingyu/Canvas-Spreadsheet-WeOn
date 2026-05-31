@@ -1,12 +1,10 @@
 import { message } from 'antd'
 import { useEffect, useMemo } from 'react'
-import { useDispatch, useSelector } from 'react-redux'
+import { useDispatch } from 'react-redux'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Loading } from '@/components/Loading/Loading'
 import { SpreadsheetWorkspace } from '@/components/spreadsheetLayout/SpreadsheetWorkspace'
 import API, { ApiError } from '@/services/httpAPI'
-import type { RootState } from '@/spreadsheet/store'
-import { setWorksheet } from '@/spreadsheet/store'
+import { initFromDoc, setWorksheet } from '@/spreadsheet/store'
 import { setDocSession } from '@/spreadsheet/store/userStore'
 import { allocateClientId } from '@/spreadsheet/utils/allocateClientId'
 import { fromServerSnapshot } from '@/spreadsheet/utils/fromServerSnapshot'
@@ -17,12 +15,8 @@ export function SpreadsheetPage() {
   const dispatch = useDispatch()
   const navigate = useNavigate()
   const userId = useMemo(() => allocateClientId(), [])
-  const storeDocId = useSelector((s: RootState) => s.collab.docId)
-  const docReady = Boolean(routeDocId) && storeDocId === routeDocId
 
   useEffect(() => {
-    if (!routeDocId || storeDocId === routeDocId) return
-
     let cancelled = false
 
     async function load() {
@@ -30,12 +24,9 @@ export function SpreadsheetPage() {
         const doc = await API.getDoc(routeDocId)
         if (cancelled) return
         const worksheet = fromServerSnapshot(doc.snapshot)
-        dispatch(
-          setWorksheet({
-            ...worksheet,
-            name: doc.title?.trim() || worksheet.name,
-          })
-        )
+        const docTitle = doc.title?.trim() || '未命名表格'
+        dispatch(initFromDoc({ docTitle, worksheet }))
+        dispatch(setWorksheet(worksheet))
         dispatch(setDocSession({ docId: doc.docId, clientId: userId }))
       } catch (error) {
         if (cancelled) return
@@ -50,15 +41,7 @@ export function SpreadsheetPage() {
     return () => {
       cancelled = true
     }
-  }, [routeDocId, storeDocId, dispatch, userId, navigate])
-
-  if (!docReady) {
-    return (
-      <div className="relative flex min-h-screen items-center justify-center bg-white">
-        <Loading visible message="正在加载文档…" />
-      </div>
-    )
-  }
+  }, [routeDocId, dispatch, userId, navigate])
 
   return <SpreadsheetWorkspace />
 }
