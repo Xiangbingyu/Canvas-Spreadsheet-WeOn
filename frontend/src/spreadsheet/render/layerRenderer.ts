@@ -31,6 +31,46 @@ export type RemoteCursorRenderData = {
   color: string
 }
 
+/** 多用户光标调色板：按 clientId 稳定映射，避免全员默认 #3b82f6 时颜色相同 */
+const REMOTE_CURSOR_PALETTE = [
+  '#3b82f6',
+  '#ef4444',
+  '#22c55e',
+  '#f59e0b',
+  '#a855f7',
+  '#ec4899',
+  '#14b8a6',
+  '#f97316',
+  '#6366f1',
+  '#84cc16',
+] as const
+
+const DEFAULT_PRESENCE_COLOR = '#3b82f6'
+
+/**
+ * 作用：为远端用户光标解析可区分颜色。
+ * 传入参数：clientId 为协同 clientId；users 为 presence 在线用户列表（含 color）。
+ * 返回结果：优先使用 presence 中已分配且房间内有差异的颜色，否则按 clientId 哈希到调色板。
+ */
+export function resolveRemoteCursorColor(
+  clientId: string,
+  users: ReadonlyArray<{ clientId: string; color: string }>
+): string {
+  const peerColors = users.map((user) => user.color)
+  const hasDistinctPresenceColors = new Set(peerColors).size > 1
+  const fromPresence = users.find((user) => user.clientId === clientId)?.color
+
+  if (fromPresence && hasDistinctPresenceColors && fromPresence !== DEFAULT_PRESENCE_COLOR) {
+    return fromPresence
+  }
+
+  let hash = 0
+  for (let i = 0; i < clientId.length; i++) {
+    hash = (hash * 31 + clientId.charCodeAt(i)) >>> 0
+  }
+  return REMOTE_CURSOR_PALETTE[hash % REMOTE_CURSOR_PALETTE.length]
+}
+
 export type RenderGridOptions = {
   worksheet: WorksheetData
   viewport: Viewport
@@ -242,27 +282,6 @@ function strokeCellBorder(
   const strokeHeight = Math.max(0, height - inset * 2 - (lineWidth > 1 ? 0 : 1))
   const offset = inset + 0.5
   ctx.strokeRect(x + offset, y + offset, strokeWidth, strokeHeight)
-}
-
-/**
- * 作用：判断活动单元格是否处于当前选区范围内。
- * 传入参数：activeCell 为 Redux selection.row/col，rowStart/rowEnd/colStart/colEnd 为规范化后的选区边界。
- * 返回结果：在范围内返回 true，否则返回 false；只做纯计算，不修改外部状态。
- */
-function isActiveCellInSelection(
-  activeCell: CellCoord | null,
-  rowStart: number,
-  rowEnd: number,
-  colStart: number,
-  colEnd: number
-): activeCell is CellCoord {
-  return (
-    activeCell !== null &&
-    activeCell.row >= rowStart &&
-    activeCell.row <= rowEnd &&
-    activeCell.col >= colStart &&
-    activeCell.col <= colEnd
-  )
 }
 
 /**
@@ -694,8 +713,7 @@ function drawCellTexts(draw: DrawContext): void {
  * 返回结果：无返回值，只绘制 overlay 层。
  */
 function drawSelectionOverlay(draw: DrawContext): void {
-  const { ctx, viewport, selection, activeCell, worksheet, rowHeight, colWidth, scrollX, scrollY } =
-    draw
+  const { ctx, viewport, selection, worksheet, rowHeight, colWidth, scrollX, scrollY } = draw
   if (!selection) {
     return
   }
@@ -738,7 +756,6 @@ function drawSelectionOverlay(draw: DrawContext): void {
     Math.max(0, selectionRect.height - 2)
   )
 
-  // 选区外框较细，active cell 额外绘制粗边框，两者共享同一层浅蓝填充。
   strokeCellBorder(
     ctx,
     selectionRect.x,
@@ -748,28 +765,6 @@ function drawSelectionOverlay(draw: DrawContext): void {
     COLORS.selectionBorder,
     1
   )
-
-  if (isActiveCellInSelection(activeCell, rowStart, rowEnd, colStart, colEnd)) {
-    const activeRect = getCellRect(
-      activeCell.row,
-      activeCell.col,
-      scrollX,
-      scrollY,
-      rowHeight,
-      colWidth
-    )
-    if (isRectInDataArea(activeRect, viewport)) {
-      strokeCellBorder(
-        ctx,
-        activeRect.x,
-        activeRect.y,
-        activeRect.width,
-        activeRect.height,
-        COLORS.selectionBorder,
-        2
-      )
-    }
-  }
 
   drawFillHandle(ctx, selectionRect, viewport)
   ctx.restore()

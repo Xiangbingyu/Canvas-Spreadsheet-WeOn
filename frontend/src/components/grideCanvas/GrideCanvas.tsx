@@ -30,6 +30,7 @@ import {
   renderOverlayLayer,
   type RenderGridOptions,
 } from '@/spreadsheet/render'
+import { resolveRemoteCursorColor } from '@/spreadsheet/render/layerRenderer'
 import { canvasPerf, sheetUpdatePerf } from '@/spreadsheet/render/perfMonitor'
 import type { Viewport } from '@/spreadsheet/render'
 import type { RootState } from '@/spreadsheet/store'
@@ -389,7 +390,7 @@ function GrideCanvas(
           clientId,
           row: cursor.row,
           col: cursor.col,
-          color: state.collab.users.find((user) => user.clientId === clientId)?.color ?? '#3b82f6',
+          color: resolveRemoteCursorColor(clientId, state.collab.users),
         })),
     }
   }, [reduxStore])
