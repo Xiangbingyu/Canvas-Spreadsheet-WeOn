@@ -2,9 +2,9 @@
  * Excel 导入门面：主线程通过 Web Worker 调用 excelImportCore
  */
 
-import type { WorksheetData } from '@/spreadsheet/model/types'
 import {
   ExcelParseError,
+  type ExcelImportWorkbook,
   type ExcelImportWorkerRequest,
   type ExcelImportWorkerResponse,
   type ParseExcelOptions,
@@ -12,20 +12,21 @@ import {
 
 export {
   ExcelParseError,
+  type ExcelImportWorkbook,
   type ParseExcelOptions,
   type ParseExcelProgress,
   type ParseExcelPhase,
 } from './excelImportTypes'
 
 /**
- * 将 Excel 二进制内容解析为首个工作表（在 Web Worker 中执行）。
+ * 将 Excel 二进制内容解析为多 sheet workbook 快照（在 Web Worker 中执行）。
  *
  * @param buffer - 由 `file.arrayBuffer()` 得到的 ArrayBuffer（会 transfer 到 Worker）
  */
 export function parseExcelFromBuffer(
   buffer: ArrayBuffer,
   options?: ParseExcelOptions
-): Promise<WorksheetData> {
+): Promise<ExcelImportWorkbook> {
   const { onProgress, signal } = options ?? {}
 
   if (!buffer.byteLength) {
@@ -70,7 +71,7 @@ export function parseExcelFromBuffer(
         return
       }
       if (msg.type === 'done') {
-        finish(() => resolve(msg.worksheet))
+        finish(() => resolve(msg.workbook))
         return
       }
       if (msg.type === 'error') {

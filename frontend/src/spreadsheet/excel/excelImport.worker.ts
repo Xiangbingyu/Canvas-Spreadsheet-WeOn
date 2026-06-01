@@ -10,11 +10,11 @@ self.onmessage = (event: MessageEvent<ExcelImportWorkerRequest>) => {
   if (data.type !== 'parse') return
 
   try {
-    const worksheet = parseExcelBufferCore(data.buffer, (progress) => {
+    const workbook = parseExcelBufferCore(data.buffer, (progress) => {
       const msg: ExcelImportWorkerResponse = { type: 'progress', ...progress }
       self.postMessage(msg)
     })
-    const done: ExcelImportWorkerResponse = { type: 'done', worksheet }
+    const done: ExcelImportWorkerResponse = { type: 'done', workbook }
     self.postMessage(done)
   } catch (error) {
     const message = error instanceof Error ? error.message : '工作表转换失败'

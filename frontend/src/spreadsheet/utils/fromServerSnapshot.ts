@@ -1,4 +1,4 @@
-import type { WorksheetData } from '@/spreadsheet/model/types'
+import type { Cell, WorksheetData } from '@/spreadsheet/model/types'
 import type { ServerSheetSnapshot, WorkbookSnapshot } from '@/services/httpType'
 
 /** 与 workSheetStore 初始态一致：后端新建文档 snapshot 常为 rowCount/colCount=0，需补全才能绘制网格 */
@@ -46,16 +46,29 @@ export function fromServerSnapshot(snapshot: ServerSnapshotInput): WorksheetData
 
   for (const cell of Object.values((sheetData as Record<string, unknown>).cells ?? {})) {
     if (cell && typeof cell === 'object' && 'row' in cell && 'col' in cell) {
-      const typedCell = cell as { row: number; col: number; [key: string]: unknown }
-      cells[`${typedCell.row}:${typedCell.col}`] = { ...typedCell }
+      const raw = cell as {
+        row: number
+        col: number
+        value?: string
+        styleId?: string | null
+      }
+      const normalized: Cell = {
+        row: raw.row,
+        col: raw.col,
+        value: typeof raw.value === 'string' ? raw.value : '',
+      }
+      if (typeof raw.styleId === 'string' && raw.styleId) {
+        normalized.styleId = raw.styleId
+      }
+      cells[`${normalized.row}:${normalized.col}`] = normalized
     }
   }
 
   let maxRow = ((sheetData as Record<string, unknown>).rowCount as number) ?? 0
   let maxCol = ((sheetData as Record<string, unknown>).colCount as number) ?? 0
   for (const cell of Object.values(cells)) {
-    maxRow = Math.max(maxRow, (cell as Record<string, unknown>).row as number)
-    maxCol = Math.max(maxCol, (cell as Record<string, unknown>).col as number)
+    maxRow = Math.max(maxRow, cell.row)
+    maxCol = Math.max(maxCol, cell.col)
   }
 
   const sheetId =

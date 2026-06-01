@@ -1,5 +1,5 @@
-import { useEffect } from 'react'
-import { useSelector } from 'react-redux'
+import { useCallback, useEffect } from 'react'
+import { useDispatch, useSelector } from 'react-redux'
 import { FormulaBar } from '@/components/FormulaBar/FormulaBar'
 import { Loading } from '@/components/Loading/Loading'
 import { Menubar } from '@/components/Menubar/Menubar'
@@ -12,7 +12,9 @@ import { useSpreadsheetInteraction } from '@/hooks/useSpreadsheetInteraction'
 import { useCommitCell } from '@/hooks/useCommitCell'
 import { useCollab } from '@/hooks/useCollab'
 import { useUnifiedHistory } from '@/hooks/useUnifiedHistory'
-import type { RootState } from '@/spreadsheet/store'
+import { importWorkbook, setWorksheet, type RootState } from '@/spreadsheet/store'
+import type { WorkbookSnapshotPayload } from '@/spreadsheet/store/workbookStore'
+import { setSelectedCell } from '@/spreadsheet/store/selectStore'
 
 /** WS 地址：开发环境走 Vite 代理 /ws → 后端 3000 */
 const COLLAB_WS_URL =
@@ -20,14 +22,33 @@ const COLLAB_WS_URL =
   `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`
 
 export function SpreadsheetWorkspace() {
+  const dispatch = useDispatch()
   const docId = useSelector((s: RootState) => s.collab.docId)
   const clientId = useSelector((s: RootState) => s.collab.clientId)
 
-  const { connect, disconnect, setCell, setTitle, importSheet, getClient } = useCollab({
+  const { connect, disconnect, setCell, setTitle, getClient } = useCollab({
     url: COLLAB_WS_URL,
     docId,
     clientId,
   })
+
+  const handleImportWorkbook = useCallback(
+    (workbook: WorkbookSnapshotPayload) => {
+      dispatch(importWorkbook(workbook))
+      const activeSheet = workbook.sheets[workbook.activeSheetId]
+      if (!activeSheet) return
+      dispatch(setWorksheet(activeSheet))
+      dispatch(
+        setSelectedCell({
+          row: 1,
+          col: 1,
+          value: activeSheet.cells['1:1']?.value ?? '',
+          style: {},
+        })
+      )
+    },
+    [dispatch]
+  )
 
   useEffect(() => {
     if (!docId) {
@@ -64,7 +85,7 @@ export function SpreadsheetWorkspace() {
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-white font-[Roboto,Arial,sans-serif]">
-      <Menubar importSheet={importSheet} onSetTitle={setTitle} />
+      <Menubar onImportWorkbook={handleImportWorkbook} onSetTitle={setTitle} />
       <Toolbar
         onCommitCell={commitWithHistory}
         onCommitBatch={commitBatchWithHistory}
