@@ -15,6 +15,7 @@ export type ClientMessageType =
   | 'set_title'
   | 'cursor'
   | 'import_sheet'
+  | 'add_sheet'
   | 'presence'
   | 'undo'
   | 'redo'
@@ -29,6 +30,7 @@ export type ServerMessageType =
   | 'title_updated'
   | 'cursor_update'
   | 'sheet_imported'
+  | 'sheet_added'
   | 'presence'
   | 'undo_applied'
   | 'redo_applied'
@@ -128,6 +130,13 @@ export interface DeleteColRequest {
   col: number // 1-indexed
 }
 
+export interface AddSheetRequest {
+  type: 'add_sheet'
+  docId: string
+  clientId: string
+  sheetName?: string
+}
+
 export type WsRequest =
   | JoinRequest
   | SetCellRequest
@@ -140,6 +149,7 @@ export type WsRequest =
   | DeleteRowRequest
   | InsertColRequest
   | DeleteColRequest
+  | AddSheetRequest
 
 // ===== 服务端 → 客户端 =====
 
@@ -247,6 +257,29 @@ export interface PresenceMessage {
   }
 }
 
+export interface SheetAdded {
+  type: 'sheet_added'
+  code: 0
+  message: 'ok'
+  data: {
+    docId: string
+    clientId: string
+    seq: number
+    activeSheetId: string
+    sheet: {
+      id: string
+      name: string
+      defaultRowHeight: number
+      defaultColWidth: number
+      rowCount: number
+      colCount: number
+      styles: Record<string, unknown>
+      cells: Record<string, unknown>
+    }
+    sheetOrder: string[]
+  }
+}
+
 export interface ErrorMessage {
   type: 'error'
   code: number // 4000 | 4001 | 4003 | 4004 | 4090 | 5000
@@ -327,6 +360,7 @@ export type WsResponse =
   | RowDeleted
   | ColInserted
   | ColDeleted
+  | SheetAdded
   | ErrorMessage
 
 // ===== 用户信息（collab 专用） =====

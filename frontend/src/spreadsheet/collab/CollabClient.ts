@@ -4,6 +4,7 @@ import type {
   TitleUpdated,
   CursorUpdate,
   SheetImported,
+  SheetAdded,
   UndoApplied,
   RedoApplied,
   RowInserted,
@@ -40,6 +41,8 @@ export interface CollabCallbacks {
   onColInserted?: (data: ColInserted['data']) => void
   /** 列被删除 */
   onColDeleted?: (data: ColDeleted['data']) => void
+  /** 新建工作表 */
+  onSheetAdded?: (data: SheetAdded['data']) => void
   /** 在线用户列表更新 */
   onPresence: (users: UserInfo[]) => void
   /** 错误 */
@@ -259,6 +262,15 @@ export class CollabClient {
     })
   }
 
+  addSheet(sheetName?: string): void {
+    this.send({
+      type: 'add_sheet',
+      docId: this.docId,
+      clientId: this.clientId,
+      sheetName,
+    })
+  }
+
   // ============================
   //  消息入口（公开，方便 stub server 注入）
   // ============================
@@ -338,6 +350,12 @@ export class CollabClient {
       case 'col_deleted':
         this.applyOrdered(msg.data.seq, () => {
           this.callbacks.onColDeleted?.(msg.data)
+        })
+        break
+
+      case 'sheet_added':
+        this.applyOrdered(msg.data.seq, () => {
+          this.callbacks.onSheetAdded?.(msg.data)
         })
         break
 
