@@ -127,9 +127,9 @@ const workSheetSlice = createSlice({
      * - 改的是本端当前 sheet → 同步 workSheet，Canvas 立即刷新
      */
     builder.addCase(updateWorkbookCell, function syncActiveWorksheet(state, action) {
-      const { sheetId } = action.payload
+      const { sheetId, ...input } = action.payload
       if (sheetId !== state.sheetId) return
-      applyUpdateCellToWorksheet(state, action.payload)
+      applyUpdateCellToWorksheet(state, input)
     })
 
     /**
@@ -141,7 +141,7 @@ const workSheetSlice = createSlice({
       const { sheetId, updates } = action.payload
       if (sheetId !== state.sheetId) return
       for (const u of updates) {
-        applyUpdateCellToWorksheet(state, { sheetId, ...u })
+        applyUpdateCellToWorksheet(state, u)
       }
     })
   },

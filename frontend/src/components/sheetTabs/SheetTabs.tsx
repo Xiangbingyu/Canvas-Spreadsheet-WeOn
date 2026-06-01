@@ -2,10 +2,14 @@ import { useState } from 'react'
 import { useDispatch, useSelector } from 'react-redux'
 import { AddSheetModal } from '@/components/sheetTabs/AddSheetModal'
 import type { RootState } from '@/spreadsheet/store'
-import { addSheet, setWorksheet, switchSheet, store } from '@/spreadsheet/store'
+import { setWorksheet, switchSheet } from '@/spreadsheet/store'
 import { setSelectedCell } from '@/spreadsheet/store/selectStore'
 
-export function SheetTabs() {
+type SheetTabsProps = {
+  onAddSheet: (sheetName: string) => void
+}
+
+export function SheetTabs({ onAddSheet }: SheetTabsProps) {
   const dispatch = useDispatch()
   const [addOpen, setAddOpen] = useState(false)
 
@@ -32,19 +36,7 @@ export function SheetTabs() {
   }
 
   function handleAddSheet(sheetName: string) {
-    dispatch(addSheet({ savedSheet: activeWorksheet, sheetName }))
-    const { activeSheetId: nextId, sheets: nextSheets } = store.getState().workbook
-    const nextSheet = nextSheets[nextId]
-    if (!nextSheet) return
-    dispatch(setWorksheet(nextSheet))
-    dispatch(
-      setSelectedCell({
-        row: 1,
-        col: 1,
-        value: '',
-        style: {},
-      })
-    )
+    onAddSheet(sheetName)
   }
 
   return (

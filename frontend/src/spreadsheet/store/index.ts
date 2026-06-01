@@ -21,6 +21,7 @@ import {
 } from './userStore'
 import {
   addSheet,
+  applySheetAdded,
   initFromDoc,
   switchSheet,
   importWorkbook,
@@ -60,6 +61,7 @@ export {
   initFromDoc,
   switchSheet,
   addSheet,
+  applySheetAdded,
   importWorkbook,
   setClipboard,
   clearClipboard,

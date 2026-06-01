@@ -13,6 +13,7 @@ import { useCommitCell, useCommitBatch } from '@/hooks/useCommitCell'
 import { useCollab } from '@/hooks/useCollab'
 import { useUnifiedHistory } from '@/hooks/useUnifiedHistory'
 import type { RootState } from '@/spreadsheet/store'
+import { addSheet as addSheetAction, setWorksheet, store } from '@/spreadsheet/store'
 import type { WorkbookSnapshotPayload } from '@/spreadsheet/store/workbookStore'
 import { setSelectedCell } from '@/spreadsheet/store/selectStore'
 
@@ -25,12 +26,15 @@ export function SpreadsheetWorkspace() {
   const dispatch = useDispatch()
   const docId = useSelector((s: RootState) => s.collab.docId)
   const clientId = useSelector((s: RootState) => s.collab.clientId)
+  const activeWorksheet = useSelector((s: RootState) => s.workSheet)
 
-  const { connect, disconnect, setCell, setTitle, importWorkbook, getClient } = useCollab({
-    url: COLLAB_WS_URL,
-    docId,
-    clientId,
-  })
+  const { connect, disconnect, setCell, setTitle, importWorkbook, addSheet, getClient } = useCollab(
+    {
+      url: COLLAB_WS_URL,
+      docId,
+      clientId,
+    }
+  )
 
   const handleImportWorkbook = useCallback(
     (workbook: WorkbookSnapshotPayload): boolean => {
@@ -49,6 +53,27 @@ export function SpreadsheetWorkspace() {
       return sent
     },
     [importWorkbook, dispatch]
+  )
+
+  const handleAddSheet = useCallback(
+    (sheetName: string) => {
+      dispatch(addSheetAction({ savedSheet: activeWorksheet, sheetName }))
+      const { activeSheetId, sheets } = store.getState().workbook
+      const nextSheet = sheets[activeSheetId]
+      if (nextSheet) {
+        dispatch(setWorksheet(nextSheet))
+      }
+      dispatch(
+        setSelectedCell({
+          row: 1,
+          col: 1,
+          value: '',
+          style: {},
+        })
+      )
+      addSheet(sheetName)
+    },
+    [addSheet, dispatch, activeWorksheet]
   )
 
   useEffect(() => {
@@ -118,7 +143,7 @@ export function SpreadsheetWorkspace() {
       </div>
 
       <StatusBar />
-      <SheetTabs />
+      <SheetTabs onAddSheet={handleAddSheet} />
     </div>
   )
 }

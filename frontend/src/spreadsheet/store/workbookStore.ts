@@ -12,6 +12,7 @@ import type { WorksheetData } from '@/spreadsheet/model/types'
 import { createEmptySheet, generateNextSheetId } from '@/spreadsheet/utils/createEmptySheet'
 import {
   applyUpdateCellToWorksheet,
+  type ApplyUpdateCellInput,
   type UpdateCellPayload,
 } from '@/spreadsheet/utils/applyUpdateCell'
 
@@ -50,9 +51,16 @@ type AddSheetPayload = {
   sheetName: string
 }
 
+/** 服务端 sheet_added 确认：合并新表并替换同名乐观 local_* id */
+export type ApplySheetAddedPayload = {
+  sheetOrder: string[]
+  sheet: WorksheetData
+  replaceSheetId?: string
+}
+
 export type UpdateRangePayload = {
   sheetId: string
-  updates: Array<{ row: number; col: number; value: string; style?: Style | null }>
+  updates: ApplyUpdateCellInput[]
 }
 
 const workbookSlice = createSlice({
@@ -100,6 +108,42 @@ const workbookSlice = createSlice({
       state.activeSheetId = sheetId
     },
 
+    /** WS sheet_added：校正乐观 id 或合并远端新建表（不切换当前 tab） */
+    applySheetAdded(state, action: PayloadAction<ApplySheetAddedPayload>) {
+      const { sheetOrder, sheet, replaceSheetId: explicitReplace } = action.payload
+
+      let replaceSheetId = explicitReplace
+      if (!replaceSheetId) {
+        for (const id of state.sheetOrder) {
+          const local = state.sheets[id]
+          if (
+            id.startsWith('local_') &&
+            local?.sheetName === sheet.sheetName &&
+            !sheetOrder.includes(id)
+          ) {
+            replaceSheetId = id
+            break
+          }
+        }
+      }
+
+      if (replaceSheetId && replaceSheetId !== sheet.sheetId) {
+        if (state.activeSheetId === replaceSheetId) {
+          state.activeSheetId = sheet.sheetId
+        }
+        delete state.sheets[replaceSheetId]
+      }
+
+      state.sheets[sheet.sheetId] = sheet
+      state.sheetOrder = sheetOrder
+
+      for (const id of Object.keys(state.sheets)) {
+        if (!sheetOrder.includes(id)) {
+          delete state.sheets[id]
+        }
+      }
+    },
+
     /** Excel 导入 / 整表替换：写入 workbook 快照，默认激活第一个 sheet  因为没有接后端，暂时使用 */
     importWorkbook(state, action: PayloadAction<WorkbookSnapshotPayload>) {
       const { activeSheetId, sheetOrder, sheets } = action.payload
@@ -124,10 +168,10 @@ const workbookSlice = createSlice({
      * 协作模块收到广播后只需：dispatch(updateCell({ sheetId, row, col, value, style }))
      */
     updateCell(state, action: PayloadAction<UpdateCellPayload>) {
-      const { sheetId } = action.payload
+      const { sheetId, ...input } = action.payload
       const sheet = state.sheets[sheetId]
       if (!sheet) return
-      applyUpdateCellToWorksheet(sheet, action.payload)
+      applyUpdateCellToWorksheet(sheet, input)
     },
 
     /**
@@ -143,7 +187,7 @@ const workbookSlice = createSlice({
       const sheet = state.sheets[sheetId]
       if (!sheet) return
       for (const u of updates) {
-        applyUpdateCellToWorksheet(sheet, { sheetId, ...u })
+        applyUpdateCellToWorksheet(sheet, u)
       }
     },
   },
@@ -154,6 +198,7 @@ export const {
   setDocTitle,
   switchSheet,
   addSheet,
+  applySheetAdded,
   importWorkbook,
   updateCell,
   updateRange,

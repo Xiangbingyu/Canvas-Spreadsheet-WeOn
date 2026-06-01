@@ -9,6 +9,7 @@ import type {
   TitleUpdated,
   CursorUpdate,
   SheetImported,
+  SheetAdded,
 } from '../spreadsheet/model/collabProtocol'
 import {
   setWorksheet,
@@ -19,6 +20,8 @@ import {
   setCurrentSeq,
   setConnectionStatus,
   importWorkbook as importWorkbookAction,
+  applySheetAdded,
+  store,
 } from '@/spreadsheet/store'
 import { insertRow, deleteRow, insertCol, deleteCol } from '@/spreadsheet/store/workSheetStore'
 import type { WorkbookSnapshotPayload } from '@/spreadsheet/store/workbookStore'
@@ -82,6 +85,23 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
         // 服务端 import_sheet 确认：以服务端快照为准校正本地（乐观更新后的对齐）
         const workbook = fromHttpDocWorkbookSnapshot(data.snapshot as unknown as WorkbookSnapshot)
         applyLocalWorkbookImport(dispatch, workbook)
+        dispatch(setCurrentSeq(data.seq))
+      },
+
+      onSheetAdded(data: SheetAdded['data']) {
+        dispatch(
+          applySheetAdded({
+            sheetOrder: data.sheetOrder,
+            sheet: fromServerSnapshot(
+              data.sheet as unknown as Parameters<typeof fromServerSnapshot>[0]
+            ),
+          })
+        )
+        const { activeSheetId, sheets } = store.getState().workbook
+        const activeSheet = sheets[activeSheetId]
+        if (activeSheet && activeSheet.sheetId !== store.getState().workSheet.sheetId) {
+          dispatch(setWorksheet(activeSheet))
+        }
         dispatch(setCurrentSeq(data.seq))
       },
 
@@ -208,7 +228,14 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
       return true
     },
     sendCursor: (row: number, col: number) => clientRef.current?.sendCursor(row, col),
-    addSheet: (sheetName?: string) => clientRef.current?.addSheet(sheetName),
+    addSheet: (sheetName: string): boolean => {
+      const trimmed = sheetName.trim()
+      if (!trimmed) return false
+      const client = clientRef.current
+      if (!client) return false
+      client.addSheet(trimmed)
+      return true
+    },
     setBatchCells: (
       sheetId: string,
       updates: Array<{
