@@ -209,6 +209,19 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
     },
     sendCursor: (row: number, col: number) => clientRef.current?.sendCursor(row, col),
     addSheet: (sheetName?: string) => clientRef.current?.addSheet(sheetName),
+    setBatchCells: (
+      sheetId: string,
+      updates: Array<{
+        row: number
+        col: number
+        value: string
+        style: Record<string, unknown> | null
+      }>
+    ) => {
+      const client = clientRef.current
+      if (!client) return
+      client.setBatchCells(sheetId, client.currentSeq, updates)
+    },
     insertRow: (sheetId: string, row: number) => {
       clientRef.current?.insertRow(sheetId, row)
     },
