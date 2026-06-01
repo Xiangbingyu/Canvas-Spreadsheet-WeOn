@@ -4,7 +4,6 @@ import type {
   TitleUpdated,
   CursorUpdate,
   SheetImported,
-  SheetAdded,
   UndoApplied,
   RedoApplied,
   RowInserted,
@@ -41,8 +40,6 @@ export interface CollabCallbacks {
   onColInserted?: (data: ColInserted['data']) => void
   /** 列被删除 */
   onColDeleted?: (data: ColDeleted['data']) => void
-  /** 新建工作表 */
-  onSheetAdded?: (data: SheetAdded['data']) => void
   /** 在线用户列表更新 */
   onPresence: (users: UserInfo[]) => void
   /** 错误 */
@@ -262,15 +259,6 @@ export class CollabClient {
     })
   }
 
-  addSheet(sheetName?: string): void {
-    this.send({
-      type: 'add_sheet',
-      docId: this.docId,
-      clientId: this.clientId,
-      sheetName,
-    })
-  }
-
   setBatchCells(
     sheetId: string,
     baseSeq: number,
@@ -373,14 +361,10 @@ export class CollabClient {
         })
         break
 
-      case 'sheet_added':
-        this.applyOrdered(msg.data.seq, () => {
-          this.callbacks.onSheetAdded?.(msg.data)
-        })
-        break
-
       case 'batch_cell_updated':
         this.applyOrdered(msg.data.seq, () => {
+          // 批量单元格更新：逐个调用 onCellUpdated 回调
+          // 这样可以复用现有的协同处理逻辑
           for (const update of msg.data.updates) {
             this.callbacks.onCellUpdated({
               docId: msg.data.docId,
