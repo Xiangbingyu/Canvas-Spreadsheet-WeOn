@@ -1,7 +1,9 @@
-﻿﻿﻿const WS_MESSAGE_TYPES = {
+﻿﻿﻿﻿const WS_MESSAGE_TYPES = {
   JOIN: 'join',
   JOIN_ACK: 'join_ack',
   PRESENCE: 'presence',
+  CURSOR: 'cursor',
+  CURSOR_UPDATE: 'cursor_update',
   SET_CELL: 'set_cell',
   CELL_UPDATED: 'cell_updated',
   INSERT_ROW: 'insert_row',

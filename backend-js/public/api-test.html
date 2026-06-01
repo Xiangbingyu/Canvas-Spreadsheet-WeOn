@@ -331,7 +331,7 @@
         </div>
         <div class="hero-card">
           <div class="hero-label">WebSocket message types</div>
-          <div class="hero-value">join, presence, set_cell, insert_row, delete_row, insert_col, delete_col, set_title, add_sheet, import_sheet, undo, redo</div>
+          <div class="hero-value">join, presence, cursor, set_cell, insert_row, delete_row, insert_col, delete_col, set_title, add_sheet, import_sheet, undo, redo</div>
         </div>
       </div>
     </section>
@@ -373,7 +373,6 @@
             <div class="actions" style="margin-top: 0;">
               <button id="connect-ws-button" type="button">Connect</button>
               <button id="disconnect-ws-button" type="button" class="secondary">Disconnect</button>
-              <button id="clear-ws-log-button" type="button" class="ghost">Clear log</button>
             </div>
           </div>
           <div id="ws-messages" class="grid"></div>
@@ -385,6 +384,7 @@
               <h2>WebSocket Log</h2>
               <p class="status-line">Incoming and outgoing frames are appended in real time.</p>
             </div>
+            <button id="clear-ws-log-button" type="button" class="ghost">Clear</button>
           </div>
           <div id="ws-log" class="log-box"></div>
         </section>
@@ -540,6 +540,18 @@
         template: {
           type: 'presence',
           docId: 'doc_sys_001',
+        },
+      },
+      {
+        title: 'Cursor Relay',
+        type: 'cursor',
+        description: 'Broadcast the current selected cell to everyone in the same room. This is a lightweight relay with no seq/history/audit.',
+        template: {
+          type: 'cursor',
+          docId: 'doc_sys_001',
+          clientId: 'user_001',
+          row: 5,
+          col: 3,
         },
       },
       {

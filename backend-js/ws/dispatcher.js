@@ -1,5 +1,6 @@
 const handleJoin = require('./handlers/join');
 const handlePresence = require('./handlers/presence');
+const handleCursor = require('./handlers/cursor');
 const handleSetCell = require('./handlers/setCell');
 const handleInsertRow = require('./handlers/insertRow');
 const handleDeleteRow = require('./handlers/deleteRow');
@@ -17,6 +18,7 @@ const { createWsError } = require('../utils/response');
 const handlers = {
   [WS_MESSAGE_TYPES.JOIN]: handleJoin,
   [WS_MESSAGE_TYPES.PRESENCE]: handlePresence,
+  [WS_MESSAGE_TYPES.CURSOR]: handleCursor,
   [WS_MESSAGE_TYPES.SET_CELL]: handleSetCell,
   [WS_MESSAGE_TYPES.INSERT_ROW]: handleInsertRow,
   [WS_MESSAGE_TYPES.DELETE_ROW]: handleDeleteRow,
