@@ -19,15 +19,14 @@ import type { RootState } from '@/spreadsheet/store'
 import type { Style } from '@/spreadsheet/model/types'
 import type { Cell } from '@/spreadsheet/model/types'
 import type { CommitCellFn } from '@/hooks/useSpreadsheetInteraction'
+import type { BatchCommitFn } from '@/hooks/useCommitCell'
 import type { CollabClient } from '@/spreadsheet/collab/CollabClient'
 
 export interface UseUnifiedHistoryResult {
   /** 包装后的提交函数：执行写入并记录历史。替代直接调用 onCommitCell。 */
   commitWithHistory: CommitCellFn
   /** 批量提交函数：多个单元格的修改作为一个原子操作 */
-  commitBatchWithHistory: (
-    updates: Array<{ row: number; col: number; value: string; style?: Style }>
-  ) => void
+  commitBatchWithHistory: BatchCommitFn
   /** 行列操作的包装函数 */
   executeRowColWithHistory: (
     action: 'insert_row' | 'delete_row' | 'insert_col' | 'delete_col',
@@ -39,10 +38,12 @@ export interface UseUnifiedHistoryResult {
 
 /**
  * @param onCommitCell 真实提交（走 WS）。缺省时回放也无处可去，undo/redo 变为 no-op。
+ * @param onCommitBatch 批量提交（走 WS batch_set_cell）。缺省时用 onCommitCell 逐个提交。
  * @param collabClient 协同客户端，用于发送行列操作到后端。缺省时行列操作只更新本地。
  */
 export function useUnifiedHistory(
   onCommitCell?: CommitCellFn,
+  onCommitBatch?: BatchCommitFn,
   collabClient?: CollabClient
 ): UseUnifiedHistoryResult {
   const dispatch = useDispatch()
@@ -52,11 +53,15 @@ export function useUnifiedHistory(
     historyRef.current = new HistoryStack()
   }
 
-  // 把 onCommitCell 放进 ref，保证回调标识稳定，依赖它的函数无需重建
+  // 把 onCommitCell 和 onCommitBatch 放进 ref，保证回调标识稳定
   const commitRef = useRef(onCommitCell)
+  const batchCommitRef = useRef(onCommitBatch)
   useEffect(() => {
     commitRef.current = onCommitCell
   }, [onCommitCell])
+  useEffect(() => {
+    batchCommitRef.current = onCommitBatch
+  }, [onCommitBatch])
 
   /** 从 store 读某格当前快照（值 + 完整样式） */
   const readSnapshot = useCallback(
@@ -114,22 +119,31 @@ export function useUnifiedHistory(
   )
 
   // 批量提交入口：多个单元格的修改作为一个原子操作
-  const commitBatchWithHistory = useCallback(
+  const commitBatchWithHistory = useCallback<BatchCommitFn>(
     (updates: Array<{ row: number; col: number; value: string; style?: Style }>) => {
-      const operations: CellOperation[] = []
-      batch(() => {
-        for (const { row, col, value, style } of updates) {
-          const before = readSnapshot(row, col)
-          rawCommit(row, col, value, style)
-          const after: CellSnapshot = { value, style: style ?? before.style }
-          operations.push({ row, col, before, after })
-        }
+      const operations: CellOperation[] = updates.map(({ row, col, value, style }) => {
+        const before = readSnapshot(row, col)
+        const after: CellSnapshot = { value, style: style ?? before.style }
+        return { row, col, before, after }
       })
+
+      // 一次批量提交，不再逐个调用 rawCommit
+      if (batchCommitRef.current) {
+        batchCommitRef.current(updates)
+      } else if (commitRef.current) {
+        // 降级：无批量提交时，逐个调用单个提交
+        batch(() => {
+          for (const { row, col, value, style } of updates) {
+            commitRef.current?.(row, col, value, style)
+          }
+        })
+      }
+
       if (operations.length > 0) {
         historyRef.current.push({ type: 'batch_cell', operations })
       }
     },
-    [readSnapshot, rawCommit]
+    [readSnapshot]
   )
 
   // 行列操作入口

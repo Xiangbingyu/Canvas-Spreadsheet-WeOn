@@ -10,7 +10,10 @@
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit'
 import type { Cell, WorksheetData } from '@/spreadsheet/model/types'
 import { applyUpdateCellToWorksheet } from '@/spreadsheet/utils/applyUpdateCell'
-import { updateCell as updateWorkbookCell } from './workbookStore'
+import {
+  updateCell as updateWorkbookCell,
+  updateRange as updateWorkbookRange,
+} from './workbookStore'
 
 export type { UpdateCellPayload } from '@/spreadsheet/utils/applyUpdateCell'
 
@@ -128,9 +131,22 @@ const workSheetSlice = createSlice({
       if (sheetId !== state.sheetId) return
       applyUpdateCellToWorksheet(state, action.payload)
     })
+
+    /**
+     * 监听 workbook/updateRange：
+     * - 远端改的是别的 sheet → 只更新 workbook，本 slice 跳过
+     * - 改的是本端当前 sheet → 同步 workSheet，Canvas 立即刷新
+     */
+    builder.addCase(updateWorkbookRange, function syncActiveWorksheetRange(state, action) {
+      const { sheetId, updates } = action.payload
+      if (sheetId !== state.sheetId) return
+      for (const u of updates) {
+        applyUpdateCellToWorksheet(state, { sheetId, ...u })
+      }
+    })
   },
 })
 
 export const { setWorksheet, insertRow, deleteRow, insertCol, deleteCol } = workSheetSlice.actions
-export { updateCell } from './workbookStore'
+export { updateCell, updateRange } from './workbookStore'
 export const workSheetReducer = workSheetSlice.reducer

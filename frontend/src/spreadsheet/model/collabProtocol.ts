@@ -22,6 +22,7 @@ export type ClientMessageType =
   | 'delete_row'
   | 'insert_col'
   | 'delete_col'
+  | 'batch_set_cell'
 
 export type ServerMessageType =
   | 'join_ack'
@@ -36,6 +37,7 @@ export type ServerMessageType =
   | 'row_deleted'
   | 'col_inserted'
   | 'col_deleted'
+  | 'batch_cell_updated'
   | 'error'
 
 // ===== 客户端 → 服务端 =====
@@ -128,6 +130,20 @@ export interface DeleteColRequest {
   col: number // 1-indexed
 }
 
+export interface BatchSetCellRequest {
+  type: 'batch_set_cell'
+  docId: string
+  clientId: string
+  sheetId: string
+  baseSeq: number
+  updates: Array<{
+    row: number // 1-indexed
+    col: number // 1-indexed
+    value: string
+    style: Record<string, unknown> | null
+  }>
+}
+
 export type WsRequest =
   | JoinRequest
   | SetCellRequest
@@ -140,6 +156,7 @@ export type WsRequest =
   | DeleteRowRequest
   | InsertColRequest
   | DeleteColRequest
+  | BatchSetCellRequest
 
 // ===== 服务端 → 客户端 =====
 
@@ -314,6 +331,26 @@ export interface ColDeleted {
   }
 }
 
+export interface BatchCellUpdated {
+  type: 'batch_cell_updated'
+  code: 0
+  message: 'ok'
+  data: {
+    docId: string
+    clientId: string
+    sheetId: string
+    seq: number
+    updates: Array<{
+      row: number // 1-indexed
+      col: number // 1-indexed
+      value: string
+      style: Record<string, unknown> | null
+    }>
+    canUndo: boolean
+    canRedo: boolean
+  }
+}
+
 export type WsResponse =
   | JoinAck
   | CellUpdated
@@ -327,6 +364,7 @@ export type WsResponse =
   | RowDeleted
   | ColInserted
   | ColDeleted
+  | BatchCellUpdated
   | ErrorMessage
 
 // ===== 用户信息（collab 专用） =====

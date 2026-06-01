@@ -9,7 +9,7 @@ import { Toolbar } from '@/components/Toolbar/Toolbar'
 import { CellEditOverlay } from '@/components/cellEditor/CellEditOverlay'
 import GrideCanvas from '@/components/grideCanvas/GrideCanvas'
 import { useSpreadsheetInteraction } from '@/hooks/useSpreadsheetInteraction'
-import { useCommitCell } from '@/hooks/useCommitCell'
+import { useCommitCell, useCommitBatch } from '@/hooks/useCommitCell'
 import { useCollab } from '@/hooks/useCollab'
 import { useUnifiedHistory } from '@/hooks/useUnifiedHistory'
 import { importWorkbook, setWorksheet, type RootState } from '@/spreadsheet/store'
@@ -65,8 +65,9 @@ export function SpreadsheetWorkspace() {
   }, [docId, clientId, connect, disconnect])
 
   const onCommitCell = useCommitCell(setCell)
+  const onCommitBatch = useCommitBatch(undefined) // 暂时不传 setBatchCells，等 yjy 实现
   const { commitWithHistory, commitBatchWithHistory, executeRowColWithHistory, undo, redo } =
-    useUnifiedHistory(onCommitCell, getClient())
+    useUnifiedHistory(onCommitCell, onCommitBatch, getClient())
 
   const {
     engine,
