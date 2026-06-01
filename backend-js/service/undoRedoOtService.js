@@ -1,5 +1,8 @@
 const { ERROR_CODES } = require('../protocol/errorCodes');
-const { shouldTreatAsOtBarrier } = require('./cellOtService');
+const {
+  shouldTreatAsOtBarrier,
+  transformCellReferenceThroughHistory,
+} = require('./cellOtService');
 
 function createServiceError(code, message, details = null) {
   const error = new Error(message);
@@ -102,6 +105,9 @@ async function resolveUndoRedoOperation({
     const normalizedDesiredState = normalizeCellState(desiredState);
 
     return {
+      sheetId: entry.sheetId || null,
+      row: entry.row,
+      col: entry.col,
       sourceSeq: referenceSeq,
       baseSeq: currentDoc.currentSeq,
       rebased: false,
@@ -130,17 +136,34 @@ async function resolveUndoRedoOperation({
     });
   }
 
-  const currentState = getCurrentCellState(currentDoc, entry.row, entry.col, entry.sheetId);
   const normalizedDesiredState = normalizeCellState(desiredState);
-  const sameCellTouched = historyEntries.some((historyEntry) => isSameCellTouched(historyEntry, entry.sheetId, entry.row, entry.col));
-  const targetState = sameCellTouched ? currentState : normalizedDesiredState;
+  const transformedTarget = transformCellReferenceThroughHistory({
+    sheetId: entry.sheetId || null,
+    row: entry.row,
+    col: entry.col,
+    historyEntries,
+    currentDoc,
+  });
+  const transformedCurrentState = getCurrentCellState(
+    currentDoc,
+    transformedTarget.row,
+    transformedTarget.col,
+    transformedTarget.sheetId
+  );
+  const sameCellTouched = historyEntries.some((historyEntry) => (
+    isSameCellTouched(historyEntry, transformedTarget.sheetId, transformedTarget.row, transformedTarget.col)
+  ));
+  const targetState = sameCellTouched ? transformedCurrentState : normalizedDesiredState;
 
   return {
+    sheetId: transformedTarget.sheetId,
+    row: transformedTarget.row,
+    col: transformedTarget.col,
     sourceSeq: referenceSeq,
     baseSeq: currentDoc.currentSeq,
     rebased: true,
-    noop: sameCellTouched || areCellStatesEqual(currentState, targetState),
-    currentState,
+    noop: sameCellTouched || areCellStatesEqual(transformedCurrentState, targetState),
+    currentState: transformedCurrentState,
     targetState,
     conflictSeq: null,
   };

@@ -524,7 +524,7 @@
       {
         title: 'Join Document',
         type: 'join',
-        description: 'Join a room and receive join_ack with snapshot, users and current sequence.',
+        description: 'Join a room and receive join_ack with snapshot, users and currentSeq. For OT-aware set_cell/set_title testing, copy join_ack.data.currentSeq into baseSeq first.',
         template: {
           type: 'join',
           docId: 'doc_sys_001',
@@ -557,12 +557,13 @@
       {
         title: 'Set Cell',
         type: 'set_cell',
-        description: 'Write a cell value and optional style to the specified sheet. row and col are 1-based integers.',
+        description: 'Write a cell value and optional style to the specified sheet. row and col are 1-based integers. baseSeq should come from join_ack.data.currentSeq or the latest successful mutation seq when testing OT/version checks.',
         template: {
           type: 'set_cell',
           docId: 'doc_sys_001',
           clientId: 'user_001',
           sheetId: 'sheet_20260527_001',
+          baseSeq: 1,
           row: 1,
           col: 1,
           value: 'Hello from test page',
@@ -576,7 +577,7 @@
       {
         title: 'Insert Row',
         type: 'insert_row',
-        description: 'Insert one empty row before the specified 1-based row. Success messages use row_inserted and clear the document undo/redo stacks.',
+        description: 'Insert one empty row before the specified 1-based row. Success messages use row_inserted. Existing cell undo/redo entries are preserved so later undo/redo can be transformed across structure changes.',
         template: {
           type: 'insert_row',
           docId: 'doc_sys_001',
@@ -588,7 +589,7 @@
       {
         title: 'Delete Row',
         type: 'delete_row',
-        description: 'Delete the specified 1-based row. Success messages use row_deleted and clear the document undo/redo stacks.',
+        description: 'Delete the specified 1-based row. Success messages use row_deleted. Existing cell undo/redo entries are preserved so later undo/redo can be transformed across structure changes.',
         template: {
           type: 'delete_row',
           docId: 'doc_sys_001',
@@ -600,7 +601,7 @@
       {
         title: 'Insert Column',
         type: 'insert_col',
-        description: 'Insert one empty column before the specified 1-based column. Success messages use col_inserted and clear the document undo/redo stacks.',
+        description: 'Insert one empty column before the specified 1-based column. Success messages use col_inserted. Existing cell undo/redo entries are preserved so later undo/redo can be transformed across structure changes.',
         template: {
           type: 'insert_col',
           docId: 'doc_sys_001',
@@ -612,7 +613,7 @@
       {
         title: 'Delete Column',
         type: 'delete_col',
-        description: 'Delete the specified 1-based column. Success messages use col_deleted and clear the document undo/redo stacks.',
+        description: 'Delete the specified 1-based column. Success messages use col_deleted. Existing cell undo/redo entries are preserved so later undo/redo can be transformed across structure changes.',
         template: {
           type: 'delete_col',
           docId: 'doc_sys_001',
@@ -624,11 +625,12 @@
       {
         title: 'Set Title',
         type: 'set_title',
-        description: 'Update the document title. The title must be a non-empty string.',
+        description: 'Update the document title. The title must be a non-empty string. baseSeq should come from join_ack.data.currentSeq or the latest successful mutation seq when testing version checks.',
         template: {
           type: 'set_title',
           docId: 'doc_sys_001',
           clientId: 'user_001',
+          baseSeq: 1,
           title: 'Renamed from test page',
         },
       },
@@ -678,7 +680,7 @@
       {
         title: 'Undo',
         type: 'undo',
-        description: 'Undo the latest editable operation for the joined client.',
+        description: 'Undo the latest editable operation for the joined client. If structure changes happened after the original edit, the backend will transform the stored row/col before applying undo.',
         template: {
           type: 'undo',
           docId: 'doc_sys_001',
@@ -688,7 +690,7 @@
       {
         title: 'Redo',
         type: 'redo',
-        description: 'Redo the latest reverted operation for the joined client.',
+        description: 'Redo the latest reverted operation for the joined client. If structure changes happened after the original edit, the backend will transform the stored row/col before applying redo.',
         template: {
           type: 'redo',
           docId: 'doc_sys_001',

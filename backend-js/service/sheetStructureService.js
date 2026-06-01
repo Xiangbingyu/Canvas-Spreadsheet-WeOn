@@ -69,6 +69,8 @@ async function applyStructureChange(command = {}, opType) {
   return docLock.withDocLock(normalizedCommand.docId, async () => {
     let updatedDoc = null;
     let seq = 0;
+    let canUndo = false;
+    let canRedo = false;
 
     const executeMutation = async (connection = null) => {
       const currentDoc = await docsService.getDocStateForWrite(normalizedCommand.docId, {
@@ -123,11 +125,17 @@ async function applyStructureChange(command = {}, opType) {
           sheetId: updatedDoc._targetSheetId || normalizedCommand.sheetId,
           row: normalizedCommand.row,
           col: normalizedCommand.col,
-          clearUndoRedo: true,
+          clearUndoRedo: false,
         },
       }, { connection });
 
-      await userOpStateStore.clearByDocId(normalizedCommand.docId, { connection });
+      const opState = await userOpStateStore.getState(
+        normalizedCommand.docId,
+        normalizedCommand.clientId,
+        { connection }
+      );
+      canUndo = Boolean(opState && Array.isArray(opState.undoStackJson) && opState.undoStackJson.length > 0);
+      canRedo = Boolean(opState && Array.isArray(opState.redoStackJson) && opState.redoStackJson.length > 0);
     };
 
     if (storeConfig.driver === 'mysql') {
@@ -146,7 +154,7 @@ async function applyStructureChange(command = {}, opType) {
       sheetId: updatedDoc && updatedDoc._targetSheetId ? updatedDoc._targetSheetId : normalizedCommand.sheetId,
       row: normalizedCommand.row,
       col: normalizedCommand.col,
-      clearedUndoRedo: true,
+      clearedUndoRedo: false,
     });
 
     return {
@@ -156,8 +164,8 @@ async function applyStructureChange(command = {}, opType) {
       seq,
       ...(normalizedCommand.row !== null ? { row: normalizedCommand.row } : {}),
       ...(normalizedCommand.col !== null ? { col: normalizedCommand.col } : {}),
-      canUndo: false,
-      canRedo: false,
+      canUndo,
+      canRedo,
     };
   });
 }

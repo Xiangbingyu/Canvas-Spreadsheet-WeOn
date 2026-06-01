@@ -67,6 +67,7 @@ async function applySetCell(command = {}) {
     let updatedDoc = null;
     let seq = 0;
     let trimmedUndoStack = [];
+    let effectiveCommand = normalizedCommand;
     let rebaseResult = {
       enabled: false,
       rebased: false,
@@ -90,21 +91,22 @@ async function applySetCell(command = {}) {
         historyStore,
         connection,
       });
+      effectiveCommand = otResult.command;
 
       rebaseResult = otResult.rebaseResult;
 
       const currentSnapshot = currentDoc.snapshotJson || {};
       const currentSheets = currentSnapshot.sheets || {};
 
-      if (!currentSheets[normalizedCommand.sheetId]) {
-        throw createServiceError(ERROR_CODES.INVALID_PARAMS, `sheet not found: ${normalizedCommand.sheetId}`, {
-          docId: normalizedCommand.docId,
-          sheetId: normalizedCommand.sheetId,
+      if (!currentSheets[effectiveCommand.sheetId]) {
+        throw createServiceError(ERROR_CODES.INVALID_PARAMS, `sheet not found: ${effectiveCommand.sheetId}`, {
+          docId: effectiveCommand.docId,
+          sheetId: effectiveCommand.sheetId,
         });
       }
 
       updatedDoc = await docsService.applySetCell({
-        ...otResult.command,
+        ...effectiveCommand,
       }, {
         connection,
       });
@@ -124,10 +126,10 @@ async function applySetCell(command = {}) {
         baseSeq: rebaseResult.baseSeq,
         opType: 'set_cell',
         targetSheetId,
-        targetRow: normalizedCommand.row,
-        targetCol: normalizedCommand.col,
+        targetRow: effectiveCommand.row,
+        targetCol: effectiveCommand.col,
         oldValueJson: { value: oldValue, style: oldStyle },
-        newValueJson: { value: normalizedCommand.value, style: normalizedCommand.style },
+        newValueJson: { value: effectiveCommand.value, style: effectiveCommand.style },
       }, { connection });
 
       const opState = await userOpStateStore.getState(normalizedCommand.docId, normalizedCommand.clientId, { connection });
@@ -138,12 +140,12 @@ async function applySetCell(command = {}) {
         clientId: normalizedCommand.clientId,
         opType: 'set_cell',
         sheetId: targetSheetId,
-        row: normalizedCommand.row,
-        col: normalizedCommand.col,
+        row: effectiveCommand.row,
+        col: effectiveCommand.col,
         oldValue,
         oldStyle,
-        newValue: normalizedCommand.value,
-        newStyle: normalizedCommand.style,
+        newValue: effectiveCommand.value,
+        newStyle: effectiveCommand.style,
         baseSeq: rebaseResult.baseSeq,
       });
       trimmedUndoStack = trimUndoStack(undoStack);
@@ -174,12 +176,12 @@ async function applySetCell(command = {}) {
     return {
       docId: normalizedCommand.docId,
       clientId: normalizedCommand.clientId,
-      sheetId: updatedDoc && updatedDoc._targetSheetId ? updatedDoc._targetSheetId : normalizedCommand.sheetId,
+      sheetId: updatedDoc && updatedDoc._targetSheetId ? updatedDoc._targetSheetId : effectiveCommand.sheetId,
       seq,
-      row: normalizedCommand.row,
-      col: normalizedCommand.col,
-      value: normalizedCommand.value,
-      style: normalizedCommand.style,
+      row: effectiveCommand.row,
+      col: effectiveCommand.col,
+      value: effectiveCommand.value,
+      style: effectiveCommand.style,
       canUndo: true,
       canRedo: false,
     };

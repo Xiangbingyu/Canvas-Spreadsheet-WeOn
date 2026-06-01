@@ -1991,6 +1991,332 @@ test('restored ws test 64', async () => {
   }
 });
 
+test('stale set_cell is transformed across insert_row on the same sheet', async () => {
+  const srv = await createTestServer();
+  const c = await connect(srv.wsUrl);
+  try {
+    const joinAck = await joinDoc(c, 'doc_sys_001', 'u_ot_insert_row');
+    const staleBaseSeq = joinAck.data.currentSeq;
+
+    let base = c.received.length;
+    c.send({
+      type: 'insert_row',
+      docId: 'doc_sys_001',
+      clientId: 'u_ot_insert_row',
+      sheetId: DEFAULT_SHEET_ID,
+      row: 3,
+    });
+    await c.waitFor(base + 2);
+
+    base = c.received.length;
+    c.send({
+      type: 'set_cell',
+      sheetId: DEFAULT_SHEET_ID,
+      docId: 'doc_sys_001',
+      clientId: 'u_ot_insert_row',
+      row: 5,
+      col: 2,
+      value: 'after-insert-row',
+      baseSeq: staleBaseSeq,
+    });
+    await c.waitFor(base + 2);
+
+    const reply = c.received[base];
+    assert.equal(reply.type, 'cell_updated');
+    assert.equal(reply.data.row, 6);
+    assert.equal(reply.data.col, 2);
+
+    const { getDocState } = require('../service/docsService');
+    const docState = await getDocState('doc_sys_001');
+    assert.equal(docState.snapshot.sheets[DEFAULT_SHEET_ID].cells['6:2'].value, 'after-insert-row');
+  } finally {
+    await c.close();
+    await srv.close();
+  }
+});
+
+test('stale set_cell is transformed across delete_row on the same sheet', async () => {
+  const srv = await createTestServer();
+  const c = await connect(srv.wsUrl);
+  try {
+    const joinAck = await joinDoc(c, 'doc_sys_001', 'u_ot_delete_row');
+    const staleBaseSeq = joinAck.data.currentSeq;
+
+    let base = c.received.length;
+    c.send({
+      type: 'delete_row',
+      docId: 'doc_sys_001',
+      clientId: 'u_ot_delete_row',
+      sheetId: DEFAULT_SHEET_ID,
+      row: 3,
+    });
+    await c.waitFor(base + 2);
+
+    base = c.received.length;
+    c.send({
+      type: 'set_cell',
+      sheetId: DEFAULT_SHEET_ID,
+      docId: 'doc_sys_001',
+      clientId: 'u_ot_delete_row',
+      row: 5,
+      col: 2,
+      value: 'after-delete-row',
+      baseSeq: staleBaseSeq,
+    });
+    await c.waitFor(base + 2);
+
+    const reply = c.received[base];
+    assert.equal(reply.type, 'cell_updated');
+    assert.equal(reply.data.row, 4);
+    assert.equal(reply.data.col, 2);
+
+    const { getDocState } = require('../service/docsService');
+    const docState = await getDocState('doc_sys_001');
+    assert.equal(docState.snapshot.sheets[DEFAULT_SHEET_ID].cells['4:2'].value, 'after-delete-row');
+  } finally {
+    await c.close();
+    await srv.close();
+  }
+});
+
+test('stale set_cell is transformed across insert_col on the same sheet', async () => {
+  const srv = await createTestServer();
+  const c = await connect(srv.wsUrl);
+  try {
+    const joinAck = await joinDoc(c, 'doc_sys_001', 'u_ot_insert_col');
+    const staleBaseSeq = joinAck.data.currentSeq;
+
+    let base = c.received.length;
+    c.send({
+      type: 'insert_col',
+      docId: 'doc_sys_001',
+      clientId: 'u_ot_insert_col',
+      sheetId: DEFAULT_SHEET_ID,
+      col: 2,
+    });
+    await c.waitFor(base + 2);
+
+    base = c.received.length;
+    c.send({
+      type: 'set_cell',
+      sheetId: DEFAULT_SHEET_ID,
+      docId: 'doc_sys_001',
+      clientId: 'u_ot_insert_col',
+      row: 5,
+      col: 5,
+      value: 'after-insert-col',
+      baseSeq: staleBaseSeq,
+    });
+    await c.waitFor(base + 2);
+
+    const reply = c.received[base];
+    assert.equal(reply.type, 'cell_updated');
+    assert.equal(reply.data.row, 5);
+    assert.equal(reply.data.col, 6);
+
+    const { getDocState } = require('../service/docsService');
+    const docState = await getDocState('doc_sys_001');
+    assert.equal(docState.snapshot.sheets[DEFAULT_SHEET_ID].cells['5:6'].value, 'after-insert-col');
+  } finally {
+    await c.close();
+    await srv.close();
+  }
+});
+
+test('stale set_cell is transformed across delete_col on the same sheet', async () => {
+  const srv = await createTestServer();
+  const c = await connect(srv.wsUrl);
+  try {
+    const joinAck = await joinDoc(c, 'doc_sys_001', 'u_ot_delete_col');
+    const staleBaseSeq = joinAck.data.currentSeq;
+
+    let base = c.received.length;
+    c.send({
+      type: 'delete_col',
+      docId: 'doc_sys_001',
+      clientId: 'u_ot_delete_col',
+      sheetId: DEFAULT_SHEET_ID,
+      col: 2,
+    });
+    await c.waitFor(base + 2);
+
+    base = c.received.length;
+    c.send({
+      type: 'set_cell',
+      sheetId: DEFAULT_SHEET_ID,
+      docId: 'doc_sys_001',
+      clientId: 'u_ot_delete_col',
+      row: 5,
+      col: 5,
+      value: 'after-delete-col',
+      baseSeq: staleBaseSeq,
+    });
+    await c.waitFor(base + 2);
+
+    const reply = c.received[base];
+    assert.equal(reply.type, 'cell_updated');
+    assert.equal(reply.data.row, 5);
+    assert.equal(reply.data.col, 4);
+
+    const { getDocState } = require('../service/docsService');
+    const docState = await getDocState('doc_sys_001');
+    assert.equal(docState.snapshot.sheets[DEFAULT_SHEET_ID].cells['5:4'].value, 'after-delete-col');
+  } finally {
+    await c.close();
+    await srv.close();
+  }
+});
+
+test('delayed set_cell overwrites the transformed target after one insert_col', async () => {
+  const srv = await createTestServer();
+  const c = await connect(srv.wsUrl);
+  try {
+    const joinAck = await joinDoc(c, 'doc_sys_001', 'u_ot_delay_one_step');
+    const staleBaseSeq = joinAck.data.currentSeq;
+
+    let base = c.received.length;
+    c.send({
+      type: 'insert_col',
+      docId: 'doc_sys_001',
+      clientId: 'u_ot_delay_one_step',
+      sheetId: DEFAULT_SHEET_ID,
+      col: 2,
+    });
+    await c.waitFor(base + 2);
+
+    base = c.received.length;
+    c.send({
+      type: 'set_cell',
+      sheetId: DEFAULT_SHEET_ID,
+      docId: 'doc_sys_001',
+      clientId: 'u_ot_delay_one_step',
+      row: 1,
+      col: 2,
+      value: 'current-B1',
+    });
+    await c.waitFor(base + 2);
+
+    base = c.received.length;
+    c.send({
+      type: 'set_cell',
+      sheetId: DEFAULT_SHEET_ID,
+      docId: 'doc_sys_001',
+      clientId: 'u_ot_delay_one_step',
+      row: 1,
+      col: 3,
+      value: 'current-C1',
+    });
+    await c.waitFor(base + 2);
+
+    base = c.received.length;
+    c.send({
+      type: 'set_cell',
+      sheetId: DEFAULT_SHEET_ID,
+      docId: 'doc_sys_001',
+      clientId: 'u_ot_delay_one_step',
+      row: 1,
+      col: 2,
+      value: 'delayed-from-baseSeq-10',
+      baseSeq: staleBaseSeq,
+    });
+    await c.waitFor(base + 2);
+
+    const reply = c.received[base];
+    assert.equal(reply.type, 'cell_updated');
+    assert.equal(reply.data.row, 1);
+    assert.equal(reply.data.col, 3);
+
+    const { getDocState } = require('../service/docsService');
+    const docState = await getDocState('doc_sys_001');
+    const sheet = docState.snapshot.sheets[DEFAULT_SHEET_ID];
+    assert.equal(sheet.cells['1:2'].value, 'current-B1');
+    assert.equal(sheet.cells['1:3'].value, 'delayed-from-baseSeq-10');
+  } finally {
+    await c.close();
+    await srv.close();
+  }
+});
+
+test('delayed set_cell is transformed through insert_row and insert_col in sequence', async () => {
+  const srv = await createTestServer();
+  const c = await connect(srv.wsUrl);
+  try {
+    const joinAck = await joinDoc(c, 'doc_sys_001', 'u_ot_delay_two_steps');
+    const staleBaseSeq = joinAck.data.currentSeq;
+
+    let base = c.received.length;
+    c.send({
+      type: 'insert_row',
+      docId: 'doc_sys_001',
+      clientId: 'u_ot_delay_two_steps',
+      sheetId: DEFAULT_SHEET_ID,
+      row: 1,
+    });
+    await c.waitFor(base + 2);
+
+    base = c.received.length;
+    c.send({
+      type: 'insert_col',
+      docId: 'doc_sys_001',
+      clientId: 'u_ot_delay_two_steps',
+      sheetId: DEFAULT_SHEET_ID,
+      col: 2,
+    });
+    await c.waitFor(base + 2);
+
+    base = c.received.length;
+    c.send({
+      type: 'set_cell',
+      sheetId: DEFAULT_SHEET_ID,
+      docId: 'doc_sys_001',
+      clientId: 'u_ot_delay_two_steps',
+      row: 1,
+      col: 2,
+      value: 'current-B1-after-shifts',
+    });
+    await c.waitFor(base + 2);
+
+    base = c.received.length;
+    c.send({
+      type: 'set_cell',
+      sheetId: DEFAULT_SHEET_ID,
+      docId: 'doc_sys_001',
+      clientId: 'u_ot_delay_two_steps',
+      row: 2,
+      col: 3,
+      value: 'current-C2-before-delay',
+    });
+    await c.waitFor(base + 2);
+
+    base = c.received.length;
+    c.send({
+      type: 'set_cell',
+      sheetId: DEFAULT_SHEET_ID,
+      docId: 'doc_sys_001',
+      clientId: 'u_ot_delay_two_steps',
+      row: 1,
+      col: 2,
+      value: 'delayed-through-two-transforms',
+      baseSeq: staleBaseSeq,
+    });
+    await c.waitFor(base + 2);
+
+    const reply = c.received[base];
+    assert.equal(reply.type, 'cell_updated');
+    assert.equal(reply.data.row, 2);
+    assert.equal(reply.data.col, 3);
+
+    const { getDocState } = require('../service/docsService');
+    const docState = await getDocState('doc_sys_001');
+    const sheet = docState.snapshot.sheets[DEFAULT_SHEET_ID];
+    assert.equal(sheet.cells['1:2'].value, 'current-B1-after-shifts');
+    assert.equal(sheet.cells['2:3'].value, 'delayed-through-two-transforms');
+  } finally {
+    await c.close();
+    await srv.close();
+  }
+});
+
 // ==================== import_sheet ====================
 
 test('restored ws test 65', async () => {
@@ -2600,7 +2926,7 @@ test('add_sheet validates params and records history and audit', async () => {
   }
 });
 
-test('insert_row persists row shifts and clears document undo state', async () => {
+test('insert_row persists row shifts and preserves user undo state for transformer', async () => {
   const srv = await createTestServer();
   const c = await connect(srv.wsUrl);
   try {
@@ -2638,7 +2964,7 @@ test('insert_row persists row shifts and clears document undo state', async () =
     assert.equal(reply.data.docId, 'doc_sys_001');
     assert.equal(reply.data.sheetId, DEFAULT_SHEET_ID);
     assert.equal(reply.data.row, 2);
-    assert.equal(reply.data.canUndo, false);
+    assert.equal(reply.data.canUndo, true);
     assert.equal(reply.data.canRedo, false);
 
     const { getDocState } = require('../service/docsService');
@@ -2651,7 +2977,7 @@ test('insert_row persists row shifts and clears document undo state', async () =
 
     const afterInsert = await userOpStateStore.getState('doc_sys_001', 'u_insert_row_clear');
     assert.ok(afterInsert);
-    assert.equal(afterInsert.undoStackJson.length, 0);
+    assert.equal(afterInsert.undoStackJson.length, 1);
     assert.equal(afterInsert.redoStackJson.length, 0);
   } finally {
     await c.close();
@@ -2701,7 +3027,7 @@ test('delete_row deletes target row and shifts following rows', async () => {
     const reply = c.received[deleteBase];
     assert.equal(reply.type, 'row_deleted');
     assert.equal(reply.data.row, 3);
-    assert.equal(reply.data.canUndo, false);
+    assert.equal(reply.data.canUndo, true);
     assert.equal(reply.data.canRedo, false);
 
     const { getDocState } = require('../service/docsService');
@@ -2819,7 +3145,7 @@ test('delete_col validates params and removes target column data', async () => {
     const reply = c.received[deleteBase];
     assert.equal(reply.type, 'col_deleted');
     assert.equal(reply.data.col, 4);
-    assert.equal(reply.data.canUndo, false);
+    assert.equal(reply.data.canUndo, true);
     assert.equal(reply.data.canRedo, false);
 
     const { getDocState } = require('../service/docsService');
@@ -3008,6 +3334,58 @@ test('restored ws test 83', async () => {
   } finally {
     await owner.close();
     await other.close();
+    await srv.close();
+  }
+});
+
+test('undo is transformed across insert_row on the same sheet', async () => {
+  const srv = await createTestServer();
+  const c = await connect(srv.wsUrl);
+  try {
+    await joinDoc(c, 'doc_sys_001', 'u_undo_transform_row');
+
+    let base = c.received.length;
+    c.send({
+      type: 'set_cell',
+      sheetId: DEFAULT_SHEET_ID,
+      docId: 'doc_sys_001',
+      clientId: 'u_undo_transform_row',
+      row: 40,
+      col: 2,
+      value: 'undo-transform-row',
+      style: null,
+    });
+    await c.waitFor(base + 2);
+
+    base = c.received.length;
+    c.send({
+      type: 'insert_row',
+      sheetId: DEFAULT_SHEET_ID,
+      docId: 'doc_sys_001',
+      clientId: 'u_undo_transform_row',
+      row: 10,
+    });
+    await c.waitFor(base + 2);
+
+    base = c.received.length;
+    c.send({
+      type: 'undo',
+      docId: 'doc_sys_001',
+      clientId: 'u_undo_transform_row',
+    });
+    await c.waitFor(base + 2);
+
+    const undoReply = c.received[base];
+    assert.equal(undoReply.type, 'undo_applied');
+    assert.equal(undoReply.data.row, 41);
+    assert.equal(undoReply.data.col, 2);
+    assert.equal(undoReply.data.value, '');
+
+    const { getDocState } = require('../service/docsService');
+    const docState = await getDocState('doc_sys_001');
+    assert.equal(docState.snapshot.sheets[DEFAULT_SHEET_ID].cells['41:2'].value, '');
+  } finally {
+    await c.close();
     await srv.close();
   }
 });
@@ -3442,6 +3820,71 @@ test('restored ws test 94', async () => {
     assert.equal(c.received.filter((m) => m.type === 'error').length, 0);
   } finally {
     auditService.recordAuditEvent = originalRecord;
+    await c.close();
+    await srv.close();
+  }
+});
+
+test('redo is transformed across insert_col on the same sheet', async () => {
+  const srv = await createTestServer();
+  const c = await connect(srv.wsUrl);
+  try {
+    await joinDoc(c, 'doc_sys_001', 'u_redo_transform_col');
+
+    let base = c.received.length;
+    c.send({
+      type: 'set_cell',
+      sheetId: DEFAULT_SHEET_ID,
+      docId: 'doc_sys_001',
+      clientId: 'u_redo_transform_col',
+      row: 42,
+      col: 5,
+      value: 'redo-transform-col',
+      style: null,
+    });
+    await c.waitFor(base + 2);
+
+    base = c.received.length;
+    c.send({
+      type: 'insert_col',
+      sheetId: DEFAULT_SHEET_ID,
+      docId: 'doc_sys_001',
+      clientId: 'u_redo_transform_col',
+      col: 2,
+    });
+    await c.waitFor(base + 2);
+
+    base = c.received.length;
+    c.send({
+      type: 'undo',
+      docId: 'doc_sys_001',
+      clientId: 'u_redo_transform_col',
+    });
+    await c.waitFor(base + 2);
+
+    const undoReply = c.received[base];
+    assert.equal(undoReply.type, 'undo_applied');
+    assert.equal(undoReply.data.row, 42);
+    assert.equal(undoReply.data.col, 6);
+
+    base = c.received.length;
+    c.send({
+      type: 'redo',
+      docId: 'doc_sys_001',
+      clientId: 'u_redo_transform_col',
+    });
+    await c.waitFor(base + 2);
+
+    const redoReply = c.received[base];
+    assert.equal(redoReply.type, 'redo_applied');
+    assert.equal(redoReply.data.row, 42);
+    assert.equal(redoReply.data.col, 6);
+    assert.equal(redoReply.data.value, 'redo-transform-col');
+
+    const { getDocState } = require('../service/docsService');
+    const docState = await getDocState('doc_sys_001');
+    assert.equal(docState.snapshot.sheets[DEFAULT_SHEET_ID].cells['42:6'].value, 'redo-transform-col');
+  } finally {
     await c.close();
     await srv.close();
   }
