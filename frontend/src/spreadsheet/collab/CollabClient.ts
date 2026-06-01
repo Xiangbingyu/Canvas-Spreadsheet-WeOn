@@ -1,12 +1,19 @@
 import type {
   WsResponse,
   CellUpdated,
+  TitleUpdated,
+  CursorUpdate,
   SheetImported,
   UndoApplied,
   RedoApplied,
+  RowInserted,
+  RowDeleted,
+  ColInserted,
+  ColDeleted,
   UserInfo,
   Snapshot,
-} from './protocol'
+} from '../model/collabProtocol'
+import { OfflineQueue, type QueuedOp } from './offlineQueue'
 
 // ===== 回调接口 =====
 
@@ -15,12 +22,24 @@ export interface CollabCallbacks {
   onSnapshot: (snapshot: Snapshot, currentSeq: number) => void
   /** 单元格被更新（别人或自己的操作被服务端确认） */
   onCellUpdated: (data: CellUpdated['data']) => void
+  /** 标题被更新 */
+  onTitleUpdated: (data: TitleUpdated['data']) => void
+  /** 其他用户光标位置变化 */
+  onCursor: (data: CursorUpdate['data']) => void
   /** 整表导入 */
   onSheetImported: (data: SheetImported['data']) => void
   /** 撤销 */
   onUndoApplied: (data: UndoApplied['data']) => void
   /** 重做 */
   onRedoApplied: (data: RedoApplied['data']) => void
+  /** 行被插入 */
+  onRowInserted?: (data: RowInserted['data']) => void
+  /** 行被删除 */
+  onRowDeleted?: (data: RowDeleted['data']) => void
+  /** 列被插入 */
+  onColInserted?: (data: ColInserted['data']) => void
+  /** 列被删除 */
+  onColDeleted?: (data: ColDeleted['data']) => void
   /** 在线用户列表更新 */
   onPresence: (users: UserInfo[]) => void
   /** 错误 */
@@ -55,6 +74,7 @@ export class CollabClient {
   private seq = 0
   private seenSeqs = new Set<number>()
   private pendingOps = new Map<number, () => void>()
+  private sendQueue: string[] = []
 
   private onSend?: (msg: Record<string, unknown>) => void
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
@@ -85,6 +105,7 @@ export class CollabClient {
     this.ws.onopen = () => {
       this.callbacks.onConnectionChange('connected')
       this.join()
+      this.flushSendQueue()
     }
 
     this.ws.onmessage = (event) => {
@@ -115,9 +136,18 @@ export class CollabClient {
     this.clearReconnectTimer()
     this.pendingOps.clear()
     this.seenSeqs.clear()
+    this.sendQueue = []
     if (this.ws) {
       this.ws.onclose = null
-      this.ws.close()
+      this.ws.onerror = null
+      if (this.ws.readyState === WebSocket.CONNECTING) {
+        // 握手未完成就 close 会报 "closed before established"
+        // 等 open 后立即关，规避 StrictMode 双挂载噪声
+        const ws = this.ws
+        ws.onopen = () => ws.close()
+      } else {
+        this.ws.close()
+      }
       this.ws = null
     }
   }
@@ -136,15 +166,34 @@ export class CollabClient {
     })
   }
 
-  setCell(row: number, col: number, value?: string, style?: Record<string, unknown> | null): void {
+  setCell(
+    row: number,
+    col: number,
+    value: string,
+    style: Record<string, unknown> | null,
+    sheetId: string,
+    baseSeq: number
+  ): void {
     this.send({
       type: 'set_cell',
       docId: this.docId,
       clientId: this.clientId,
+      sheetId,
       row,
       col,
       value,
-      style,
+      style: style ?? null,
+      baseSeq,
+    })
+  }
+
+  setTitle(title: string, baseSeq: number): void {
+    this.send({
+      type: 'set_title',
+      docId: this.docId,
+      clientId: this.clientId,
+      title,
+      baseSeq,
     })
   }
 
@@ -158,12 +207,56 @@ export class CollabClient {
     })
   }
 
+  sendCursor(row: number, col: number): void {
+    this.send({ type: 'cursor', docId: this.docId, clientId: this.clientId, row, col })
+  }
+
   undo(): void {
     this.send({ type: 'undo', docId: this.docId, clientId: this.clientId })
   }
 
   redo(): void {
     this.send({ type: 'redo', docId: this.docId, clientId: this.clientId })
+  }
+
+  insertRow(sheetId: string, row: number): void {
+    this.send({
+      type: 'insert_row',
+      docId: this.docId,
+      clientId: this.clientId,
+      sheetId,
+      row,
+    })
+  }
+
+  deleteRow(sheetId: string, row: number): void {
+    this.send({
+      type: 'delete_row',
+      docId: this.docId,
+      clientId: this.clientId,
+      sheetId,
+      row,
+    })
+  }
+
+  insertCol(sheetId: string, col: number): void {
+    this.send({
+      type: 'insert_col',
+      docId: this.docId,
+      clientId: this.clientId,
+      sheetId,
+      col,
+    })
+  }
+
+  deleteCol(sheetId: string, col: number): void {
+    this.send({
+      type: 'delete_col',
+      docId: this.docId,
+      clientId: this.clientId,
+      sheetId,
+      col,
+    })
   }
 
   // ============================
@@ -187,12 +280,23 @@ export class CollabClient {
         this.pendingOps.clear()
         this.callbacks.onSnapshot(msg.data.snapshot, msg.data.currentSeq)
         this.callbacks.onPresence(msg.data.users)
+        this.replayOfflineQueue()
         break
 
       case 'cell_updated':
         this.applyOrdered(msg.data.seq, () => {
           this.callbacks.onCellUpdated(msg.data)
         })
+        break
+
+      case 'title_updated':
+        this.applyOrdered(msg.data.seq, () => {
+          this.callbacks.onTitleUpdated(msg.data)
+        })
+        break
+
+      case 'cursor_update':
+        this.callbacks.onCursor(msg.data)
         break
 
       case 'sheet_imported':
@@ -210,6 +314,30 @@ export class CollabClient {
       case 'redo_applied':
         this.applyOrdered(msg.data.seq, () => {
           this.callbacks.onRedoApplied(msg.data)
+        })
+        break
+
+      case 'row_inserted':
+        this.applyOrdered(msg.data.seq, () => {
+          this.callbacks.onRowInserted?.(msg.data)
+        })
+        break
+
+      case 'row_deleted':
+        this.applyOrdered(msg.data.seq, () => {
+          this.callbacks.onRowDeleted?.(msg.data)
+        })
+        break
+
+      case 'col_inserted':
+        this.applyOrdered(msg.data.seq, () => {
+          this.callbacks.onColInserted?.(msg.data)
+        })
+        break
+
+      case 'col_deleted':
+        this.applyOrdered(msg.data.seq, () => {
+          this.callbacks.onColDeleted?.(msg.data)
         })
         break
 
@@ -269,9 +397,10 @@ export class CollabClient {
   private scheduleReconnect(): void {
     if (this.destroyed) return
     this.callbacks.onConnectionChange('reconnecting')
-    // 清理状态，重连后用全量 snapshot 重建
+    // 清理状态，重连后靠 join_ack 全量 snapshot 重建，不补发旧消息
     this.seenSeqs.clear()
     this.pendingOps.clear()
+    this.sendQueue = []
     this.reconnectTimer = setTimeout(() => {
       this.connect()
     }, this.reconnectInterval)
@@ -293,8 +422,62 @@ export class CollabClient {
       this.onSend(msg)
       return
     }
+    // 使用自定义 replacer 保留 null 值
+    const data = JSON.stringify(msg, (_key, value) => {
+      return value === undefined ? null : value
+    })
     if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(msg))
+      this.ws.send(data)
+      return
+    }
+    // 首次握手期 → 内存队列；曾经连上过且是 set_cell → localStorage 持久化
+    if (this.seq > 0 && msg.type === 'set_cell') {
+      const m = msg as Record<string, unknown>
+      OfflineQueue.enqueue({
+        docId: this.docId,
+        row: m.row as number,
+        col: m.col as number,
+        value: (m.value as string) ?? '',
+        style: (m.style as Record<string, unknown> | null) ?? null,
+        baseSeq: (m.baseSeq as number) ?? this.seq,
+      })
+    } else {
+      this.sendQueue.push(data)
+    }
+  }
+
+  private flushSendQueue(): void {
+    if (this.ws?.readyState !== WebSocket.OPEN) return
+    const queue = this.sendQueue
+    this.sendQueue = []
+    for (const data of queue) {
+      this.ws.send(data)
+    }
+  }
+
+  private replayOfflineQueue(): void {
+    const ops = OfflineQueue.dequeueAll()
+    if (ops.length === 0) return
+    const remaining: QueuedOp[] = []
+    for (const op of ops) {
+      if (op.docId !== this.docId) {
+        remaining.push(op)
+        continue
+      }
+      this.send({
+        type: 'set_cell',
+        docId: this.docId,
+        clientId: this.clientId,
+        row: op.row,
+        col: op.col,
+        value: op.value,
+        style: op.style,
+        baseSeq: op.baseSeq,
+      })
+    }
+    // 放回其他文档的操作，避免 dequeueAll 误删
+    for (const op of remaining) {
+      OfflineQueue.enqueue(op)
     }
   }
 

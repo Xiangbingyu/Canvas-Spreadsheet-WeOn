@@ -4,6 +4,7 @@ const docsService = require('./docsService');
 const roomService = require('./roomService');
 const auditService = require('../audit/auditService');
 const { isNonEmptyString } = require('../protocol/validators');
+const { normalizeDocSnapshot } = require('../domain/entities/doc');
 
 const pendingJoinRequests = new Map();
 
@@ -22,6 +23,16 @@ async function recordAuditBestEffort(event, label) {
   } catch (error) {
     console.error(`join ${label} audit failed:`, error);
   }
+}
+
+function buildJoinAckPayload({ docId, clientId, docState, users }) {
+  return createWsSuccess('join_ack', {
+    docId,
+    clientId,
+    currentSeq: docState.currentSeq,
+    snapshot: normalizeDocSnapshot(docState.snapshot, { docId }),
+    users,
+  });
 }
 
 async function executeJoin({ socket, docId, clientId, name, color }) {
@@ -47,11 +58,10 @@ async function executeJoin({ socket, docId, clientId, name, color }) {
   }
 
   const users = await getUsersWithFallback(docId);
-  const ackPayload = createWsSuccess('join_ack', {
+  const ackPayload = buildJoinAckPayload({
     docId,
     clientId,
-    currentSeq: docState.currentSeq,
-    snapshot: docState.snapshot,
+    docState,
     users,
   });
 

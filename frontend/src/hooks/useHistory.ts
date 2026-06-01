@@ -89,12 +89,18 @@ export function useHistory(onCommitCell?: CommitCellFn): UseHistoryResult {
 
   const undo = useCallback(() => {
     const op = historyRef.current.popUndo()
-    if (op) replay(op, op.before)
+    if (op && 'before' in op) {
+      const cellOp = op as CellOperation
+      replay(cellOp, cellOp.before)
+    }
   }, [replay])
 
   const redo = useCallback(() => {
     const op = historyRef.current.popRedo()
-    if (op) replay(op, op.after)
+    if (op && 'after' in op) {
+      const cellOp = op as CellOperation
+      replay(cellOp, cellOp.after)
+    }
   }, [replay])
 
   // 快捷键：Ctrl+Z 撤销，Ctrl+Shift+Z 重做（编辑态下不拦截，交给 textarea）

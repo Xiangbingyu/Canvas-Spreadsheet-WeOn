@@ -1,5 +1,5 @@
-import { useEffect } from 'react'
-import { useSelector } from 'react-redux'
+import { useCallback, useEffect } from 'react'
+import { useDispatch, useSelector } from 'react-redux'
 import { FormulaBar } from '@/components/FormulaBar/FormulaBar'
 import { Loading } from '@/components/Loading/Loading'
 import { Menubar } from '@/components/Menubar/Menubar'
@@ -11,8 +11,10 @@ import GrideCanvas from '@/components/grideCanvas/GrideCanvas'
 import { useSpreadsheetInteraction } from '@/hooks/useSpreadsheetInteraction'
 import { useCommitCell } from '@/hooks/useCommitCell'
 import { useCollab } from '@/hooks/useCollab'
-import { useHistory } from '@/hooks/useHistory'
-import type { RootState } from '@/spreadsheet/store'
+import { useUnifiedHistory } from '@/hooks/useUnifiedHistory'
+import { importWorkbook, setWorksheet, type RootState } from '@/spreadsheet/store'
+import type { WorkbookSnapshotPayload } from '@/spreadsheet/store/workbookStore'
+import { setSelectedCell } from '@/spreadsheet/store/selectStore'
 
 /** WS 地址：开发环境走 Vite 代理 /ws → 后端 3000 */
 const COLLAB_WS_URL =
@@ -20,14 +22,33 @@ const COLLAB_WS_URL =
   `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`
 
 export function SpreadsheetWorkspace() {
+  const dispatch = useDispatch()
   const docId = useSelector((s: RootState) => s.collab.docId)
   const clientId = useSelector((s: RootState) => s.collab.clientId)
 
-  const { connect, disconnect, setCell, importSheet } = useCollab({
+  const { connect, disconnect, setCell, setTitle, getClient } = useCollab({
     url: COLLAB_WS_URL,
     docId,
     clientId,
   })
+
+  const handleImportWorkbook = useCallback(
+    (workbook: WorkbookSnapshotPayload) => {
+      dispatch(importWorkbook(workbook))
+      const activeSheet = workbook.sheets[workbook.activeSheetId]
+      if (!activeSheet) return
+      dispatch(setWorksheet(activeSheet))
+      dispatch(
+        setSelectedCell({
+          row: 1,
+          col: 1,
+          value: activeSheet.cells['1:1']?.value ?? '',
+          style: {},
+        })
+      )
+    },
+    [dispatch]
+  )
 
   useEffect(() => {
     if (!docId) {
@@ -44,7 +65,8 @@ export function SpreadsheetWorkspace() {
   }, [docId, clientId, connect, disconnect])
 
   const onCommitCell = useCommitCell(setCell)
-  const { commitWithHistory, undo, redo } = useHistory(onCommitCell)
+  const { commitWithHistory, commitBatchWithHistory, executeRowColWithHistory, undo, redo } =
+    useUnifiedHistory(onCommitCell, getClient())
 
   const {
     engine,
@@ -63,8 +85,13 @@ export function SpreadsheetWorkspace() {
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-white font-[Roboto,Arial,sans-serif]">
-      <Menubar importSheet={importSheet} />
-      <Toolbar onCommitCell={commitWithHistory} onUndo={undo} onRedo={redo} />
+      <Menubar onImportWorkbook={handleImportWorkbook} onSetTitle={setTitle} />
+      <Toolbar
+        onCommitCell={commitWithHistory}
+        onCommitBatch={commitBatchWithHistory}
+        onUndo={undo}
+        onRedo={redo}
+      />
       <FormulaBar value={formulaBarValue} onCommitCell={commitWithHistory} />
 
       <div className="relative min-h-0 flex-1 overflow-hidden">
@@ -72,6 +99,7 @@ export function SpreadsheetWorkspace() {
           ref={canvasHandleRef}
           interactionEngine={engine}
           onScrollChange={onScrollChange}
+          executeRowColWithHistory={executeRowColWithHistory}
         />
 
         <CellEditOverlay

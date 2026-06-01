@@ -13,7 +13,9 @@ export interface OnlineUser {
 export interface CollabState {
   docId: string
   clientId: string
+  docTitle: string
   users: OnlineUser[]
+  userCursors: Record<string, { row: number; col: number }>
   currentSeq: number
   connectionStatus: 'disconnected' | 'connected' | 'reconnecting'
 }
@@ -21,7 +23,9 @@ export interface CollabState {
 const initialState: CollabState = {
   docId: '',
   clientId: '',
+  docTitle: '',
   users: [],
+  userCursors: {},
   currentSeq: 0,
   connectionStatus: 'disconnected',
 }
@@ -36,14 +40,38 @@ const collabSlice = createSlice({
       state.clientId = action.payload.clientId
     },
 
-    /** 更新在线用户列表 */
+    /** 更新在线用户列表，同时清理已离开用户的光标 */
     setOnlineUsers(state, action: PayloadAction<OnlineUser[]>) {
       state.users = action.payload
+      const activeIds = new Set(action.payload.map((u) => u.clientId))
+      for (const clientId of Object.keys(state.userCursors)) {
+        if (!activeIds.has(clientId)) {
+          delete state.userCursors[clientId]
+        }
+      }
     },
 
     /** 更新当前已确认的最大 seq */
     setCurrentSeq(state, action: PayloadAction<number>) {
       state.currentSeq = action.payload
+    },
+
+    /** 更新文档标题 */
+    setDocTitle(state, action: PayloadAction<string>) {
+      state.docTitle = action.payload
+    },
+
+    /** 更新单个用户的光标位置 */
+    setUserCursor(state, action: PayloadAction<{ clientId: string; row: number; col: number }>) {
+      state.userCursors[action.payload.clientId] = {
+        row: action.payload.row,
+        col: action.payload.col,
+      }
+    },
+
+    /** 移除用户的光标（用户离开时清） */
+    removeUserCursor(state, action: PayloadAction<string>) {
+      delete state.userCursors[action.payload]
     },
 
     /** 更新连接状态 */
@@ -56,6 +84,13 @@ const collabSlice = createSlice({
   },
 })
 
-export const { setDocSession, setOnlineUsers, setCurrentSeq, setConnectionStatus } =
-  collabSlice.actions
+export const {
+  setDocSession,
+  setDocTitle,
+  setOnlineUsers,
+  setUserCursor,
+  removeUserCursor,
+  setCurrentSeq,
+  setConnectionStatus,
+} = collabSlice.actions
 export const collabReducer = collabSlice.reducer

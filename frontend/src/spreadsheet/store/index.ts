@@ -7,21 +7,27 @@ import {
   type SelectionState,
   type SetSelectedCellPayload,
 } from './selectStore'
+import { setWorksheet, workSheetReducer } from './workSheetStore'
+import type { UpdateCellPayload } from '@/spreadsheet/utils/applyUpdateCell'
+
 import {
-  setWorksheet,
-  updateCell,
-  workSheetReducer,
-  type UpdateCellPayload,
-} from './workSheetStore'
-import { collabReducer, setOnlineUsers, setCurrentSeq, setConnectionStatus } from './userStore'
+  collabReducer,
+  setDocTitle,
+  setOnlineUsers,
+  setUserCursor,
+  removeUserCursor,
+  setCurrentSeq,
+  setConnectionStatus,
+} from './userStore'
 import {
   addSheet,
   initFromDoc,
-  setDocTitle,
   switchSheet,
-  syncActiveSheetCache,
+  importWorkbook,
+  updateCell,
   workbookReducer,
 } from './workbookStore'
+import { clipboardReducer, setClipboard, clearClipboard } from './clipboardStore'
 
 export const store = configureStore({
   reducer: {
@@ -29,8 +35,8 @@ export const store = configureStore({
     workbook: workbookReducer,
     selection: selectionReducer,
     collab: collabReducer,
+    clipboard: clipboardReducer,
   },
-  // 大表 cells 较多时，开发态 immutable/serializable 检查会明显拖慢 dispatch
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({
       immutableCheck: false,
@@ -45,15 +51,19 @@ export {
   setWorksheet,
   updateCell,
   setSelectedCell,
+  setDocTitle,
   setOnlineUsers,
+  setUserCursor,
+  removeUserCursor,
   setCurrentSeq,
   setConnectionStatus,
   initFromDoc,
-  setDocTitle,
-  syncActiveSheetCache,
   switchSheet,
   addSheet,
+  importWorkbook,
+  setClipboard,
+  clearClipboard,
 }
-export { workSheetReducer, workbookReducer, selectionReducer, collabReducer }
+export { workSheetReducer, workbookReducer, selectionReducer, collabReducer, clipboardReducer }
 
 export type { UpdateCellPayload, SelectedCell, SelectionState, SetSelectedCellPayload }

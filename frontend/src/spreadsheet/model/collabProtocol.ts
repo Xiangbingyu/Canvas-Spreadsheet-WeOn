@@ -9,15 +9,33 @@ export type Snapshot = WorksheetData
 export type CellStyle = Style
 export type { Cell }
 
-export type ClientMessageType = 'join' | 'set_cell' | 'import_sheet' | 'presence' | 'undo' | 'redo'
+export type ClientMessageType =
+  | 'join'
+  | 'set_cell'
+  | 'set_title'
+  | 'cursor'
+  | 'import_sheet'
+  | 'presence'
+  | 'undo'
+  | 'redo'
+  | 'insert_row'
+  | 'delete_row'
+  | 'insert_col'
+  | 'delete_col'
 
 export type ServerMessageType =
   | 'join_ack'
   | 'cell_updated'
+  | 'title_updated'
+  | 'cursor_update'
   | 'sheet_imported'
   | 'presence'
   | 'undo_applied'
   | 'redo_applied'
+  | 'row_inserted'
+  | 'row_deleted'
+  | 'col_inserted'
+  | 'col_deleted'
   | 'error'
 
 // ===== 客户端 → 服务端 =====
@@ -36,8 +54,25 @@ export interface SetCellRequest {
   clientId: string
   row: number // 1-indexed
   col: number // 1-indexed
-  value?: string
-  style?: Record<string, unknown> | null
+  value: string
+  style: Record<string, unknown> | null
+  baseSeq: number
+}
+
+export interface SetTitleRequest {
+  type: 'set_title'
+  docId: string
+  clientId: string
+  title: string
+  baseSeq: number
+}
+
+export interface CursorRequest {
+  type: 'cursor'
+  docId: string
+  clientId: string
+  row: number
+  col: number
 }
 
 export interface ImportSheetRequest {
@@ -60,12 +95,50 @@ export interface RedoRequest {
   clientId: string
 }
 
+export interface InsertRowRequest {
+  type: 'insert_row'
+  docId: string
+  clientId: string
+  sheetId: string
+  row: number // 1-indexed
+}
+
+export interface DeleteRowRequest {
+  type: 'delete_row'
+  docId: string
+  clientId: string
+  sheetId: string
+  row: number // 1-indexed
+}
+
+export interface InsertColRequest {
+  type: 'insert_col'
+  docId: string
+  clientId: string
+  sheetId: string
+  col: number // 1-indexed
+}
+
+export interface DeleteColRequest {
+  type: 'delete_col'
+  docId: string
+  clientId: string
+  sheetId: string
+  col: number // 1-indexed
+}
+
 export type WsRequest =
   | JoinRequest
   | SetCellRequest
+  | SetTitleRequest
+  | CursorRequest
   | ImportSheetRequest
   | UndoRequest
   | RedoRequest
+  | InsertRowRequest
+  | DeleteRowRequest
+  | InsertColRequest
+  | DeleteColRequest
 
 // ===== 服务端 → 客户端 =====
 
@@ -99,6 +172,30 @@ export interface CellUpdated {
   }
 }
 
+export interface TitleUpdated {
+  type: 'title_updated'
+  code: 0
+  message: 'ok'
+  data: {
+    docId: string
+    clientId: string
+    seq: number
+    title: string
+  }
+}
+
+export interface CursorUpdate {
+  type: 'cursor_update'
+  code: 0
+  message: 'ok'
+  data: {
+    docId: string
+    clientId: string
+    row: number
+    col: number
+  }
+}
+
 export interface SheetImported {
   type: 'sheet_imported'
   code: 0
@@ -107,6 +204,7 @@ export interface SheetImported {
     docId: string
     clientId: string
     seq: number
+    snapshot: Snapshot
     canUndo: boolean
     canRedo: boolean
   }
@@ -148,18 +246,84 @@ export interface PresenceMessage {
 
 export interface ErrorMessage {
   type: 'error'
-  code: number // 4000 | 4001 | 4003 | 4004 | 5000
+  code: number // 4000 | 4001 | 4003 | 4004 | 4090 | 5000
   message: string
   data: null
+}
+
+export interface RowInserted {
+  type: 'row_inserted'
+  code: 0
+  message: 'ok'
+  data: {
+    docId: string
+    clientId: string
+    sheetId: string
+    seq: number
+    row: number // 1-indexed
+    canUndo: boolean
+    canRedo: boolean
+  }
+}
+
+export interface RowDeleted {
+  type: 'row_deleted'
+  code: 0
+  message: 'ok'
+  data: {
+    docId: string
+    clientId: string
+    sheetId: string
+    seq: number
+    row: number // 1-indexed
+    canUndo: boolean
+    canRedo: boolean
+  }
+}
+
+export interface ColInserted {
+  type: 'col_inserted'
+  code: 0
+  message: 'ok'
+  data: {
+    docId: string
+    clientId: string
+    sheetId: string
+    seq: number
+    col: number // 1-indexed
+    canUndo: boolean
+    canRedo: boolean
+  }
+}
+
+export interface ColDeleted {
+  type: 'col_deleted'
+  code: 0
+  message: 'ok'
+  data: {
+    docId: string
+    clientId: string
+    sheetId: string
+    seq: number
+    col: number // 1-indexed
+    canUndo: boolean
+    canRedo: boolean
+  }
 }
 
 export type WsResponse =
   | JoinAck
   | CellUpdated
+  | TitleUpdated
+  | CursorUpdate
   | SheetImported
   | PresenceMessage
   | UndoApplied
   | RedoApplied
+  | RowInserted
+  | RowDeleted
+  | ColInserted
+  | ColDeleted
   | ErrorMessage
 
 // ===== 用户信息（collab 专用） =====
@@ -183,5 +347,6 @@ export const ERROR_CODES = {
   UNSUPPORTED_MESSAGE_TYPE: 4001,
   FORBIDDEN: 4003,
   DOCUMENT_NOT_FOUND: 4004,
+  CONFLICT: 4090,
   INTERNAL_ERROR: 5000,
 } as const

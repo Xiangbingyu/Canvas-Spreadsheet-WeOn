@@ -1,5 +1,12 @@
 import type { WorksheetData } from '@/spreadsheet/model/types'
 
+/** Excel 多表导入结果，与 workbookStore WorkbookSnapshotPayload 结构一致 */
+export type ExcelImportWorkbook = {
+  activeSheetId: string
+  sheetOrder: string[]
+  sheets: Record<string, WorksheetData>
+}
+
 export type ParseExcelPhase = 'reading' | 'converting' | 'building' | 'done'
 
 export type ParseExcelProgress = {
@@ -20,7 +27,7 @@ export type ExcelImportWorkerRequest = {
 
 export type ExcelImportWorkerResponse =
   | ({ type: 'progress' } & ParseExcelProgress)
-  | { type: 'done'; worksheet: WorksheetData }
+  | { type: 'done'; workbook: ExcelImportWorkbook }
   | { type: 'error'; message: string }
 
 export class ExcelParseError extends Error {

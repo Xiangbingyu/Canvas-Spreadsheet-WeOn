@@ -114,6 +114,7 @@ async function applyUndo(command = {}) {
 
       updatedDoc = await docsService.applySetCell({
         docId: normalizedCommand.docId,
+        sheetId: entry.sheetId,
         row: entry.row,
         col: entry.col,
         value: otResult.targetState.value,
@@ -135,6 +136,7 @@ async function applyUndo(command = {}) {
         baseSeq: otResult.baseSeq,
         opType: 'undo',
         sourceSeq: entry.sourceSeq,
+        targetSheetId: updatedDoc._targetSheetId || entry.sheetId || null,
         targetRow: entry.row,
         targetCol: entry.col,
         oldValueJson: { value: otResult.currentState.value, style: otResult.currentState.style },
@@ -151,6 +153,7 @@ async function applyUndo(command = {}) {
         sourceSeq: seq,
         docId: normalizedCommand.docId,
         clientId: normalizedCommand.clientId,
+        sheetId: updatedDoc._targetSheetId || entry.sheetId || null,
         row: entry.row,
         col: entry.col,
         beforeState: otResult.currentState,
@@ -190,6 +193,7 @@ async function applyUndo(command = {}) {
     return {
       docId: normalizedCommand.docId,
       clientId: normalizedCommand.clientId,
+      sheetId: updatedDoc && updatedDoc._targetSheetId ? updatedDoc._targetSheetId : (entry.sheetId || null),
       seq,
       row: entry.row,
       col: entry.col,
@@ -246,6 +250,7 @@ async function applyRedo(command = {}) {
 
       updatedDoc = await docsService.applySetCell({
         docId: normalizedCommand.docId,
+        sheetId: entry.sheetId,
         row: entry.row,
         col: entry.col,
         value: otResult.targetState.value,
@@ -267,6 +272,7 @@ async function applyRedo(command = {}) {
         baseSeq: otResult.baseSeq,
         opType: 'redo',
         sourceSeq: entry.sourceSeq,
+        targetSheetId: updatedDoc._targetSheetId || entry.sheetId || null,
         targetRow: entry.row,
         targetCol: entry.col,
         oldValueJson: { value: otResult.currentState.value, style: otResult.currentState.style },
@@ -283,6 +289,7 @@ async function applyRedo(command = {}) {
         sourceSeq: seq,
         docId: normalizedCommand.docId,
         clientId: normalizedCommand.clientId,
+        sheetId: updatedDoc._targetSheetId || entry.sheetId || null,
         row: entry.row,
         col: entry.col,
         beforeState: otResult.currentState,
@@ -322,6 +329,7 @@ async function applyRedo(command = {}) {
     return {
       docId: normalizedCommand.docId,
       clientId: normalizedCommand.clientId,
+      sheetId: updatedDoc && updatedDoc._targetSheetId ? updatedDoc._targetSheetId : (entry.sheetId || null),
       seq,
       row: entry.row,
       col: entry.col,

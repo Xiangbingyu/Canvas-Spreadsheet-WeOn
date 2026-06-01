@@ -1,7 +1,28 @@
 {
   "permissions": {
     "allow": [
-      "Bash(netstat -ano)"
+      "Bash(netstat -ano)",
+      "Read(//d/project-sheet/project/**)",
+      "Bash(pnpm check:fe:agents)",
+      "Bash(git ls-tree *)",
+      "Bash(git fetch *)",
+      "Bash(pnpm build *)",
+      "Bash(pnpm install *)",
+      "Bash(pnpm dev:be)",
+      "Bash(curl -s -m 5 http://localhost:3000/health)",
+      "Bash(node -e ' *)",
+      "Bash(curl -s http://localhost:5173)",
+      "Bash(npm run *)",
+      "Bash(PowerShell *)",
+      "Bash(npx tsc *)",
+      "Bash(Select-Object -First 40)",
+      "PowerShell(cd frontend; npx tsc --noEmit -p tsconfig.json; Write-Output \"EXIT_CODE=$LASTEXITCODE\")",
+      "PowerShell(npx tsc --noEmit -p tsconfig.json; Write-Output \"EXIT_CODE=$LASTEXITCODE\")",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(pnpm dev:fe)",
+      "Bash(git commit *)",
+      "Bash(git push *)"
     ]
   }
 }
