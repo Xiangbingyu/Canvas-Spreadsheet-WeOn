@@ -14,6 +14,7 @@ const { createRedisConnection } = require('../infra/redis/client');
 const projectRoot = path.resolve(__dirname, '..');
 const serverEntry = path.join(projectRoot, 'server.js');
 const envFilePath = path.join(projectRoot, '.env');
+const DEFAULT_SHEET_ID = 'sheet_20260527_001';
 
 async function resetRedisTestKeys() {
   const client = createRedisConnection('multi-instance-test-reset');
@@ -196,6 +197,20 @@ async function connect(wsUrl) {
   };
 }
 
+function getActiveSheetSnapshot(snapshot) {
+  assert.ok(snapshot && typeof snapshot === 'object');
+  assert.ok(typeof snapshot.activeSheetId === 'string' && snapshot.activeSheetId);
+  assert.ok(snapshot.sheets && typeof snapshot.sheets === 'object');
+  return snapshot.sheets[snapshot.activeSheetId];
+}
+
+function withDefaultSheetId(message) {
+  return {
+    sheetId: DEFAULT_SHEET_ID,
+    ...message,
+  };
+}
+
 test.beforeEach(async () => {
   await resetMysqlDatabase({
     closePoolAfterReset: false,
@@ -208,7 +223,7 @@ test.after(async () => {
   await teardownTestStore();
 });
 
-test('redis pubsub broadcasts join/set_cell/set_title/import_sheet/undo/redo across instances', async () => {
+test('redis pubsub broadcasts join/add_sheet/set_cell/set_title/import_sheet/undo/redo across instances', async () => {
   const portA = await getFreePort();
   const portB = await getFreePort();
 
@@ -248,7 +263,24 @@ test('redis pubsub broadcasts join/set_cell/set_title/import_sheet/undo/redo acr
     assert.equal(titleUpdated.data.title, 'cross-instance-title');
 
     clientA.send({
+      type: 'add_sheet',
+      docId: 'doc_sys_001',
+      clientId: 'uA',
+      sheetName: 'Cross Instance Sheet',
+    });
+    const sheetAdded = await clientB.waitFor((message) => (
+      message.type === 'sheet_added'
+      && message.data.docId === 'doc_sys_001'
+      && message.data.sheet
+      && message.data.sheet.name === 'Cross Instance Sheet'
+    ));
+    assert.equal(sheetAdded.data.activeSheetId, sheetAdded.data.sheet.id);
+    assert.ok(sheetAdded.data.sheetOrder.includes(sheetAdded.data.sheet.id));
+    const addedSheetId = sheetAdded.data.sheet.id;
+
+    clientA.send({
       type: 'set_cell',
+      sheetId: addedSheetId,
       docId: 'doc_sys_001',
       clientId: 'uA',
       row: 9,
@@ -272,6 +304,7 @@ test('redis pubsub broadcasts join/set_cell/set_title/import_sheet/undo/redo acr
     const undoApplied = await clientB.waitFor((message) => (
       message.type === 'undo_applied'
       && message.data.docId === 'doc_sys_001'
+      && message.data.sheetId === addedSheetId
       && message.data.row === 9
       && message.data.col === 1
       && message.data.value === ''
@@ -286,6 +319,7 @@ test('redis pubsub broadcasts join/set_cell/set_title/import_sheet/undo/redo acr
     const redoApplied = await clientB.waitFor((message) => (
       message.type === 'redo_applied'
       && message.data.docId === 'doc_sys_001'
+      && message.data.sheetId === addedSheetId
       && message.data.row === 9
       && message.data.col === 1
       && message.data.value === 'from-a'
@@ -318,11 +352,11 @@ test('redis pubsub broadcasts join/set_cell/set_title/import_sheet/undo/redo acr
       message.type === 'sheet_imported'
       && message.data.docId === 'doc_sys_001'
       && message.data.snapshot
-      && message.data.snapshot.cells
-      && message.data.snapshot.cells['1:1']
-      && message.data.snapshot.cells['1:1'].value === 'imported-value'
+      && getActiveSheetSnapshot(message.data.snapshot)
+      && getActiveSheetSnapshot(message.data.snapshot).cells['1:1']
+      && getActiveSheetSnapshot(message.data.snapshot).cells['1:1'].value === 'imported-value'
     ));
-    assert.equal(sheetImported.data.snapshot.cells['1:1'].value, 'imported-value');
+    assert.equal(getActiveSheetSnapshot(sheetImported.data.snapshot).cells['1:1'].value, 'imported-value');
   } finally {
     await clientA.close();
     await clientB.close();

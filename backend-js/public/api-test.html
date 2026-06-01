@@ -123,6 +123,12 @@
       display: grid;
       gap: 24px;
       grid-template-columns: minmax(0, 1.2fr) minmax(340px, 0.8fr);
+      align-items: start;
+    }
+
+    .sticky-panel {
+      position: sticky;
+      top: 24px;
     }
 
     .stack {
@@ -229,6 +235,7 @@
       border-radius: 14px;
       padding: 16px;
       min-height: 180px;
+      max-height: calc(100vh - 200px);
       overflow: auto;
     }
 
@@ -307,26 +314,30 @@
       </div>
       <div class="hero-grid">
         <div class="hero-card">
-          <div class="hero-label">HTTP base URL</div>
-          <div id="http-base" class="hero-value"></div>
+          <label class="hero-label" for="http-base-input">HTTP base URL</label>
+          <div class="hero-value" style="margin-top: 8px;">
+            <input id="http-base-input" type="text" style="font-family: var(--mono); font-size: 13px; padding: 8px 10px;">
+          </div>
         </div>
         <div class="hero-card">
-          <div class="hero-label">WebSocket URL</div>
-          <div id="ws-base" class="hero-value"></div>
+          <label class="hero-label" for="ws-base-input">WebSocket URL</label>
+          <div class="hero-value" style="margin-top: 8px;">
+            <input id="ws-base-input" type="text" style="font-family: var(--mono); font-size: 13px; padding: 8px 10px;">
+          </div>
         </div>
         <div class="hero-card">
           <div class="hero-label">HTTP endpoints</div>
-          <div class="hero-value">4 callable routes</div>
+          <div class="hero-value">5 callable routes</div>
         </div>
         <div class="hero-card">
           <div class="hero-label">WebSocket message types</div>
-          <div class="hero-value">join, presence, set_cell, set_title, import_sheet, undo, redo</div>
+          <div class="hero-value">join, presence, set_cell, set_title, add_sheet, import_sheet, undo, redo</div>
         </div>
       </div>
     </section>
 
-    <div class="layout">
-      <div class="stack">
+    <div class="stack">
+      <div class="layout">
         <section class="panel">
           <div class="section-head">
             <div>
@@ -337,30 +348,7 @@
           <div id="http-endpoints" class="grid"></div>
         </section>
 
-        <section class="panel">
-          <div class="section-head">
-            <div>
-              <h2>WebSocket API</h2>
-              <p class="status-line">Connect once, then edit any outbound JSON template and send it directly.</p>
-            </div>
-            <div class="actions" style="margin-top: 0;">
-              <button id="connect-ws-button" type="button">Connect</button>
-              <button id="disconnect-ws-button" type="button" class="secondary">Disconnect</button>
-              <button id="clear-ws-log-button" type="button" class="ghost">Clear log</button>
-            </div>
-          </div>
-          <div class="request-grid">
-            <label>
-              WebSocket URL
-              <input id="ws-url-input" type="text">
-            </label>
-          </div>
-          <div id="ws-messages" class="grid"></div>
-        </section>
-      </div>
-
-      <div class="stack">
-        <section class="panel">
+        <section class="panel sticky-panel">
           <div class="section-head">
             <div>
               <h2>Latest HTTP Response</h2>
@@ -373,8 +361,25 @@
             <pre id="http-response-output">{}</pre>
           </div>
         </section>
+      </div>
 
+      <div class="layout">
         <section class="panel">
+          <div class="section-head">
+            <div>
+              <h2>WebSocket API</h2>
+              <p class="status-line">Connect once, then edit any outbound JSON template and send it directly.</p>
+            </div>
+            <div class="actions" style="margin-top: 0;">
+              <button id="connect-ws-button" type="button">Connect</button>
+              <button id="disconnect-ws-button" type="button" class="secondary">Disconnect</button>
+              <button id="clear-ws-log-button" type="button" class="ghost">Clear log</button>
+            </div>
+          </div>
+          <div id="ws-messages" class="grid"></div>
+        </section>
+
+        <section class="panel sticky-panel">
           <div class="section-head">
             <div>
               <h2>WebSocket Log</h2>
@@ -540,11 +545,12 @@
       {
         title: 'Set Cell',
         type: 'set_cell',
-        description: 'Write a cell value and optional style. row and col are 1-based integers.',
+        description: 'Write a cell value and optional style to the specified sheet. row and col are 1-based integers.',
         template: {
           type: 'set_cell',
           docId: 'doc_sys_001',
           clientId: 'user_001',
+          sheetId: 'sheet_20260527_001',
           row: 1,
           col: 1,
           value: 'Hello from test page',
@@ -567,27 +573,44 @@
         },
       },
       {
+        title: 'Add Sheet',
+        type: 'add_sheet',
+        description: 'Create a new empty sheet, append it to sheetOrder and switch activeSheetId to the new sheet.',
+        template: {
+          type: 'add_sheet',
+          docId: 'doc_sys_001',
+          clientId: 'user_001',
+          sheetName: 'New Sheet From Test Page',
+        },
+      },
+      {
         title: 'Import Sheet',
         type: 'import_sheet',
-        description: 'Replace a document snapshot with a full sheet payload.',
+        description: 'Replace a document snapshot with a full workbook payload.',
         template: {
           type: 'import_sheet',
           docId: 'doc_sys_001',
           clientId: 'user_001',
           eventId: 'evt_import_test_001',
           snapshot: {
-            id: 'sheet_import_001',
-            name: 'Imported Sheet',
-            defaultRowHeight: 25,
-            defaultColWidth: 100,
-            rowCount: 2,
-            colCount: 2,
-            styles: {},
-            cells: {
-              '0:0': { row: 0, col: 0, value: 'Name' },
-              '0:1': { row: 0, col: 1, value: 'Value' },
-              '1:0': { row: 1, col: 0, value: 'Status' },
-              '1:1': { row: 1, col: 1, value: 'Imported' },
+            activeSheetId: 'sheet_import_001',
+            sheetOrder: ['sheet_import_001'],
+            sheets: {
+              sheet_import_001: {
+                id: 'sheet_import_001',
+                name: 'Imported Sheet',
+                defaultRowHeight: 25,
+                defaultColWidth: 100,
+                rowCount: 2,
+                colCount: 2,
+                styles: {},
+                cells: {
+                  '0:0': { row: 0, col: 0, value: 'Name' },
+                  '0:1': { row: 0, col: 1, value: 'Value' },
+                  '1:0': { row: 1, col: 0, value: 'Status' },
+                  '1:1': { row: 1, col: 1, value: 'Imported' },
+                },
+              },
             },
           },
         },
@@ -622,7 +645,8 @@
     const wsTemplate = document.getElementById('ws-message-template');
     const wsMessageContainer = document.getElementById('ws-messages');
     const wsLog = document.getElementById('ws-log');
-    const wsUrlInput = document.getElementById('ws-url-input');
+    const httpBaseInput = document.getElementById('http-base-input');
+    const wsBaseInput = document.getElementById('ws-base-input');
     const wsStatusPill = document.getElementById('ws-status-pill');
     const connectWsButton = document.getElementById('connect-ws-button');
     const disconnectWsButton = document.getElementById('disconnect-ws-button');
@@ -631,9 +655,8 @@
 
     let ws = null;
 
-    document.getElementById('http-base').textContent = httpBase;
-    document.getElementById('ws-base').textContent = wsBase;
-    wsUrlInput.value = wsBase;
+    httpBaseInput.value = 'http://120.48.16.108:3000';
+    wsBaseInput.value = 'ws://120.48.16.108:3000';
 
     function formatJson(value) {
       if (typeof value === 'string') {
@@ -665,10 +688,30 @@
     }
 
     function appendWsLog(kind, payload) {
-      const entry = document.createElement('div');
+      const entry = document.createElement('details');
       entry.className = `log-entry ${kind}`;
       const stamp = new Date().toLocaleTimeString();
-      entry.innerHTML = `<div class="meta">${stamp} · ${kind}</div><pre>${escapeHtml(typeof payload === 'string' ? payload : formatJson(payload))}</pre>`;
+      
+      let summaryText = '';
+      let fullText = '';
+      
+      if (typeof payload === 'string') {
+        summaryText = payload.length > 60 ? payload.substring(0, 60) + '...' : payload;
+        fullText = payload;
+      } else {
+        const typeStr = payload.type ? `[${payload.type}] ` : '';
+        const codeStr = payload.code !== undefined ? `(code: ${payload.code}) ` : '';
+        summaryText = `${typeStr}${codeStr}`;
+        if (!summaryText) {
+          summaryText = 'JSON Payload';
+        } else if (payload.message) {
+          summaryText += payload.message;
+        }
+        if (summaryText.length > 80) summaryText = summaryText.substring(0, 80) + '...';
+        fullText = formatJson(payload);
+      }
+
+      entry.innerHTML = `<summary style="cursor: pointer; outline: none; user-select: none;"><span class="meta">${stamp} &middot; ${kind}</span><span style="margin-left: 8px; font-family: var(--mono); font-size: 12px; color: #9ca3af;">${escapeHtml(summaryText)}</span></summary><pre style="margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(248, 250, 252, 0.1);">${escapeHtml(fullText)}</pre>`;
       wsLog.prepend(entry);
     }
 
@@ -688,7 +731,9 @@
       try {
         const fieldValues = collectFieldValues(fieldsElement);
         const request = endpoint.buildRequest(fieldValues, payloadElement.value);
-        const response = await fetch(request.url, request.options);
+        const baseUrl = httpBaseInput.value.replace(/\/+$/, '');
+        const url = request.url.startsWith('/') ? baseUrl + request.url : request.url;
+        const response = await fetch(url, request.options);
         const text = await response.text();
         let parsed = text;
 
@@ -696,7 +741,7 @@
           parsed = JSON.parse(text);
         } catch {}
 
-        setHttpResponse(`${endpoint.method} ${request.url} -> ${response.status}`, parsed, !response.ok);
+        setHttpResponse(`${endpoint.method} ${url} -> ${response.status}`, parsed, !response.ok);
       } catch (error) {
         setHttpResponse(`${endpoint.method} ${endpoint.path} -> request failed`, { message: error.message }, true);
       }
@@ -774,9 +819,9 @@
 
     function connectWs() {
       disconnectWs();
-      appendWsLog('system', `Connecting to ${wsUrlInput.value}`);
+      appendWsLog('system', `Connecting to ${wsBaseInput.value}`);
 
-      ws = new WebSocket(wsUrlInput.value);
+      ws = new WebSocket(wsBaseInput.value);
 
       ws.addEventListener('open', () => {
         updateWsStatus(true);

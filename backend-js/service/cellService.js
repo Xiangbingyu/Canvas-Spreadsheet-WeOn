@@ -21,15 +21,25 @@ function isValidCellPosition(value) {
 }
 
 function normalizeSetCellCommand(command = {}) {
-  const { docId, clientId, row, col, value, style } = command;
+  const { docId, clientId, sheetId, row, col, value, style } = command;
 
-  if (typeof docId !== 'string' || !docId.trim() || typeof clientId !== 'string' || !clientId.trim() || !isValidCellPosition(row) || !isValidCellPosition(col)) {
-    throw createServiceError(ERROR_CODES.INVALID_PARAMS, 'docId, clientId, row and col are required');
+  if (
+    typeof docId !== 'string'
+    || !docId.trim()
+    || typeof clientId !== 'string'
+    || !clientId.trim()
+    || typeof sheetId !== 'string'
+    || !sheetId.trim()
+    || !isValidCellPosition(row)
+    || !isValidCellPosition(col)
+  ) {
+    throw createServiceError(ERROR_CODES.INVALID_PARAMS, 'docId, clientId, sheetId, row and col are required');
   }
 
   return {
     docId: docId.trim(),
     clientId: clientId.trim(),
+    sheetId: sheetId.trim(),
     row,
     col,
     value: value ?? '',
@@ -83,6 +93,16 @@ async function applySetCell(command = {}) {
 
       rebaseResult = otResult.rebaseResult;
 
+      const currentSnapshot = currentDoc.snapshotJson || {};
+      const currentSheets = currentSnapshot.sheets || {};
+
+      if (!currentSheets[normalizedCommand.sheetId]) {
+        throw createServiceError(ERROR_CODES.INVALID_PARAMS, `sheet not found: ${normalizedCommand.sheetId}`, {
+          docId: normalizedCommand.docId,
+          sheetId: normalizedCommand.sheetId,
+        });
+      }
+
       updatedDoc = await docsService.applySetCell({
         ...otResult.command,
       }, {
@@ -94,6 +114,7 @@ async function applySetCell(command = {}) {
       }
 
       seq = updatedDoc.currentSeq;
+      const targetSheetId = updatedDoc._targetSheetId;
       const { value: oldValue, style: oldStyle } = updatedDoc._before;
 
       await historyStore.append({
@@ -102,6 +123,7 @@ async function applySetCell(command = {}) {
         seq,
         baseSeq: rebaseResult.baseSeq,
         opType: 'set_cell',
+        targetSheetId,
         targetRow: normalizedCommand.row,
         targetCol: normalizedCommand.col,
         oldValueJson: { value: oldValue, style: oldStyle },
@@ -115,6 +137,7 @@ async function applySetCell(command = {}) {
         docId: normalizedCommand.docId,
         clientId: normalizedCommand.clientId,
         opType: 'set_cell',
+        sheetId: targetSheetId,
         row: normalizedCommand.row,
         col: normalizedCommand.col,
         oldValue,
@@ -151,6 +174,7 @@ async function applySetCell(command = {}) {
     return {
       docId: normalizedCommand.docId,
       clientId: normalizedCommand.clientId,
+      sheetId: updatedDoc && updatedDoc._targetSheetId ? updatedDoc._targetSheetId : normalizedCommand.sheetId,
       seq,
       row: normalizedCommand.row,
       col: normalizedCommand.col,

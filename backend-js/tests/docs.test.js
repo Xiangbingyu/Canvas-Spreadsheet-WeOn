@@ -3,6 +3,7 @@ const { once } = require('node:events');
 const path = require('node:path');
 const test = require('node:test');
 const { resetMysqlDatabase } = require('../scripts/dbReset');
+const { resetRedisTestKeys } = require('./helpers/resetRedisTestKeys');
 
 const projectRoot = path.resolve(__dirname, '..');
 
@@ -69,8 +70,9 @@ function clearBackendRequireCache() {
 }
 
 test.beforeEach(async () => {
-  await resetTestStore();
   await closeProjectResources();
+  await resetTestStore();
+  await resetRedisTestKeys();
   clearBackendRequireCache();
 });
 
@@ -121,16 +123,11 @@ async function getJson(baseUrl, pathname) {
   };
 }
 
-function assertSnapshotMatchesDocFormat(snapshot, expected) {
+function assertWorkbookSnapshotMatchesDocFormat(snapshot, expected) {
   assert.equal(typeof snapshot, 'object');
-  assert.equal(snapshot.id, expected.id);
-  assert.equal(snapshot.name, expected.name);
-  assert.equal(snapshot.defaultRowHeight, expected.defaultRowHeight);
-  assert.equal(snapshot.defaultColWidth, expected.defaultColWidth);
-  assert.equal(snapshot.rowCount, expected.rowCount);
-  assert.equal(snapshot.colCount, expected.colCount);
-  assert.deepEqual(snapshot.styles, expected.styles);
-  assert.deepEqual(snapshot.cells, expected.cells);
+  assert.equal(snapshot.activeSheetId, expected.activeSheetId);
+  assert.deepEqual(snapshot.sheetOrder, expected.sheetOrder);
+  assert.deepEqual(snapshot.sheets, expected.sheets);
 }
 
 // ==================== POST /docs：创建文档并校验初始状态与审计日志 ====================
@@ -151,14 +148,20 @@ test('POST /docs creates a new online sheet with initial snapshot', async () => 
     assert.equal(response.json.data.currentSeq, 0);
     assert.equal(response.json.data.createdBy, 'user_001');
     assert.deepEqual(response.json.data.snapshot, {
-      id: 'sheet_doc_001_001',
-      name: 'Sheet1',
-      defaultRowHeight: 25,
-      defaultColWidth: 100,
-      cells: {},
-      styles: {},
-      rowCount: 0,
-      colCount: 0,
+      activeSheetId: 'sheet_doc_001_001',
+      sheetOrder: ['sheet_doc_001_001'],
+      sheets: {
+        sheet_doc_001_001: {
+          id: 'sheet_doc_001_001',
+          name: 'Sheet1',
+          defaultRowHeight: 25,
+          defaultColWidth: 100,
+          cells: {},
+          styles: {},
+          rowCount: 0,
+          colCount: 0,
+        },
+      },
     });
 
     const auditLogStore = require('../store/auditLogStore');
@@ -194,15 +197,21 @@ test('POST /docs matches documented response format', async () => {
     assert.equal(response.json.data.createdBy, 'user_001');
     assert.match(response.json.data.createdAt, /^\d{4}-\d{2}-\d{2}T/);
     assert.match(response.json.data.updatedAt, /^\d{4}-\d{2}-\d{2}T/);
-    assertSnapshotMatchesDocFormat(response.json.data.snapshot, {
-      id: 'sheet_doc_001_001',
-      name: 'Sheet1',
-      defaultRowHeight: 25,
-      defaultColWidth: 100,
-      rowCount: 0,
-      colCount: 0,
-      styles: {},
-      cells: {},
+    assertWorkbookSnapshotMatchesDocFormat(response.json.data.snapshot, {
+      activeSheetId: 'sheet_doc_001_001',
+      sheetOrder: ['sheet_doc_001_001'],
+      sheets: {
+        sheet_doc_001_001: {
+          id: 'sheet_doc_001_001',
+          name: 'Sheet1',
+          defaultRowHeight: 25,
+          defaultColWidth: 100,
+          rowCount: 0,
+          colCount: 0,
+          styles: {},
+          cells: {},
+        },
+      },
     });
   } finally {
     await server.close();
@@ -250,8 +259,14 @@ test('POST /docs creates different documents when eventId is missing', async () 
     assert.equal(firstResponse.status, 201);
     assert.equal(secondResponse.status, 201);
     assert.notEqual(firstResponse.json.data.docId, secondResponse.json.data.docId);
-    assert.equal(firstResponse.json.data.snapshot.id, `sheet_${firstResponse.json.data.docId}_001`);
-    assert.equal(secondResponse.json.data.snapshot.id, `sheet_${secondResponse.json.data.docId}_001`);
+    assert.equal(
+      firstResponse.json.data.snapshot.activeSheetId,
+      `sheet_${firstResponse.json.data.docId}_001`
+    );
+    assert.equal(
+      secondResponse.json.data.snapshot.activeSheetId,
+      `sheet_${secondResponse.json.data.docId}_001`
+    );
   } finally {
     await server.close();
   }
@@ -612,33 +627,117 @@ test('GET /docs/:docId matches documented response format', async () => {
     assert.equal(response.json.data.createdBy, 'system');
     assert.match(response.json.data.createdAt, /^\d{4}-\d{2}-\d{2}T/);
     assert.match(response.json.data.updatedAt, /^\d{4}-\d{2}-\d{2}T/);
-    assertSnapshotMatchesDocFormat(response.json.data.snapshot, {
-      id: 'sheet_20260527_001',
-      name: '2026年销售数据表',
-      defaultRowHeight: 25,
-      defaultColWidth: 100,
-      rowCount: 100,
-      colCount: 26,
-      styles: {
-        style_header: {
-          fontFamily: '微软雅黑',
-          fontSize: 14,
-          bold: true,
-          color: '#FFFFFF',
-          bgColor: '#4472C4',
-          hAlign: 'center',
+    assertWorkbookSnapshotMatchesDocFormat(response.json.data.snapshot, {
+      activeSheetId: 'sheet_20260527_001',
+      sheetOrder: ['sheet_20260527_001', 'sheet_20260527_002', 'sheet_20260527_003'],
+      sheets: {
+        sheet_20260527_001: {
+          id: 'sheet_20260527_001',
+          name: '2026年销售数据表',
+          defaultRowHeight: 25,
+          defaultColWidth: 100,
+          rowCount: 100,
+          colCount: 26,
+          styles: {
+            style_header: {
+              fontFamily: '微软雅黑',
+              fontSize: 14,
+              bold: true,
+              color: '#FFFFFF',
+              bgColor: '#4472C4',
+              hAlign: 'center',
+            },
+            style_currency: {
+              fontFamily: 'Arial',
+              fontSize: 12,
+              bold: false,
+              hAlign: 'right',
+            },
+          },
+          cells: {
+            '0:0': { row: 0, col: 0, value: '产品名称', styleId: 'style_header' },
+            '0:1': { row: 0, col: 1, value: '销售金额', styleId: 'style_header' },
+            '1:1': { row: 1, col: 1, value: '9999.00', styleId: 'style_currency' },
+          },
         },
-        style_currency: {
-          fontFamily: 'Arial',
-          fontSize: 12,
-          bold: false,
-          hAlign: 'right',
+        sheet_20260527_002: {
+          id: 'sheet_20260527_002',
+          name: '汇总',
+          defaultRowHeight: 25,
+          defaultColWidth: 110,
+          rowCount: 20,
+          colCount: 8,
+          styles: {
+            style_header: {
+              fontFamily: '微软雅黑',
+              fontSize: 14,
+              bold: true,
+              color: '#FFFFFF',
+              bgColor: '#4472C4',
+              hAlign: 'center',
+            },
+            style_currency: {
+              fontFamily: 'Arial',
+              fontSize: 12,
+              bold: false,
+              hAlign: 'right',
+            },
+            style_status: {
+              fontFamily: '微软雅黑',
+              fontSize: 12,
+              bold: true,
+              color: '#0F766E',
+              bgColor: '#CCFBF1',
+              hAlign: 'center',
+            },
+          },
+          cells: {
+            '0:0': { row: 0, col: 0, value: '指标', styleId: 'style_header' },
+            '0:1': { row: 0, col: 1, value: '数值', styleId: 'style_header' },
+            '1:0': { row: 1, col: 0, value: '总销售额', styleId: null },
+            '1:1': { row: 1, col: 1, value: '9999.00', styleId: 'style_currency' },
+          },
         },
-      },
-      cells: {
-        '0:0': { row: 0, col: 0, value: '产品名称', styleId: 'style_header' },
-        '0:1': { row: 0, col: 1, value: '销售金额', styleId: 'style_header' },
-        '1:1': { row: 1, col: 1, value: '9999.00', styleId: 'style_currency' },
+        sheet_20260527_003: {
+          id: 'sheet_20260527_003',
+          name: '区域明细',
+          defaultRowHeight: 25,
+          defaultColWidth: 100,
+          rowCount: 30,
+          colCount: 10,
+          styles: {
+            style_header: {
+              fontFamily: '微软雅黑',
+              fontSize: 14,
+              bold: true,
+              color: '#FFFFFF',
+              bgColor: '#4472C4',
+              hAlign: 'center',
+            },
+            style_currency: {
+              fontFamily: 'Arial',
+              fontSize: 12,
+              bold: false,
+              hAlign: 'right',
+            },
+            style_status: {
+              fontFamily: '微软雅黑',
+              fontSize: 12,
+              bold: true,
+              color: '#0F766E',
+              bgColor: '#CCFBF1',
+              hAlign: 'center',
+            },
+          },
+          cells: {
+            '0:0': { row: 0, col: 0, value: '区域', styleId: 'style_header' },
+            '0:1': { row: 0, col: 1, value: '销售金额', styleId: 'style_header' },
+            '1:0': { row: 1, col: 0, value: '华东', styleId: null },
+            '1:1': { row: 1, col: 1, value: '4200.00', styleId: 'style_currency' },
+            '2:0': { row: 2, col: 0, value: '华南', styleId: null },
+            '2:1': { row: 2, col: 1, value: '5799.00', styleId: 'style_currency' },
+          },
+        },
       },
     });
   } finally {

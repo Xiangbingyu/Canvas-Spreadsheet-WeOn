@@ -1,4 +1,10 @@
-const { createDoc, normalizeDocSnapshot } = require('../../domain/entities/doc');
+const {
+  createDoc,
+  normalizeDocSnapshot,
+  createEmptySheetSnapshot,
+  buildNextSheetId,
+  buildDefaultSheetName,
+} = require('../../domain/entities/doc');
 const { deepClone } = require('../../utils/clone');
 
 function stableStringify(value) {
@@ -18,8 +24,8 @@ function createStyleKey(style) {
   return stableStringify(style);
 }
 
-function nextStyleId(snapshot) {
-  const existingIds = Object.keys(snapshot.styles || {});
+function nextStyleId(sheet) {
+  const existingIds = Object.keys(sheet.styles || {});
   let maxStyleNumber = 0;
 
   for (const id of existingIds) {
@@ -32,22 +38,40 @@ function nextStyleId(snapshot) {
   return `style_${String(maxStyleNumber + 1).padStart(3, '0')}`;
 }
 
-function findOrCreateStyleId(snapshot, style) {
+function findOrCreateStyleId(sheet, style) {
   if (!style || typeof style !== 'object' || Array.isArray(style)) {
     return null;
   }
 
   const styleKey = createStyleKey(style);
 
-  for (const [styleId, styleValue] of Object.entries(snapshot.styles || {})) {
+  for (const [styleId, styleValue] of Object.entries(sheet.styles || {})) {
     if (createStyleKey(styleValue) === styleKey) {
       return styleId;
     }
   }
 
-  const styleId = nextStyleId(snapshot);
-  snapshot.styles[styleId] = deepClone(style);
+  const styleId = nextStyleId(sheet);
+  sheet.styles[styleId] = deepClone(style);
   return styleId;
+}
+
+function resolveTargetSheet(nextSnapshot, preferredSheetId = null) {
+  const requestedSheetId = typeof preferredSheetId === 'string' && preferredSheetId
+    ? preferredSheetId
+    : nextSnapshot.activeSheetId;
+
+  if (!requestedSheetId || !nextSnapshot.sheets || !nextSnapshot.sheets[requestedSheetId]) {
+    return {
+      sheetId: null,
+      sheet: null,
+    };
+  }
+
+  return {
+    sheetId: requestedSheetId,
+    sheet: nextSnapshot.sheets[requestedSheetId],
+  };
 }
 
 function createAutoIncrement(start = 0) {
@@ -176,7 +200,7 @@ function createDocMemoryStore() {
 
     async updateSnapshot(docId, snapshotJson, currentSeq, updatedAt) {
       return updateByDocId(docId, {
-        snapshotJson: normalizeDocSnapshot(snapshotJson),
+        snapshotJson: normalizeDocSnapshot(snapshotJson, { docId }),
         currentSeq,
         updatedAt,
       });
@@ -197,17 +221,23 @@ function createDocMemoryStore() {
         return null;
       }
 
-      const nextSnapshot = normalizeDocSnapshot(current.snapshotJson);
+      const nextSnapshot = normalizeDocSnapshot(current.snapshotJson, { docId: command.docId });
+      const { sheetId: targetSheetId, sheet: targetSheet } = resolveTargetSheet(nextSnapshot, command.sheetId);
+
+      if (!targetSheetId || !targetSheet) {
+        return null;
+      }
+
       const cellKey = `${command.row}:${command.col}`;
-      const previousCell = nextSnapshot.cells[cellKey] || {};
+      const previousCell = targetSheet.cells[cellKey] || {};
       const oldValue = previousCell.value ?? '';
       const oldStyleId = typeof previousCell.styleId === 'string' ? previousCell.styleId : null;
-      const oldStyle = oldStyleId ? deepClone(nextSnapshot.styles[oldStyleId] || null) : null;
+      const oldStyle = oldStyleId ? deepClone(targetSheet.styles[oldStyleId] || null) : null;
       const nextStyleIdValue = command.style !== undefined
-        ? findOrCreateStyleId(nextSnapshot, command.style)
+        ? findOrCreateStyleId(targetSheet, command.style)
         : null;
 
-      nextSnapshot.cells[cellKey] = {
+      targetSheet.cells[cellKey] = {
         row: command.row,
         col: command.col,
         value: command.value ?? '',
@@ -215,12 +245,12 @@ function createDocMemoryStore() {
         styleId: nextStyleIdValue,
       };
 
-      if (command.row > nextSnapshot.rowCount) {
-        nextSnapshot.rowCount = command.row;
+      if (command.row > targetSheet.rowCount) {
+        targetSheet.rowCount = command.row;
       }
 
-      if (command.col > nextSnapshot.colCount) {
-        nextSnapshot.colCount = command.col;
+      if (command.col > targetSheet.colCount) {
+        targetSheet.colCount = command.col;
       }
 
       const updatedDoc = updateByDocId(command.docId, {
@@ -230,7 +260,11 @@ function createDocMemoryStore() {
 
       if (!updatedDoc) return null;
 
-      return { ...updatedDoc, _before: { value: oldValue, style: oldStyle } };
+      return {
+        ...updatedDoc,
+        _before: { value: oldValue, style: oldStyle },
+        _targetSheetId: targetSheetId,
+      };
     },
 
     async applySetTitle(command) {
@@ -260,9 +294,43 @@ function createDocMemoryStore() {
       }
 
       return updateByDocId(command.docId, {
-        snapshotJson: normalizeDocSnapshot(command.snapshotJson || command.snapshot),
+        snapshotJson: normalizeDocSnapshot(command.snapshotJson || command.snapshot, { docId: command.docId }),
         currentSeq: Number.isInteger(command.seq) ? command.seq : current.currentSeq + 1,
       });
+    },
+
+    async applyAddSheet(command) {
+      const current = getStoredRowByDocId(command.docId);
+
+      if (!current) {
+        return null;
+      }
+
+      const nextSnapshot = normalizeDocSnapshot(current.snapshotJson, { docId: command.docId });
+      const nextSheetId = buildNextSheetId(nextSnapshot, command.docId);
+      const nextSheet = createEmptySheetSnapshot({
+        docId: command.docId,
+        sheetId: nextSheetId,
+        name: command.sheetName || buildDefaultSheetName(nextSnapshot),
+      });
+
+      nextSnapshot.sheets[nextSheetId] = nextSheet;
+      nextSnapshot.sheetOrder = [...(nextSnapshot.sheetOrder || []), nextSheetId];
+      nextSnapshot.activeSheetId = nextSheetId;
+
+      const updatedDoc = updateByDocId(command.docId, {
+        snapshotJson: nextSnapshot,
+        currentSeq: Number.isInteger(command.seq) ? command.seq : current.currentSeq + 1,
+      });
+
+      if (!updatedDoc) {
+        return null;
+      }
+
+      return {
+        ...updatedDoc,
+        _addedSheet: deepClone(nextSheet),
+      };
     },
 
     // 同步批量写入种子数据，仅供 store 初始化时调用。

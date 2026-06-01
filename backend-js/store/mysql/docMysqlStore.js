@@ -1,4 +1,10 @@
-const { createDoc, normalizeDocSnapshot } = require('../../domain/entities/doc');
+const {
+  createDoc,
+  normalizeDocSnapshot,
+  createEmptySheetSnapshot,
+  buildNextSheetId,
+  buildDefaultSheetName,
+} = require('../../domain/entities/doc');
 const { ensureMysqlReady, query, execute, withTransaction } = require('../../db/mysql');
 
 function cloneJsonValue(value) {
@@ -65,8 +71,8 @@ function createStyleKey(style) {
   return stableStringify(style);
 }
 
-function nextStyleId(snapshot) {
-  const existingIds = Object.keys(snapshot.styles || {});
+function nextStyleId(sheet) {
+  const existingIds = Object.keys(sheet.styles || {});
   let maxStyleNumber = 0;
 
   for (const id of existingIds) {
@@ -79,22 +85,40 @@ function nextStyleId(snapshot) {
   return `style_${String(maxStyleNumber + 1).padStart(3, '0')}`;
 }
 
-function findOrCreateStyleId(snapshot, style) {
+function findOrCreateStyleId(sheet, style) {
   if (!style || typeof style !== 'object' || Array.isArray(style)) {
     return null;
   }
 
   const styleKey = createStyleKey(style);
 
-  for (const [styleId, styleValue] of Object.entries(snapshot.styles || {})) {
+  for (const [styleId, styleValue] of Object.entries(sheet.styles || {})) {
     if (createStyleKey(styleValue) === styleKey) {
       return styleId;
     }
   }
 
-  const styleId = nextStyleId(snapshot);
-  snapshot.styles[styleId] = JSON.parse(JSON.stringify(style));
+  const styleId = nextStyleId(sheet);
+  sheet.styles[styleId] = JSON.parse(JSON.stringify(style));
   return styleId;
+}
+
+function resolveTargetSheet(nextSnapshot, preferredSheetId = null) {
+  const requestedSheetId = typeof preferredSheetId === 'string' && preferredSheetId
+    ? preferredSheetId
+    : nextSnapshot.activeSheetId;
+
+  if (!requestedSheetId || !nextSnapshot.sheets || !nextSnapshot.sheets[requestedSheetId]) {
+    return {
+      sheetId: null,
+      sheet: null,
+    };
+  }
+
+  return {
+    sheetId: requestedSheetId,
+    sheet: nextSnapshot.sheets[requestedSheetId],
+  };
 }
 
 function mapRowToDoc(row) {
@@ -302,7 +326,7 @@ function createDocMysqlStore() {
 
     async updateSnapshot(docId, snapshotJson, currentSeq, updatedAt) {
       return this.updateByDocId(docId, {
-        snapshotJson: normalizeDocSnapshot(snapshotJson),
+        snapshotJson: normalizeDocSnapshot(snapshotJson, { docId }),
         currentSeq,
         updatedAt,
       });
@@ -323,29 +347,35 @@ function createDocMysqlStore() {
           return null;
         }
 
-        const nextSnapshot = normalizeDocSnapshot(current.snapshotJson);
+        const nextSnapshot = normalizeDocSnapshot(current.snapshotJson, { docId: command.docId });
+        const { sheetId: targetSheetId, sheet: targetSheet } = resolveTargetSheet(nextSnapshot, command.sheetId);
+
+        if (!targetSheetId || !targetSheet) {
+          return null;
+        }
+
         const cellKey = `${command.row}:${command.col}`;
-        const previousCell = nextSnapshot.cells[cellKey] || {};
+        const previousCell = targetSheet.cells[cellKey] || {};
         const oldValue = previousCell.value ?? '';
         const oldStyleId = typeof previousCell.styleId === 'string' ? previousCell.styleId : null;
-        const oldStyle = oldStyleId ? JSON.parse(JSON.stringify(nextSnapshot.styles[oldStyleId] || null)) : null;
+        const oldStyle = oldStyleId ? JSON.parse(JSON.stringify(targetSheet.styles[oldStyleId] || null)) : null;
         const nextStyleIdValue = command.style !== undefined
-          ? findOrCreateStyleId(nextSnapshot, command.style)
+          ? findOrCreateStyleId(targetSheet, command.style)
           : null;
 
-        nextSnapshot.cells[cellKey] = {
+        targetSheet.cells[cellKey] = {
           row: command.row,
           col: command.col,
           value: command.value ?? '',
           styleId: nextStyleIdValue,
         };
 
-        if (command.row > nextSnapshot.rowCount) {
-          nextSnapshot.rowCount = command.row;
+        if (command.row > targetSheet.rowCount) {
+          targetSheet.rowCount = command.row;
         }
 
-        if (command.col > nextSnapshot.colCount) {
-          nextSnapshot.colCount = command.col;
+        if (command.col > targetSheet.colCount) {
+          targetSheet.colCount = command.col;
         }
 
         const nextSeq = Number.isInteger(command.seq) ? command.seq : current.currentSeq + 1;
@@ -364,7 +394,11 @@ function createDocMysqlStore() {
         );
 
         const updatedDoc = await findByDocId(command.docId, { connection });
-        return { ...updatedDoc, _before: { value: oldValue, style: oldStyle } };
+        return {
+          ...updatedDoc,
+          _before: { value: oldValue, style: oldStyle },
+          _targetSheetId: targetSheetId,
+        };
       }, options);
     },
 
@@ -410,7 +444,7 @@ function createDocMysqlStore() {
 
         const nextSeq = Number.isInteger(command.seq) ? command.seq : current.currentSeq + 1;
         const updatedAt = new Date().toISOString();
-        const nextSnapshot = normalizeDocSnapshot(command.snapshotJson || command.snapshot);
+        const nextSnapshot = normalizeDocSnapshot(command.snapshotJson || command.snapshot, { docId: command.docId });
 
         await connection.execute(
           `UPDATE doc
@@ -425,6 +459,50 @@ function createDocMysqlStore() {
         );
 
         return findByDocId(command.docId, { connection });
+      }, options);
+    },
+
+    async applyAddSheet(command, options = {}) {
+      await ensureReady();
+
+      return runWithOptionalTransaction(async (connection) => {
+        const current = await findByDocId(command.docId, { connection, forUpdate: true });
+
+        if (!current) {
+          return null;
+        }
+
+        const nextSeq = Number.isInteger(command.seq) ? command.seq : current.currentSeq + 1;
+        const updatedAt = new Date().toISOString();
+        const nextSnapshot = normalizeDocSnapshot(current.snapshotJson, { docId: command.docId });
+        const nextSheetId = buildNextSheetId(nextSnapshot, command.docId);
+        const nextSheet = createEmptySheetSnapshot({
+          docId: command.docId,
+          sheetId: nextSheetId,
+          name: command.sheetName || buildDefaultSheetName(nextSnapshot),
+        });
+
+        nextSnapshot.sheets[nextSheetId] = nextSheet;
+        nextSnapshot.sheetOrder = [...(nextSnapshot.sheetOrder || []), nextSheetId];
+        nextSnapshot.activeSheetId = nextSheetId;
+
+        await connection.execute(
+          `UPDATE doc
+          SET snapshot_json = CAST(? AS JSON), current_seq = ?, updated_at = ?
+          WHERE id = ?`,
+          [
+            stringifyJsonValue(nextSnapshot, {}),
+            nextSeq,
+            toMysqlDateValue(updatedAt),
+            current.id,
+          ]
+        );
+
+        const updatedDoc = await findByDocId(command.docId, { connection });
+        return {
+          ...updatedDoc,
+          _addedSheet: JSON.parse(JSON.stringify(nextSheet)),
+        };
       }, options);
     },
   };

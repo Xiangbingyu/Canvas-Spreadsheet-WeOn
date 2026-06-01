@@ -17,6 +17,7 @@ const schemaStatements = [
     base_seq BIGINT NULL,
     client_id VARCHAR(64) NULL,
     op_type VARCHAR(32) NOT NULL,
+    target_sheet_id VARCHAR(64) NULL,
     target_row INT NULL,
     target_col INT NULL,
     old_value_json JSON NULL,
@@ -69,30 +70,110 @@ const schemaStatements = [
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 ];
 
-async function ensureHistoryBaseSeqColumn(pool) {
+function isIgnorableSchemaRaceError(error) {
+  return Boolean(
+    error
+    && (
+      error.code === 'ER_DUP_FIELDNAME'
+      || error.code === 'ER_DUP_KEYNAME'
+      || error.code === 'ER_DUP_ENTRY'
+    )
+  );
+}
+
+async function runSchemaMutation(pool, statement) {
+  try {
+    await pool.query(statement);
+  } catch (error) {
+    if (!isIgnorableSchemaRaceError(error)) {
+      throw error;
+    }
+  }
+}
+
+async function hasColumn(pool, tableName, columnName) {
   const [rows] = await pool.query(
     `SELECT COLUMN_NAME
     FROM INFORMATION_SCHEMA.COLUMNS
     WHERE TABLE_SCHEMA = DATABASE()
-      AND TABLE_NAME = 'history'
-      AND COLUMN_NAME = 'base_seq'`
+      AND TABLE_NAME = ?
+      AND COLUMN_NAME = ?`,
+    [tableName, columnName]
   );
 
-  if (rows.length === 0) {
-    await pool.query('ALTER TABLE history ADD COLUMN base_seq BIGINT NULL AFTER seq');
-  }
+  return rows.length > 0;
+}
 
-  const [indexRows] = await pool.query(
+async function hasIndex(pool, tableName, indexName) {
+  const [rows] = await pool.query(
     `SELECT INDEX_NAME
     FROM INFORMATION_SCHEMA.STATISTICS
     WHERE TABLE_SCHEMA = DATABASE()
-      AND TABLE_NAME = 'history'
-      AND INDEX_NAME = 'idx_history_doc_base_seq'`
+      AND TABLE_NAME = ?
+      AND INDEX_NAME = ?`,
+    [tableName, indexName]
   );
 
-  if (indexRows.length === 0) {
-    await pool.query('ALTER TABLE history ADD INDEX idx_history_doc_base_seq (doc_id, base_seq)');
+  return rows.length > 0;
+}
+
+async function ensureColumn(pool, {
+  tableName,
+  columnName,
+  definition,
+  afterColumn,
+}) {
+  if (await hasColumn(pool, tableName, columnName)) {
+    return;
   }
+
+  const afterClause = typeof afterColumn === 'string' && afterColumn
+    ? ` AFTER ${afterColumn}`
+    : '';
+
+  await runSchemaMutation(
+    pool,
+    `ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}${afterClause}`
+  );
+}
+
+async function ensureIndex(pool, {
+  tableName,
+  indexName,
+  definition,
+}) {
+  if (await hasIndex(pool, tableName, indexName)) {
+    return;
+  }
+
+  await runSchemaMutation(
+    pool,
+    `ALTER TABLE ${tableName} ADD INDEX ${indexName} ${definition}`
+  );
+}
+
+async function ensureHistoryBaseSeqColumn(pool) {
+  await ensureColumn(pool, {
+    tableName: 'history',
+    columnName: 'base_seq',
+    definition: 'BIGINT NULL',
+    afterColumn: 'seq',
+  });
+
+  await ensureIndex(pool, {
+    tableName: 'history',
+    indexName: 'idx_history_doc_base_seq',
+    definition: '(doc_id, base_seq)',
+  });
+}
+
+async function ensureHistoryTargetSheetIdColumn(pool) {
+  await ensureColumn(pool, {
+    tableName: 'history',
+    columnName: 'target_sheet_id',
+    definition: 'VARCHAR(64) NULL',
+    afterColumn: 'op_type',
+  });
 }
 
 async function ensureMysqlSchema(pool) {
@@ -101,6 +182,7 @@ async function ensureMysqlSchema(pool) {
   }
 
   await ensureHistoryBaseSeqColumn(pool);
+  await ensureHistoryTargetSheetIdColumn(pool);
 }
 
 module.exports = {
