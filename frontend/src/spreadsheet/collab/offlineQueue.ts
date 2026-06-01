@@ -3,6 +3,7 @@ const MAX_QUEUE_SIZE = 500
 
 export interface QueuedOp {
   docId: string
+  sheetId: string
   row: number
   col: number
   value: string

@@ -52,6 +52,7 @@ export interface SetCellRequest {
   type: 'set_cell'
   docId: string
   clientId: string
+  sheetId: string
   row: number // 1-indexed
   col: number // 1-indexed
   value: string
@@ -162,6 +163,7 @@ export interface CellUpdated {
   data: {
     docId: string
     clientId: string
+    sheetId: string
     seq: number
     row: number // 1-indexed
     col: number // 1-indexed

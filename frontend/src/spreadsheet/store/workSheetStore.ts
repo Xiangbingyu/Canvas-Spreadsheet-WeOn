@@ -9,6 +9,8 @@ export type UpdateCellPayload = {
   row: number
   col: number
   value: string
+  /** 所属 sheetId */
+  sheetId?: string
   /** 修改后的完整样式；不传则保留原 styleId */
   style?: Style
 }
