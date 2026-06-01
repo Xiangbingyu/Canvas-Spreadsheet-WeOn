@@ -2,6 +2,7 @@ import type {
   WsResponse,
   CellUpdated,
   TitleUpdated,
+  CursorUpdate,
   SheetImported,
   UndoApplied,
   RedoApplied,
@@ -12,6 +13,7 @@ import type {
   UserInfo,
   Snapshot,
 } from '../model/collabProtocol'
+import { OfflineQueue, type QueuedOp } from './offlineQueue'
 
 // ===== 回调接口 =====
 
@@ -22,6 +24,8 @@ export interface CollabCallbacks {
   onCellUpdated: (data: CellUpdated['data']) => void
   /** 标题被更新 */
   onTitleUpdated: (data: TitleUpdated['data']) => void
+  /** 其他用户光标位置变化 */
+  onCursor: (data: CursorUpdate['data']) => void
   /** 整表导入 */
   onSheetImported: (data: SheetImported['data']) => void
   /** 撤销 */
@@ -203,6 +207,10 @@ export class CollabClient {
     })
   }
 
+  sendCursor(row: number, col: number): void {
+    this.send({ type: 'cursor', docId: this.docId, clientId: this.clientId, row, col })
+  }
+
   undo(): void {
     this.send({ type: 'undo', docId: this.docId, clientId: this.clientId })
   }
@@ -272,6 +280,7 @@ export class CollabClient {
         this.pendingOps.clear()
         this.callbacks.onSnapshot(msg.data.snapshot, msg.data.currentSeq)
         this.callbacks.onPresence(msg.data.users)
+        this.replayOfflineQueue()
         break
 
       case 'cell_updated':
@@ -284,6 +293,10 @@ export class CollabClient {
         this.applyOrdered(msg.data.seq, () => {
           this.callbacks.onTitleUpdated(msg.data)
         })
+        break
+
+      case 'cursor_update':
+        this.callbacks.onCursor(msg.data)
         break
 
       case 'sheet_imported':
@@ -415,6 +428,19 @@ export class CollabClient {
     })
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(data)
+      return
+    }
+    // 首次握手期 → 内存队列；曾经连上过且是 set_cell → localStorage 持久化
+    if (this.seq > 0 && msg.type === 'set_cell') {
+      const m = msg as Record<string, unknown>
+      OfflineQueue.enqueue({
+        docId: this.docId,
+        row: m.row as number,
+        col: m.col as number,
+        value: (m.value as string) ?? '',
+        style: (m.style as Record<string, unknown> | null) ?? null,
+        baseSeq: (m.baseSeq as number) ?? this.seq,
+      })
     } else {
       this.sendQueue.push(data)
     }
@@ -426,6 +452,32 @@ export class CollabClient {
     this.sendQueue = []
     for (const data of queue) {
       this.ws.send(data)
+    }
+  }
+
+  private replayOfflineQueue(): void {
+    const ops = OfflineQueue.dequeueAll()
+    if (ops.length === 0) return
+    const remaining: QueuedOp[] = []
+    for (const op of ops) {
+      if (op.docId !== this.docId) {
+        remaining.push(op)
+        continue
+      }
+      this.send({
+        type: 'set_cell',
+        docId: this.docId,
+        clientId: this.clientId,
+        row: op.row,
+        col: op.col,
+        value: op.value,
+        style: op.style,
+        baseSeq: op.baseSeq,
+      })
+    }
+    // 放回其他文档的操作，避免 dequeueAll 误删
+    for (const op of remaining) {
+      OfflineQueue.enqueue(op)
     }
   }
 

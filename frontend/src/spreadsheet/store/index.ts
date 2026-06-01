@@ -13,11 +13,12 @@ import {
   workSheetReducer,
   type UpdateCellPayload,
 } from './workSheetStore'
-
 import {
   collabReducer,
   setDocTitle,
   setOnlineUsers,
+  setUserCursor,
+  removeUserCursor,
   setCurrentSeq,
   setConnectionStatus,
 } from './userStore'
@@ -38,7 +39,6 @@ export const store = configureStore({
     collab: collabReducer,
     clipboard: clipboardReducer,
   },
-  // 大表 cells 较多时，开发态 immutable/serializable 检查会明显拖慢 dispatch
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({
       immutableCheck: false,
@@ -55,6 +55,8 @@ export {
   setSelectedCell,
   setDocTitle,
   setOnlineUsers,
+  setUserCursor,
+  removeUserCursor,
   setCurrentSeq,
   setConnectionStatus,
   initFromDoc,

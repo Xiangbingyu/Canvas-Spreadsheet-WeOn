@@ -13,6 +13,7 @@ export type ClientMessageType =
   | 'join'
   | 'set_cell'
   | 'set_title'
+  | 'cursor'
   | 'import_sheet'
   | 'presence'
   | 'undo'
@@ -26,6 +27,7 @@ export type ServerMessageType =
   | 'join_ack'
   | 'cell_updated'
   | 'title_updated'
+  | 'cursor_update'
   | 'sheet_imported'
   | 'presence'
   | 'undo_applied'
@@ -63,6 +65,14 @@ export interface SetTitleRequest {
   clientId: string
   title: string
   baseSeq: number
+}
+
+export interface CursorRequest {
+  type: 'cursor'
+  docId: string
+  clientId: string
+  row: number
+  col: number
 }
 
 export interface ImportSheetRequest {
@@ -121,6 +131,7 @@ export type WsRequest =
   | JoinRequest
   | SetCellRequest
   | SetTitleRequest
+  | CursorRequest
   | ImportSheetRequest
   | UndoRequest
   | RedoRequest
@@ -170,6 +181,18 @@ export interface TitleUpdated {
     clientId: string
     seq: number
     title: string
+  }
+}
+
+export interface CursorUpdate {
+  type: 'cursor_update'
+  code: 0
+  message: 'ok'
+  data: {
+    docId: string
+    clientId: string
+    row: number
+    col: number
   }
 }
 
@@ -292,6 +315,7 @@ export type WsResponse =
   | JoinAck
   | CellUpdated
   | TitleUpdated
+  | CursorUpdate
   | SheetImported
   | PresenceMessage
   | UndoApplied
