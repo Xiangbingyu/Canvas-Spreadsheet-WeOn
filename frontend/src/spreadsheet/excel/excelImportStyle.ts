@@ -260,9 +260,12 @@ export function parseCellStyleIndexMap(sheetXml: string): Map<string, number> {
   return map
 }
 
-/** 读取首个工作表 sheet.xml，建立 s 索引映射 */
-export function buildCellStyleIndexMap(workbook: XlsxWorkbookWithStyles): Map<string, number> {
-  const sheetPath = workbook.Directory?.sheets?.[0]
+/** 读取指定工作表 sheet.xml，建立 s 索引映射（1-based 行列键） */
+export function buildCellStyleIndexMap(
+  workbook: XlsxWorkbookWithStyles,
+  sheetIndex = 0
+): Map<string, number> {
+  const sheetPath = workbook.Directory?.sheets?.[sheetIndex]
   if (!sheetPath) return new Map()
 
   const sheetXml = readZipEntryUtf8(workbook.files, sheetPath)

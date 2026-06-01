@@ -7,12 +7,9 @@ import {
   type SelectionState,
   type SetSelectedCellPayload,
 } from './selectStore'
-import {
-  setWorksheet,
-  updateCell,
-  workSheetReducer,
-  type UpdateCellPayload,
-} from './workSheetStore'
+import { setWorksheet, workSheetReducer } from './workSheetStore'
+import type { UpdateCellPayload } from '@/spreadsheet/utils/applyUpdateCell'
+
 import {
   collabReducer,
   setDocTitle,
@@ -26,7 +23,8 @@ import {
   addSheet,
   initFromDoc,
   switchSheet,
-  syncActiveSheetCache,
+  importWorkbook,
+  updateCell,
   workbookReducer,
 } from './workbookStore'
 import { clipboardReducer, setClipboard, clearClipboard } from './clipboardStore'
@@ -60,9 +58,9 @@ export {
   setCurrentSeq,
   setConnectionStatus,
   initFromDoc,
-  syncActiveSheetCache,
   switchSheet,
   addSheet,
+  importWorkbook,
   setClipboard,
   clearClipboard,
 }

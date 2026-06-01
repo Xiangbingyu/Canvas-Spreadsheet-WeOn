@@ -7,7 +7,7 @@ import API, { ApiError } from '@/services/httpAPI'
 import { initFromDoc, setDocTitle, setWorksheet } from '@/spreadsheet/store'
 import { setDocSession } from '@/spreadsheet/store/userStore'
 import { allocateClientId } from '@/spreadsheet/utils/allocateClientId'
-import { fromServerSnapshot } from '@/spreadsheet/utils/fromServerSnapshot'
+import { fromHttpDocWorkbookSnapshot } from '@/spreadsheet/utils/fromServerSnapshot'
 
 /** 解析 URL docId，统一 GET 加载文档后组装表格 UI */
 export function SpreadsheetPage() {
@@ -23,10 +23,13 @@ export function SpreadsheetPage() {
       try {
         const doc = await API.getDoc(routeDocId)
         if (cancelled) return
-        const worksheet = fromServerSnapshot(doc.snapshot)
+        const workbook = fromHttpDocWorkbookSnapshot(doc.snapshot)
         const docTitle = doc.title?.trim() || '未命名表格'
-        dispatch(initFromDoc({ docTitle, worksheet }))
-        dispatch(setWorksheet(worksheet))
+        dispatch(initFromDoc({ docTitle, ...workbook }))
+        const activeSheet = workbook.sheets[workbook.activeSheetId]
+        if (activeSheet) {
+          dispatch(setWorksheet(activeSheet))
+        }
         dispatch(setDocTitle(docTitle))
         dispatch(setDocSession({ docId: doc.docId, clientId: userId }))
       } catch (error) {
