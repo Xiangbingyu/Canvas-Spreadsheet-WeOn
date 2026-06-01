@@ -12,8 +12,8 @@ import type { WorkbookSnapshotPayload } from '@/spreadsheet/store/workbookStore'
 type ImportExcelModalProps = {
   open: boolean
   onClose: () => void
-  /** 解析完成后写入 workbook + 激活首个 sheet */
-  onImport: (workbook: WorkbookSnapshotPayload) => void
+  /** 解析完成后：先乐观更新本地 Redux，再发 import_sheet；返回是否已同步到服务端 */
+  onImport: (workbook: WorkbookSnapshotPayload) => boolean
 }
 
 const INITIAL_PROGRESS: ParseExcelProgress = {
@@ -91,9 +91,12 @@ export function ImportExcelModal({ open, onClose, onImport }: ImportExcelModalPr
         onProgress: setProgress,
       })
 
-      onImport(workbook)
-      message.success(`导入成功，共 ${workbook.sheetOrder.length} 个工作表`)
-      console.log(workbook)
+      const wsSent = onImport(workbook)
+      message.success(
+        wsSent
+          ? `导入成功，共 ${workbook.sheetOrder.length} 个工作表`
+          : `导入成功，共 ${workbook.sheetOrder.length} 个工作表（协同未连接，仅本地可见）`
+      )
       setFileList([])
       onClose()
     } catch (error) {
