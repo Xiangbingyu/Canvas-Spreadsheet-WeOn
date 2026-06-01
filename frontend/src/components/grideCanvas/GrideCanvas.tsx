@@ -627,6 +627,7 @@ function GrideCanvas(
         const pasteStartCol = sel.col
         const rowOffset = pasteStartRow - clipboard.range.startRow
         const colOffset = pasteStartCol - clipboard.range.startCol
+        const sheetId = ws.sheetId
 
         for (const [key, clipCell] of Object.entries(clipboard.cells)) {
           const [rowStr, colStr] = key.split(':')
@@ -646,6 +647,7 @@ function GrideCanvas(
 
           reduxStore.dispatch(
             updateCell({
+              sheetId,
               row: targetRow,
               col: targetCol,
               value: (clipCell as { value: string; style?: (typeof ws.styles)[string] }).value,
@@ -671,6 +673,7 @@ function GrideCanvas(
         const pasteStartCol = sel.col
         const rowOffset = pasteStartRow - parsed.range.startRow
         const colOffset = pasteStartCol - parsed.range.startCol
+        const sheetId = ws.sheetId
 
         for (const [key, clipCell] of Object.entries(parsed.cells)) {
           const [rowStr, colStr] = key.split(':')
@@ -690,6 +693,7 @@ function GrideCanvas(
 
           reduxStore.dispatch(
             updateCell({
+              sheetId,
               row: targetRow,
               col: targetCol,
               value: (clipCell as { value: string }).value,
