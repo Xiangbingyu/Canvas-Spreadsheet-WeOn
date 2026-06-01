@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const { once } = require('node:events');
 const path = require('node:path');
 const test = require('node:test');
+const { normalizeDocSnapshot } = require('../domain/entities/doc');
 const { resetMysqlDatabase } = require('../scripts/dbReset');
 const { resetRedisTestKeys } = require('./helpers/resetRedisTestKeys');
 
@@ -218,6 +219,68 @@ test('POST /docs matches documented response format', async () => {
   }
 });
 
+test('POST /docs creates a document from imported workbook snapshot', async () => {
+  const server = await createTestServer();
+
+  try {
+    const importedSnapshot = {
+      activeSheetId: 'sheet_import_002',
+      sheetOrder: ['sheet_import_001', 'sheet_import_002'],
+      sheets: {
+        sheet_import_001: {
+          id: 'sheet_import_001',
+          name: '明细',
+          defaultRowHeight: 28,
+          defaultColWidth: 120,
+          rowCount: 20,
+          colCount: 8,
+          styles: {
+            style_header: {
+              fontFamily: 'Arial',
+              fontSize: 12,
+              bold: true,
+            },
+          },
+          cells: {
+            '0:0': { row: 0, col: 0, value: '产品', styleId: 'style_header' },
+            '1:0': { row: 1, col: 0, value: '键盘', styleId: null },
+          },
+        },
+        sheet_import_002: {
+          id: 'sheet_import_002',
+          name: '汇总',
+          defaultRowHeight: 25,
+          defaultColWidth: 100,
+          rowCount: 5,
+          colCount: 4,
+          styles: {},
+          cells: {
+            '0:0': { row: 0, col: 0, value: '总计', styleId: null },
+          },
+        },
+      },
+    };
+
+    const response = await postJson(server.baseUrl, '/docs', {
+      title: '导入工作簿',
+      createdBy: 'user_import_001',
+      eventId: 'evt_create_doc_import_001',
+      snapshot: importedSnapshot,
+    });
+
+    assert.equal(response.status, 201);
+    assert.equal(response.json.code, 0);
+    assert.equal(response.json.data.title, '导入工作簿');
+    assert.equal(response.json.data.createdBy, 'user_import_001');
+    assert.deepEqual(
+      response.json.data.snapshot,
+      normalizeDocSnapshot(importedSnapshot, { docId: response.json.data.docId })
+    );
+  } finally {
+    await server.close();
+  }
+});
+
 // ==================== POST /docs：相同 eventId 命中幂等并返回第一次结果 ====================
 test('POST /docs returns remembered result for duplicate eventId', async () => {
   const server = await createTestServer();
@@ -285,6 +348,23 @@ test('POST /docs rejects invalid eventId', async () => {
     assert.equal(response.status, 400);
     assert.equal(response.json.code, 4000);
     assert.equal(response.json.message, 'eventId must be a non-empty string');
+  } finally {
+    await server.close();
+  }
+});
+
+test('POST /docs rejects invalid snapshot', async () => {
+  const server = await createTestServer();
+
+  try {
+    const response = await postJson(server.baseUrl, '/docs', {
+      title: 'invalid-snapshot-doc',
+      snapshot: [1, 2, 3],
+    });
+
+    assert.equal(response.status, 400);
+    assert.equal(response.json.code, 4000);
+    assert.equal(response.json.message, 'snapshot must be an object');
   } finally {
     await server.close();
   }

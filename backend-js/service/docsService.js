@@ -60,6 +60,14 @@ function normalizeCreateDocInput(input = {}) {
     throw createServiceError(ERROR_CODES.INVALID_PARAMS, 'eventId must be a non-empty string');
   }
 
+  if (input.snapshot === undefined) {
+    normalized.snapshot = undefined;
+  } else if (input.snapshot && typeof input.snapshot === 'object' && !Array.isArray(input.snapshot)) {
+    normalized.snapshot = input.snapshot;
+  } else {
+    throw createServiceError(ERROR_CODES.INVALID_PARAMS, 'snapshot must be an object');
+  }
+
   return normalized;
 }
 
@@ -252,6 +260,7 @@ async function createDoc(input = {}) {
     const createdDoc = await docStore.createDoc({
       title: normalizedInput.title,
       createdBy: normalizedInput.createdBy,
+      snapshotJson: normalizedInput.snapshot,
     });
     const docView = toDocView(createdDoc);
 

@@ -52,6 +52,7 @@ router.post('/', async (req, res) => {
       title: req.body.title,
       createdBy: req.body.createdBy,
       eventId: req.body.eventId,
+      snapshot: req.body.snapshot,
     })
 
     return res.status(201).json(createHttpSuccess(doc))
