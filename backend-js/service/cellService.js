@@ -1,13 +1,12 @@
 const { ERROR_CODES } = require('../protocol/errorCodes');
-const storeConfig = require('../config/storeConfig');
-const { withTransaction } = require('../db/mysql');
 const docLock = require('../infra/redis/lock');
 const docsService = require('./docsService');
-const historyStore = require('../store/historyStore');
-const userOpStateStore = require('../store/userOpStateStore');
+const docRealtimeService = require('./docRealtimeService');
 const auditService = require('../audit/auditService');
 const collabConfig = require('../config/collabConfig');
 const { normalizeBaseSeq, rebaseSetCellCommand } = require('./cellOtService');
+const { createRealtimeHistoryStore } = require('./realtimeHistoryService');
+const { applySetCellToRealtimeDoc } = require('../utils/realtimeDocMutation');
 
 function createServiceError(code, message, details = null) {
   const error = new Error(message);
@@ -62,10 +61,12 @@ function trimUndoStack(entries) {
 
 async function applySetCell(command = {}) {
   const normalizedCommand = normalizeSetCellCommand(command);
+  const realtimeHistoryStore = createRealtimeHistoryStore();
 
   return docLock.withDocLock(normalizedCommand.docId, async () => {
-    let updatedDoc = null;
+    let currentDoc = null;
     let seq = 0;
+    let updatedAt = null;
     let trimmedUndoStack = [];
     let rebaseResult = {
       enabled: false,
@@ -73,94 +74,83 @@ async function applySetCell(command = {}) {
       baseSeq: null,
       conflictSeq: null,
     };
+    currentDoc = await docRealtimeService.getRealtimeDoc(normalizedCommand.docId);
 
-    const executeMutation = async (connection = null) => {
-      const currentDoc = await docsService.getDocStateForWrite(normalizedCommand.docId, {
-        connection,
-        forUpdate: Boolean(connection),
-      });
-
-      if (!currentDoc) {
-        throw createServiceError(ERROR_CODES.DOCUMENT_NOT_FOUND, `document not found: ${normalizedCommand.docId}`);
-      }
-
-      const otResult = await rebaseSetCellCommand({
-        command: normalizedCommand,
-        currentDoc,
-        historyStore,
-        connection,
-      });
-
-      rebaseResult = otResult.rebaseResult;
-
-      const currentSnapshot = currentDoc.snapshotJson || {};
-      const currentSheets = currentSnapshot.sheets || {};
-
-      if (!currentSheets[normalizedCommand.sheetId]) {
-        throw createServiceError(ERROR_CODES.INVALID_PARAMS, `sheet not found: ${normalizedCommand.sheetId}`, {
-          docId: normalizedCommand.docId,
-          sheetId: normalizedCommand.sheetId,
-        });
-      }
-
-      updatedDoc = await docsService.applySetCell({
-        ...otResult.command,
-      }, {
-        connection,
-      });
-
-      if (!updatedDoc) {
-        throw createServiceError(ERROR_CODES.DOCUMENT_NOT_FOUND, `document not found: ${normalizedCommand.docId}`);
-      }
-
-      seq = updatedDoc.currentSeq;
-      const targetSheetId = updatedDoc._targetSheetId;
-      const { value: oldValue, style: oldStyle } = updatedDoc._before;
-
-      await historyStore.append({
-        docId: normalizedCommand.docId,
-        clientId: normalizedCommand.clientId,
-        seq,
-        baseSeq: rebaseResult.baseSeq,
-        opType: 'set_cell',
-        targetSheetId,
-        targetRow: normalizedCommand.row,
-        targetCol: normalizedCommand.col,
-        oldValueJson: { value: oldValue, style: oldStyle },
-        newValueJson: { value: normalizedCommand.value, style: normalizedCommand.style },
-      }, { connection });
-
-      const opState = await userOpStateStore.getState(normalizedCommand.docId, normalizedCommand.clientId, { connection });
-      const undoStack = opState ? [...opState.undoStackJson] : [];
-      undoStack.push({
-        sourceSeq: seq,
-        docId: normalizedCommand.docId,
-        clientId: normalizedCommand.clientId,
-        opType: 'set_cell',
-        sheetId: targetSheetId,
-        row: normalizedCommand.row,
-        col: normalizedCommand.col,
-        oldValue,
-        oldStyle,
-        newValue: normalizedCommand.value,
-        newStyle: normalizedCommand.style,
-        baseSeq: rebaseResult.baseSeq,
-      });
-      trimmedUndoStack = trimUndoStack(undoStack);
-
-      await userOpStateStore.saveState({
-        docId: normalizedCommand.docId,
-        clientId: normalizedCommand.clientId,
-        undoStackJson: trimmedUndoStack,
-        redoStackJson: [],
-      }, { connection });
-    };
-
-    if (storeConfig.driver === 'mysql') {
-      await withTransaction(async (connection) => executeMutation(connection));
-    } else {
-      await executeMutation();
+    if (!currentDoc) {
+      throw createServiceError(ERROR_CODES.DOCUMENT_NOT_FOUND, `document not found: ${normalizedCommand.docId}`);
     }
+
+    const otResult = await rebaseSetCellCommand({
+      command: normalizedCommand,
+      currentDoc,
+      historyStore: realtimeHistoryStore,
+    });
+
+    rebaseResult = otResult.rebaseResult;
+
+    const nextMutation = applySetCellToRealtimeDoc(currentDoc, otResult.command);
+    if (!nextMutation) {
+      throw createServiceError(ERROR_CODES.INVALID_PARAMS, `sheet not found: ${normalizedCommand.sheetId}`, {
+        docId: normalizedCommand.docId,
+        sheetId: normalizedCommand.sheetId,
+      });
+    }
+
+    seq = await docRealtimeService.allocateNextSeq(normalizedCommand.docId);
+    updatedAt = new Date().toISOString();
+
+    await docRealtimeService.saveRealtimeDoc(normalizedCommand.docId, {
+      title: currentDoc.title,
+      snapshotJson: nextMutation.nextSnapshot,
+      currentSeq: seq,
+      updatedAt,
+    });
+
+    const opState = await docRealtimeService.getUserOpState(normalizedCommand.docId, normalizedCommand.clientId);
+    const undoStack = opState ? [...opState.undoStackJson] : [];
+    undoStack.push({
+      sourceSeq: seq,
+      docId: normalizedCommand.docId,
+      clientId: normalizedCommand.clientId,
+      opType: 'set_cell',
+      sheetId: nextMutation.targetSheetId,
+      row: normalizedCommand.row,
+      col: normalizedCommand.col,
+      oldValue: nextMutation.beforeState.value,
+      oldStyle: nextMutation.beforeState.style,
+      newValue: normalizedCommand.value,
+      newStyle: normalizedCommand.style,
+      baseSeq: rebaseResult.baseSeq,
+    });
+    trimmedUndoStack = trimUndoStack(undoStack);
+
+    await docRealtimeService.saveUserOpState({
+      docId: normalizedCommand.docId,
+      clientId: normalizedCommand.clientId,
+      undoStackJson: trimmedUndoStack,
+      redoStackJson: [],
+      updatedAt,
+    });
+
+    await docRealtimeService.appendOp(normalizedCommand.docId, {
+      docId: normalizedCommand.docId,
+      clientId: normalizedCommand.clientId,
+      seq,
+      baseSeq: rebaseResult.baseSeq,
+      opType: 'set_cell',
+      targetSheetId: nextMutation.targetSheetId,
+      targetRow: normalizedCommand.row,
+      targetCol: normalizedCommand.col,
+      oldValueJson: {
+        value: nextMutation.beforeState.value,
+        style: nextMutation.beforeState.style,
+      },
+      newValueJson: {
+        value: normalizedCommand.value,
+        style: normalizedCommand.style,
+      },
+      createdAt: updatedAt,
+    });
 
     await docsService.invalidateDocCaches(normalizedCommand.docId);
 
@@ -174,7 +164,7 @@ async function applySetCell(command = {}) {
     return {
       docId: normalizedCommand.docId,
       clientId: normalizedCommand.clientId,
-      sheetId: updatedDoc && updatedDoc._targetSheetId ? updatedDoc._targetSheetId : normalizedCommand.sheetId,
+      sheetId: nextMutation.targetSheetId || normalizedCommand.sheetId,
       seq,
       row: normalizedCommand.row,
       col: normalizedCommand.col,

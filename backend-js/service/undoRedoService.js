@@ -1,9 +1,7 @@
 const { ERROR_CODES } = require('../protocol/errorCodes');
-const storeConfig = require('../config/storeConfig');
-const { withTransaction } = require('../db/mysql');
 const docLock = require('../infra/redis/lock');
 const docsService = require('./docsService');
-const userOpStateStore = require('../store/userOpStateStore');
+const docRealtimeService = require('./docRealtimeService');
 const auditService = require('../audit/auditService');
 const collabConfig = require('../config/collabConfig');
 const { isNonEmptyString } = require('../protocol/validators');
@@ -12,6 +10,8 @@ const {
   createAppliedStackEntry,
   createRedoStackEntry,
 } = require('./undoRedoOtService');
+const { createRealtimeHistoryStore } = require('./realtimeHistoryService');
+const { applySetCellToRealtimeDoc } = require('../utils/realtimeDocMutation');
 
 function createServiceError(code, message, details = null) {
   const error = new Error(message);
@@ -45,22 +45,6 @@ function trimUndoStack(entries) {
   return entries.slice(entries.length - limit);
 }
 
-async function appendHistoryBestEffort(historyStore, entry, label) {
-  try {
-    await historyStore.append(entry);
-  } catch (error) {
-    console.error(`${label} history append failed:`, error);
-  }
-}
-
-async function saveOpStateBestEffort(state, label) {
-  try {
-    await userOpStateStore.saveState(state);
-  } catch (error) {
-    console.error(`${label} user-op-state save failed:`, error);
-  }
-}
-
 async function recordAuditBestEffort(event, label) {
   try {
     await auditService.recordAuditEvent(event);
@@ -70,116 +54,100 @@ async function recordAuditBestEffort(event, label) {
 }
 
 async function applyUndo(command = {}) {
-  const { historyStore } = command;
   const normalizedCommand = normalizeUndoRedoCommand(command);
+  const realtimeHistoryStore = createRealtimeHistoryStore();
 
   return docLock.withDocLock(normalizedCommand.docId, async () => {
-    let updatedDoc = null;
+    let currentDoc = null;
     let seq = 0;
     let undoStack = [];
     let trimmedRedoStack = [];
     let entry = null;
     let otResult = null;
+    let updatedAt = null;
+    currentDoc = await docRealtimeService.getRealtimeDoc(normalizedCommand.docId);
 
-    const executeMutation = async (connection = null) => {
-      const currentDoc = await docsService.getDocStateForWrite(normalizedCommand.docId, {
-        connection,
-        forUpdate: Boolean(connection),
-      });
-
-      if (!currentDoc) {
-        throw createServiceError(ERROR_CODES.DOCUMENT_NOT_FOUND, `document not found: ${normalizedCommand.docId}`);
-      }
-
-      const opState = await userOpStateStore.getState(normalizedCommand.docId, normalizedCommand.clientId, { connection });
-      undoStack = opState ? [...opState.undoStackJson] : [];
-      const redoStack = opState ? [...opState.redoStackJson] : [];
-
-      if (undoStack.length === 0) {
-        throw createServiceError(ERROR_CODES.INVALID_PARAMS, 'nothing to undo');
-      }
-
-      entry = undoStack.pop();
-      otResult = await resolveUndoRedoOperation({
-        docId: normalizedCommand.docId,
-        entry,
-        desiredState: {
-          value: entry.oldValue,
-          style: entry.oldStyle,
-        },
-        currentDoc,
-        historyStore,
-        connection,
-      });
-
-      updatedDoc = await docsService.applySetCell({
-        docId: normalizedCommand.docId,
-        sheetId: entry.sheetId,
-        row: entry.row,
-        col: entry.col,
-        value: otResult.targetState.value,
-        style: otResult.targetState.style,
-      }, {
-        connection,
-      });
-
-      if (!updatedDoc) {
-        throw createServiceError(ERROR_CODES.DOCUMENT_NOT_FOUND, `document not found: ${normalizedCommand.docId}`);
-      }
-
-      seq = updatedDoc.currentSeq;
-
-      const undoHistoryEntry = {
-        docId: normalizedCommand.docId,
-        clientId: normalizedCommand.clientId,
-        seq,
-        baseSeq: otResult.baseSeq,
-        opType: 'undo',
-        sourceSeq: entry.sourceSeq,
-        targetSheetId: updatedDoc._targetSheetId || entry.sheetId || null,
-        targetRow: entry.row,
-        targetCol: entry.col,
-        oldValueJson: { value: otResult.currentState.value, style: otResult.currentState.style },
-        newValueJson: { value: otResult.targetState.value, style: otResult.targetState.style },
-      };
-
-      if (connection) {
-        await historyStore.append(undoHistoryEntry, { connection });
-      } else {
-        await appendHistoryBestEffort(historyStore, undoHistoryEntry, 'undo');
-      }
-
-      redoStack.push(createRedoStackEntry({
-        sourceSeq: seq,
-        docId: normalizedCommand.docId,
-        clientId: normalizedCommand.clientId,
-        sheetId: updatedDoc._targetSheetId || entry.sheetId || null,
-        row: entry.row,
-        col: entry.col,
-        beforeState: otResult.currentState,
-        afterState: otResult.targetState,
-      }));
-      trimmedRedoStack = trimUndoStack(redoStack);
-
-      const nextOpState = {
-        docId: normalizedCommand.docId,
-        clientId: normalizedCommand.clientId,
-        undoStackJson: undoStack,
-        redoStackJson: trimmedRedoStack,
-      };
-
-      if (connection) {
-        await userOpStateStore.saveState(nextOpState, { connection });
-      } else {
-        await saveOpStateBestEffort(nextOpState, 'undo');
-      }
-    };
-
-    if (storeConfig.driver === 'mysql') {
-      await withTransaction(async (connection) => executeMutation(connection));
-    } else {
-      await executeMutation();
+    if (!currentDoc) {
+      throw createServiceError(ERROR_CODES.DOCUMENT_NOT_FOUND, `document not found: ${normalizedCommand.docId}`);
     }
+
+    const opState = await docRealtimeService.getUserOpState(normalizedCommand.docId, normalizedCommand.clientId);
+    undoStack = opState ? [...opState.undoStackJson] : [];
+    const redoStack = opState ? [...opState.redoStackJson] : [];
+
+    if (undoStack.length === 0) {
+      throw createServiceError(ERROR_CODES.INVALID_PARAMS, 'nothing to undo');
+    }
+
+    entry = undoStack.pop();
+    otResult = await resolveUndoRedoOperation({
+      docId: normalizedCommand.docId,
+      entry,
+      desiredState: {
+        value: entry.oldValue,
+        style: entry.oldStyle,
+      },
+      currentDoc,
+      historyStore: realtimeHistoryStore,
+    });
+
+    const nextMutation = applySetCellToRealtimeDoc(currentDoc, {
+      docId: normalizedCommand.docId,
+      sheetId: entry.sheetId,
+      row: entry.row,
+      col: entry.col,
+      value: otResult.targetState.value,
+      style: otResult.targetState.style,
+    });
+
+    if (!nextMutation) {
+      throw createServiceError(ERROR_CODES.DOCUMENT_NOT_FOUND, `document not found: ${normalizedCommand.docId}`);
+    }
+
+    seq = await docRealtimeService.allocateNextSeq(normalizedCommand.docId);
+    updatedAt = new Date().toISOString();
+
+    await docRealtimeService.saveRealtimeDoc(normalizedCommand.docId, {
+      title: currentDoc.title,
+      snapshotJson: nextMutation.nextSnapshot,
+      currentSeq: seq,
+      updatedAt,
+    });
+
+    redoStack.push(createRedoStackEntry({
+      sourceSeq: seq,
+      docId: normalizedCommand.docId,
+      clientId: normalizedCommand.clientId,
+      sheetId: nextMutation.targetSheetId || entry.sheetId || null,
+      row: entry.row,
+      col: entry.col,
+      beforeState: otResult.currentState,
+      afterState: otResult.targetState,
+    }));
+    trimmedRedoStack = trimUndoStack(redoStack);
+
+    await docRealtimeService.saveUserOpState({
+      docId: normalizedCommand.docId,
+      clientId: normalizedCommand.clientId,
+      undoStackJson: undoStack,
+      redoStackJson: trimmedRedoStack,
+      updatedAt,
+    });
+
+    await docRealtimeService.appendOp(normalizedCommand.docId, {
+      docId: normalizedCommand.docId,
+      clientId: normalizedCommand.clientId,
+      seq,
+      baseSeq: otResult.baseSeq,
+      opType: 'undo',
+      sourceSeq: entry.sourceSeq,
+      targetSheetId: nextMutation.targetSheetId || entry.sheetId || null,
+      targetRow: entry.row,
+      targetCol: entry.col,
+      oldValueJson: { value: otResult.currentState.value, style: otResult.currentState.style },
+      newValueJson: { value: otResult.targetState.value, style: otResult.targetState.style },
+      createdAt: updatedAt,
+    });
 
     await docsService.invalidateDocCaches(normalizedCommand.docId);
 
@@ -193,7 +161,7 @@ async function applyUndo(command = {}) {
     return {
       docId: normalizedCommand.docId,
       clientId: normalizedCommand.clientId,
-      sheetId: updatedDoc && updatedDoc._targetSheetId ? updatedDoc._targetSheetId : (entry.sheetId || null),
+      sheetId: nextMutation.targetSheetId || (entry.sheetId || null),
       seq,
       row: entry.row,
       col: entry.col,
@@ -206,116 +174,100 @@ async function applyUndo(command = {}) {
 }
 
 async function applyRedo(command = {}) {
-  const { historyStore } = command;
   const normalizedCommand = normalizeUndoRedoCommand(command);
+  const realtimeHistoryStore = createRealtimeHistoryStore();
 
   return docLock.withDocLock(normalizedCommand.docId, async () => {
-    let updatedDoc = null;
+    let currentDoc = null;
     let seq = 0;
     let redoStack = [];
     let trimmedUndoStack = [];
     let entry = null;
     let otResult = null;
+    let updatedAt = null;
+    currentDoc = await docRealtimeService.getRealtimeDoc(normalizedCommand.docId);
 
-    const executeMutation = async (connection = null) => {
-      const currentDoc = await docsService.getDocStateForWrite(normalizedCommand.docId, {
-        connection,
-        forUpdate: Boolean(connection),
-      });
-
-      if (!currentDoc) {
-        throw createServiceError(ERROR_CODES.DOCUMENT_NOT_FOUND, `document not found: ${normalizedCommand.docId}`);
-      }
-
-      const opState = await userOpStateStore.getState(normalizedCommand.docId, normalizedCommand.clientId, { connection });
-      const undoStack = opState ? [...opState.undoStackJson] : [];
-      redoStack = opState ? [...opState.redoStackJson] : [];
-
-      if (redoStack.length === 0) {
-        throw createServiceError(ERROR_CODES.INVALID_PARAMS, 'nothing to redo');
-      }
-
-      entry = redoStack.pop();
-      otResult = await resolveUndoRedoOperation({
-        docId: normalizedCommand.docId,
-        entry,
-        desiredState: {
-          value: entry.newValue,
-          style: entry.newStyle,
-        },
-        currentDoc,
-        historyStore,
-        connection,
-      });
-
-      updatedDoc = await docsService.applySetCell({
-        docId: normalizedCommand.docId,
-        sheetId: entry.sheetId,
-        row: entry.row,
-        col: entry.col,
-        value: otResult.targetState.value,
-        style: otResult.targetState.style,
-      }, {
-        connection,
-      });
-
-      if (!updatedDoc) {
-        throw createServiceError(ERROR_CODES.DOCUMENT_NOT_FOUND, `document not found: ${normalizedCommand.docId}`);
-      }
-
-      seq = updatedDoc.currentSeq;
-
-      const redoHistoryEntry = {
-        docId: normalizedCommand.docId,
-        clientId: normalizedCommand.clientId,
-        seq,
-        baseSeq: otResult.baseSeq,
-        opType: 'redo',
-        sourceSeq: entry.sourceSeq,
-        targetSheetId: updatedDoc._targetSheetId || entry.sheetId || null,
-        targetRow: entry.row,
-        targetCol: entry.col,
-        oldValueJson: { value: otResult.currentState.value, style: otResult.currentState.style },
-        newValueJson: { value: otResult.targetState.value, style: otResult.targetState.style },
-      };
-
-      if (connection) {
-        await historyStore.append(redoHistoryEntry, { connection });
-      } else {
-        await appendHistoryBestEffort(historyStore, redoHistoryEntry, 'redo');
-      }
-
-      undoStack.push(createAppliedStackEntry({
-        sourceSeq: seq,
-        docId: normalizedCommand.docId,
-        clientId: normalizedCommand.clientId,
-        sheetId: updatedDoc._targetSheetId || entry.sheetId || null,
-        row: entry.row,
-        col: entry.col,
-        beforeState: otResult.currentState,
-        afterState: otResult.targetState,
-      }));
-      trimmedUndoStack = trimUndoStack(undoStack);
-
-      const nextOpState = {
-        docId: normalizedCommand.docId,
-        clientId: normalizedCommand.clientId,
-        undoStackJson: trimmedUndoStack,
-        redoStackJson: redoStack,
-      };
-
-      if (connection) {
-        await userOpStateStore.saveState(nextOpState, { connection });
-      } else {
-        await saveOpStateBestEffort(nextOpState, 'redo');
-      }
-    };
-
-    if (storeConfig.driver === 'mysql') {
-      await withTransaction(async (connection) => executeMutation(connection));
-    } else {
-      await executeMutation();
+    if (!currentDoc) {
+      throw createServiceError(ERROR_CODES.DOCUMENT_NOT_FOUND, `document not found: ${normalizedCommand.docId}`);
     }
+
+    const opState = await docRealtimeService.getUserOpState(normalizedCommand.docId, normalizedCommand.clientId);
+    const undoStack = opState ? [...opState.undoStackJson] : [];
+    redoStack = opState ? [...opState.redoStackJson] : [];
+
+    if (redoStack.length === 0) {
+      throw createServiceError(ERROR_CODES.INVALID_PARAMS, 'nothing to redo');
+    }
+
+    entry = redoStack.pop();
+    otResult = await resolveUndoRedoOperation({
+      docId: normalizedCommand.docId,
+      entry,
+      desiredState: {
+        value: entry.newValue,
+        style: entry.newStyle,
+      },
+      currentDoc,
+      historyStore: realtimeHistoryStore,
+    });
+
+    const nextMutation = applySetCellToRealtimeDoc(currentDoc, {
+      docId: normalizedCommand.docId,
+      sheetId: entry.sheetId,
+      row: entry.row,
+      col: entry.col,
+      value: otResult.targetState.value,
+      style: otResult.targetState.style,
+    });
+
+    if (!nextMutation) {
+      throw createServiceError(ERROR_CODES.DOCUMENT_NOT_FOUND, `document not found: ${normalizedCommand.docId}`);
+    }
+
+    seq = await docRealtimeService.allocateNextSeq(normalizedCommand.docId);
+    updatedAt = new Date().toISOString();
+
+    await docRealtimeService.saveRealtimeDoc(normalizedCommand.docId, {
+      title: currentDoc.title,
+      snapshotJson: nextMutation.nextSnapshot,
+      currentSeq: seq,
+      updatedAt,
+    });
+
+    undoStack.push(createAppliedStackEntry({
+      sourceSeq: seq,
+      docId: normalizedCommand.docId,
+      clientId: normalizedCommand.clientId,
+      sheetId: nextMutation.targetSheetId || entry.sheetId || null,
+      row: entry.row,
+      col: entry.col,
+      beforeState: otResult.currentState,
+      afterState: otResult.targetState,
+    }));
+    trimmedUndoStack = trimUndoStack(undoStack);
+
+    await docRealtimeService.saveUserOpState({
+      docId: normalizedCommand.docId,
+      clientId: normalizedCommand.clientId,
+      undoStackJson: trimmedUndoStack,
+      redoStackJson: redoStack,
+      updatedAt,
+    });
+
+    await docRealtimeService.appendOp(normalizedCommand.docId, {
+      docId: normalizedCommand.docId,
+      clientId: normalizedCommand.clientId,
+      seq,
+      baseSeq: otResult.baseSeq,
+      opType: 'redo',
+      sourceSeq: entry.sourceSeq,
+      targetSheetId: nextMutation.targetSheetId || entry.sheetId || null,
+      targetRow: entry.row,
+      targetCol: entry.col,
+      oldValueJson: { value: otResult.currentState.value, style: otResult.currentState.style },
+      newValueJson: { value: otResult.targetState.value, style: otResult.targetState.style },
+      createdAt: updatedAt,
+    });
 
     await docsService.invalidateDocCaches(normalizedCommand.docId);
 
@@ -329,7 +281,7 @@ async function applyRedo(command = {}) {
     return {
       docId: normalizedCommand.docId,
       clientId: normalizedCommand.clientId,
-      sheetId: updatedDoc && updatedDoc._targetSheetId ? updatedDoc._targetSheetId : (entry.sheetId || null),
+      sheetId: nextMutation.targetSheetId || (entry.sheetId || null),
       seq,
       row: entry.row,
       col: entry.col,

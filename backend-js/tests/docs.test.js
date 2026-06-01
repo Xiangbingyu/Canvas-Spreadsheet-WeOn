@@ -35,6 +35,8 @@ async function closeProjectResources() {
   const roomServiceModulePath = path.join(projectRoot, 'service', 'roomService.js');
   const idempotencyServiceModulePath = path.join(projectRoot, 'idempotency', 'idempotencyService.js');
   const lockModulePath = path.join(projectRoot, 'infra', 'redis', 'lock.js');
+  const docRealtimeServiceModulePath = path.join(projectRoot, 'service', 'docRealtimeService.js');
+  const workerModulePath = path.join(projectRoot, 'worker', 'opLogFlushWorker.js');
 
   if (require.cache[cacheModulePath]) {
     await require(cacheModulePath).close();
@@ -50,6 +52,14 @@ async function closeProjectResources() {
 
   if (require.cache[lockModulePath]) {
     await require(lockModulePath).close();
+  }
+
+  if (require.cache[docRealtimeServiceModulePath]) {
+    await require(docRealtimeServiceModulePath).closeRuntimeState();
+  }
+
+  if (require.cache[workerModulePath]) {
+    await require(workerModulePath).close();
   }
 }
 

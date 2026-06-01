@@ -1,12 +1,11 @@
 const { ERROR_CODES } = require('../protocol/errorCodes');
-const storeConfig = require('../config/storeConfig');
-const { withTransaction } = require('../db/mysql');
 const docLock = require('../infra/redis/lock');
 const docsService = require('./docsService');
-const historyStore = require('../store/historyStore');
-const userOpStateStore = require('../store/userOpStateStore');
+const docRealtimeService = require('./docRealtimeService');
 const auditService = require('../audit/auditService');
 const { validateSheetStructureChange } = require('../utils/sheetStructure');
+const roomService = require('./roomService');
+const { applySheetStructureChangeToRealtimeDoc } = require('../utils/realtimeDocMutation');
 
 function createServiceError(code, message, details = null) {
   const error = new Error(message);
@@ -63,78 +62,97 @@ function createOutOfRangeMessage(positionField, opType, upperBound) {
     : `col must be between 1 and ${upperBound}`;
 }
 
+async function clearRealtimeUndoRedoByDoc(docId, fallbackClientId = null, updatedAt = new Date().toISOString()) {
+  const trackedClientIds = await docRealtimeService.listTrackedUserClientIds(docId);
+  const roomUsers = await roomService.getRoomUsers(docId).catch(() => []);
+  const clientIds = Array.from(new Set([
+    ...trackedClientIds,
+    ...roomUsers.map((user) => user.clientId),
+    fallbackClientId,
+  ].filter(Boolean)));
+
+  await Promise.all(clientIds.map((clientId) => docRealtimeService.saveUserOpState({
+    docId,
+    clientId,
+    undoStackJson: [],
+    redoStackJson: [],
+    updatedAt,
+  })));
+}
+
 async function applyStructureChange(command = {}, opType) {
   const normalizedCommand = normalizeStructureCommand(command, opType);
 
   return docLock.withDocLock(normalizedCommand.docId, async () => {
-    let updatedDoc = null;
+    let currentDoc = null;
     let seq = 0;
+    let updatedAt = null;
+    currentDoc = await docRealtimeService.getRealtimeDoc(normalizedCommand.docId);
 
-    const executeMutation = async (connection = null) => {
-      const currentDoc = await docsService.getDocStateForWrite(normalizedCommand.docId, {
-        connection,
-        forUpdate: Boolean(connection),
-      });
-
-      if (!currentDoc) {
-        throw createServiceError(ERROR_CODES.DOCUMENT_NOT_FOUND, `document not found: ${normalizedCommand.docId}`);
-      }
-
-      const validation = validateSheetStructureChange(currentDoc.snapshotJson, normalizedCommand);
-
-      if (!validation.ok) {
-        if (validation.reason === 'sheet_not_found') {
-          throw createServiceError(ERROR_CODES.INVALID_PARAMS, `sheet not found: ${normalizedCommand.sheetId}`, {
-            docId: normalizedCommand.docId,
-            sheetId: normalizedCommand.sheetId,
-          });
-        }
-
-        throw createServiceError(
-          ERROR_CODES.INVALID_PARAMS,
-          createOutOfRangeMessage(validation.positionField, normalizedCommand.opType, validation.upperBound),
-          {
-            docId: normalizedCommand.docId,
-            sheetId: normalizedCommand.sheetId,
-            [validation.positionField]: validation.positionValue,
-            upperBound: validation.upperBound,
-          }
-        );
-      }
-
-      updatedDoc = await docsService.applySheetStructureChange(normalizedCommand, { connection });
-
-      if (!updatedDoc) {
-        throw createServiceError(ERROR_CODES.DOCUMENT_NOT_FOUND, `document not found: ${normalizedCommand.docId}`);
-      }
-
-      seq = updatedDoc.currentSeq;
-
-      await historyStore.append({
-        docId: normalizedCommand.docId,
-        clientId: normalizedCommand.clientId,
-        seq,
-        opType: normalizedCommand.opType,
-        targetSheetId: updatedDoc._targetSheetId || normalizedCommand.sheetId,
-        targetRow: normalizedCommand.row,
-        targetCol: normalizedCommand.col,
-        payloadJson: {
-          type: normalizedCommand.opType,
-          sheetId: updatedDoc._targetSheetId || normalizedCommand.sheetId,
-          row: normalizedCommand.row,
-          col: normalizedCommand.col,
-          clearUndoRedo: true,
-        },
-      }, { connection });
-
-      await userOpStateStore.clearByDocId(normalizedCommand.docId, { connection });
-    };
-
-    if (storeConfig.driver === 'mysql') {
-      await withTransaction(async (connection) => executeMutation(connection));
-    } else {
-      await executeMutation();
+    if (!currentDoc) {
+      throw createServiceError(ERROR_CODES.DOCUMENT_NOT_FOUND, `document not found: ${normalizedCommand.docId}`);
     }
+
+    const validation = validateSheetStructureChange(currentDoc.snapshotJson, normalizedCommand);
+
+    if (!validation.ok) {
+      if (validation.reason === 'sheet_not_found') {
+        throw createServiceError(ERROR_CODES.INVALID_PARAMS, `sheet not found: ${normalizedCommand.sheetId}`, {
+          docId: normalizedCommand.docId,
+          sheetId: normalizedCommand.sheetId,
+        });
+      }
+
+      throw createServiceError(
+        ERROR_CODES.INVALID_PARAMS,
+        createOutOfRangeMessage(validation.positionField, normalizedCommand.opType, validation.upperBound),
+        {
+          docId: normalizedCommand.docId,
+          sheetId: normalizedCommand.sheetId,
+          [validation.positionField]: validation.positionValue,
+          upperBound: validation.upperBound,
+        }
+      );
+    }
+
+    const structureResult = applySheetStructureChangeToRealtimeDoc(currentDoc, normalizedCommand);
+    if (!structureResult.ok || !structureResult.targetSheetId) {
+      throw createServiceError(ERROR_CODES.DOCUMENT_NOT_FOUND, `document not found: ${normalizedCommand.docId}`);
+    }
+
+    seq = await docRealtimeService.allocateNextSeq(normalizedCommand.docId);
+    updatedAt = new Date().toISOString();
+
+    await docRealtimeService.saveRealtimeDoc(normalizedCommand.docId, {
+      title: currentDoc.title,
+      snapshotJson: structureResult.nextSnapshot,
+      currentSeq: seq,
+      updatedAt,
+    });
+
+    await docRealtimeService.appendOp(normalizedCommand.docId, {
+      docId: normalizedCommand.docId,
+      clientId: normalizedCommand.clientId,
+      seq,
+      opType: normalizedCommand.opType,
+      targetSheetId: structureResult.targetSheetId || normalizedCommand.sheetId,
+      targetRow: normalizedCommand.row,
+      targetCol: normalizedCommand.col,
+      payloadJson: {
+        type: normalizedCommand.opType,
+        sheetId: structureResult.targetSheetId || normalizedCommand.sheetId,
+        row: normalizedCommand.row,
+        col: normalizedCommand.col,
+        clearUndoRedo: true,
+      },
+      createdAt: updatedAt,
+    });
+
+    await clearRealtimeUndoRedoByDoc(
+      normalizedCommand.docId,
+      normalizedCommand.clientId,
+      updatedAt
+    );
 
     await docsService.invalidateDocCaches(normalizedCommand.docId);
 
@@ -143,7 +161,7 @@ async function applyStructureChange(command = {}, opType) {
       docId: normalizedCommand.docId,
       clientId: normalizedCommand.clientId,
       seq,
-      sheetId: updatedDoc && updatedDoc._targetSheetId ? updatedDoc._targetSheetId : normalizedCommand.sheetId,
+      sheetId: structureResult.targetSheetId || normalizedCommand.sheetId,
       row: normalizedCommand.row,
       col: normalizedCommand.col,
       clearedUndoRedo: true,
@@ -152,7 +170,7 @@ async function applyStructureChange(command = {}, opType) {
     return {
       docId: normalizedCommand.docId,
       clientId: normalizedCommand.clientId,
-      sheetId: updatedDoc && updatedDoc._targetSheetId ? updatedDoc._targetSheetId : normalizedCommand.sheetId,
+      sheetId: structureResult.targetSheetId || normalizedCommand.sheetId,
       seq,
       ...(normalizedCommand.row !== null ? { row: normalizedCommand.row } : {}),
       ...(normalizedCommand.col !== null ? { col: normalizedCommand.col } : {}),

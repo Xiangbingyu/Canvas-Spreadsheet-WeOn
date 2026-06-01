@@ -68,6 +68,36 @@ const schemaStatements = [
     KEY idx_room_user_client (client_id),
     KEY idx_room_user_doc_status (doc_id, status)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  `CREATE TABLE IF NOT EXISTS worker_consumer_checkpoint (
+    id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    consumer_name VARCHAR(128) NOT NULL,
+    doc_id VARCHAR(64) NOT NULL,
+    last_stream_id VARCHAR(64) NOT NULL,
+    updated_at DATETIME(3) NOT NULL,
+    UNIQUE KEY uk_worker_consumer_doc (consumer_name, doc_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  `CREATE TABLE IF NOT EXISTS snapshot_checkpoint (
+    id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    doc_id VARCHAR(64) NOT NULL,
+    checkpoint_seq BIGINT NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    snapshot_json JSON NOT NULL,
+    created_at DATETIME(3) NOT NULL,
+    updated_at DATETIME(3) NOT NULL,
+    UNIQUE KEY uk_snapshot_checkpoint_doc (doc_id),
+    KEY idx_snapshot_checkpoint_seq (checkpoint_seq)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  `CREATE TABLE IF NOT EXISTS doc_barrier_state (
+    id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    doc_id VARCHAR(64) NOT NULL,
+    barrier_seq BIGINT NOT NULL,
+    barrier_op_type VARCHAR(32) NOT NULL,
+    event_id VARCHAR(128) NULL,
+    payload_json JSON NULL,
+    updated_at DATETIME(3) NOT NULL,
+    UNIQUE KEY uk_doc_barrier_state_doc (doc_id),
+    KEY idx_doc_barrier_state_seq (barrier_seq)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 ];
 
 function isIgnorableSchemaRaceError(error) {

@@ -49,6 +49,30 @@ async function writeDocSeeds(connection) {
         toMysqlDateValue(normalizedDoc.updatedAt),
       ]
     );
+
+    await connection.execute(
+      `INSERT INTO snapshot_checkpoint (
+        doc_id,
+        checkpoint_seq,
+        title,
+        snapshot_json,
+        created_at,
+        updated_at
+      ) VALUES (?, ?, ?, CAST(? AS JSON), ?, ?)
+      ON DUPLICATE KEY UPDATE
+        checkpoint_seq = VALUES(checkpoint_seq),
+        title = VALUES(title),
+        snapshot_json = VALUES(snapshot_json),
+        updated_at = VALUES(updated_at)`,
+      [
+        normalizedDoc.docId,
+        normalizedDoc.currentSeq,
+        normalizedDoc.title,
+        stringifyJsonValue(normalizedDoc.snapshotJson, {}),
+        toMysqlDateValue(normalizedDoc.createdAt),
+        toMysqlDateValue(normalizedDoc.updatedAt),
+      ]
+    );
   }
 }
 

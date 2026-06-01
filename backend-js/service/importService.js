@@ -1,12 +1,10 @@
 const { ERROR_CODES } = require('../protocol/errorCodes');
-const storeConfig = require('../config/storeConfig');
-const { withTransaction } = require('../db/mysql');
 const docLock = require('../infra/redis/lock');
 const docsService = require('./docsService');
-const historyStore = require('../store/historyStore');
-const userOpStateStore = require('../store/userOpStateStore');
+const docRealtimeService = require('./docRealtimeService');
 const auditService = require('../audit/auditService');
 const { normalizeDocSnapshot } = require('../domain/entities/doc');
+const { applyImportSheetToRealtimeDoc } = require('../utils/realtimeDocMutation');
 
 function createServiceError(code, message, details = null) {
   const error = new Error(message);
@@ -39,45 +37,52 @@ function normalizeImportSheetCommand(command = {}) {
 
 async function executeImportSheet(normalizedCommand) {
   return docLock.withDocLock(normalizedCommand.docId, async () => {
-    let updatedDoc = null;
+    let currentDoc = null;
     let seq = 0;
+    let updatedAt = null;
+    currentDoc = await docRealtimeService.getRealtimeDoc(normalizedCommand.docId);
 
-    const executeMutation = async (connection = null) => {
-      updatedDoc = await docsService.applyImportSheet({
+    if (!currentDoc) {
+      throw createServiceError(ERROR_CODES.DOCUMENT_NOT_FOUND, `document not found: ${normalizedCommand.docId}`);
+    }
+
+    seq = await docRealtimeService.allocateNextSeq(normalizedCommand.docId);
+    updatedAt = new Date().toISOString();
+
+    await docRealtimeService.saveRealtimeDoc(normalizedCommand.docId, {
+      title: currentDoc.title,
+      snapshotJson: applyImportSheetToRealtimeDoc({
         docId: normalizedCommand.docId,
         snapshotJson: normalizedCommand.snapshot,
-      }, {
-        connection,
-      });
+      }),
+      currentSeq: seq,
+      updatedAt,
+    });
 
-      if (!updatedDoc) {
-        throw createServiceError(ERROR_CODES.DOCUMENT_NOT_FOUND, `document not found: ${normalizedCommand.docId}`);
-      }
+    await docRealtimeService.saveUserOpState({
+      docId: normalizedCommand.docId,
+      clientId: normalizedCommand.clientId,
+      undoStackJson: [],
+      redoStackJson: [],
+      updatedAt,
+    });
 
-      seq = updatedDoc.currentSeq;
+    await docRealtimeService.setBarrier(normalizedCommand.docId, {
+      seq,
+      opType: 'import_sheet',
+      eventId: normalizedCommand.eventId ? String(normalizedCommand.eventId) : null,
+      updatedAt,
+    });
 
-      await historyStore.append({
-        docId: normalizedCommand.docId,
-        clientId: normalizedCommand.clientId,
-        seq,
-        opType: 'import_sheet',
-        eventId: normalizedCommand.eventId ? String(normalizedCommand.eventId) : null,
-        payloadJson: normalizedCommand.snapshot,
-      }, { connection });
-
-      await userOpStateStore.saveState({
-        docId: normalizedCommand.docId,
-        clientId: normalizedCommand.clientId,
-        undoStackJson: [],
-        redoStackJson: [],
-      }, { connection });
-    };
-
-    if (storeConfig.driver === 'mysql') {
-      await withTransaction(async (connection) => executeMutation(connection));
-    } else {
-      await executeMutation();
-    }
+    await docRealtimeService.appendOp(normalizedCommand.docId, {
+      docId: normalizedCommand.docId,
+      clientId: normalizedCommand.clientId,
+      seq,
+      opType: 'import_sheet',
+      eventId: normalizedCommand.eventId ? String(normalizedCommand.eventId) : null,
+      payloadJson: normalizedCommand.snapshot,
+      createdAt: updatedAt,
+    });
 
     await docsService.invalidateDocCaches(normalizedCommand.docId);
 
@@ -92,7 +97,7 @@ async function executeImportSheet(normalizedCommand) {
       docId: normalizedCommand.docId,
       clientId: normalizedCommand.clientId,
       seq,
-      snapshot: updatedDoc.snapshotJson,
+      snapshot: normalizedCommand.snapshot,
       canUndo: false,
       canRedo: false,
     };

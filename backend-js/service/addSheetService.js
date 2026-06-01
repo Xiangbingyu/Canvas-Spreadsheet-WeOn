@@ -1,10 +1,9 @@
 const { ERROR_CODES } = require('../protocol/errorCodes');
-const storeConfig = require('../config/storeConfig');
-const { withTransaction } = require('../db/mysql');
 const docLock = require('../infra/redis/lock');
 const docsService = require('./docsService');
-const historyStore = require('../store/historyStore');
+const docRealtimeService = require('./docRealtimeService');
 const auditService = require('../audit/auditService');
+const { applyAddSheetToRealtimeDoc } = require('../utils/realtimeDocMutation');
 
 function createServiceError(code, message, details = null) {
   const error = new Error(message);
@@ -35,51 +34,43 @@ async function applyAddSheet(command = {}) {
   const normalizedCommand = normalizeAddSheetCommand(command);
 
   return docLock.withDocLock(normalizedCommand.docId, async () => {
-    let updatedDoc = null;
+    let currentDoc = null;
     let seq = 0;
+    let updatedAt = null;
+    currentDoc = await docRealtimeService.getRealtimeDoc(normalizedCommand.docId);
 
-    const executeMutation = async (connection = null) => {
-      const currentDoc = await docsService.getDocStateForWrite(normalizedCommand.docId, {
-        connection,
-        forUpdate: Boolean(connection),
-      });
-
-      if (!currentDoc) {
-        throw createServiceError(ERROR_CODES.DOCUMENT_NOT_FOUND, `document not found: ${normalizedCommand.docId}`);
-      }
-
-      updatedDoc = await docsService.applyAddSheet({
-        docId: normalizedCommand.docId,
-        sheetName: normalizedCommand.sheetName,
-      }, {
-        connection,
-      });
-
-      if (!updatedDoc) {
-        throw createServiceError(ERROR_CODES.DOCUMENT_NOT_FOUND, `document not found: ${normalizedCommand.docId}`);
-      }
-
-      seq = updatedDoc.currentSeq;
-
-      await historyStore.append({
-        docId: normalizedCommand.docId,
-        clientId: normalizedCommand.clientId,
-        seq,
-        opType: 'add_sheet',
-        targetSheetId: updatedDoc._addedSheet ? updatedDoc._addedSheet.id : null,
-        payloadJson: {
-          sheet: updatedDoc._addedSheet,
-          activeSheetId: updatedDoc.snapshotJson.activeSheetId,
-          sheetOrder: updatedDoc.snapshotJson.sheetOrder,
-        },
-      }, { connection });
-    };
-
-    if (storeConfig.driver === 'mysql') {
-      await withTransaction(async (connection) => executeMutation(connection));
-    } else {
-      await executeMutation();
+    if (!currentDoc) {
+      throw createServiceError(ERROR_CODES.DOCUMENT_NOT_FOUND, `document not found: ${normalizedCommand.docId}`);
     }
+
+    const nextMutation = applyAddSheetToRealtimeDoc(currentDoc, {
+      docId: normalizedCommand.docId,
+      sheetName: normalizedCommand.sheetName,
+    });
+
+    seq = await docRealtimeService.allocateNextSeq(normalizedCommand.docId);
+    updatedAt = new Date().toISOString();
+
+    await docRealtimeService.saveRealtimeDoc(normalizedCommand.docId, {
+      title: currentDoc.title,
+      snapshotJson: nextMutation.nextSnapshot,
+      currentSeq: seq,
+      updatedAt,
+    });
+
+    await docRealtimeService.appendOp(normalizedCommand.docId, {
+      docId: normalizedCommand.docId,
+      clientId: normalizedCommand.clientId,
+      seq,
+      opType: 'add_sheet',
+      targetSheetId: nextMutation.addedSheet ? nextMutation.addedSheet.id : null,
+      payloadJson: {
+        sheet: nextMutation.addedSheet,
+        activeSheetId: nextMutation.nextSnapshot.activeSheetId,
+        sheetOrder: nextMutation.nextSnapshot.sheetOrder,
+      },
+      createdAt: updatedAt,
+    });
 
     await docsService.invalidateDocCaches(normalizedCommand.docId);
 
@@ -88,17 +79,17 @@ async function applyAddSheet(command = {}) {
       docId: normalizedCommand.docId,
       clientId: normalizedCommand.clientId,
       seq,
-      sheetId: updatedDoc && updatedDoc._addedSheet ? updatedDoc._addedSheet.id : null,
-      sheetName: updatedDoc && updatedDoc._addedSheet ? updatedDoc._addedSheet.name : null,
+      sheetId: nextMutation.addedSheet ? nextMutation.addedSheet.id : null,
+      sheetName: nextMutation.addedSheet ? nextMutation.addedSheet.name : null,
     });
 
     return {
       docId: normalizedCommand.docId,
       clientId: normalizedCommand.clientId,
       seq,
-      sheet: updatedDoc && updatedDoc._addedSheet ? updatedDoc._addedSheet : null,
-      activeSheetId: updatedDoc ? updatedDoc.snapshotJson.activeSheetId : null,
-      sheetOrder: updatedDoc ? updatedDoc.snapshotJson.sheetOrder : [],
+      sheet: nextMutation.addedSheet || null,
+      activeSheetId: nextMutation.nextSnapshot.activeSheetId,
+      sheetOrder: nextMutation.nextSnapshot.sheetOrder,
     };
   });
 }

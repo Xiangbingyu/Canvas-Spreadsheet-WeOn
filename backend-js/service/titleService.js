@@ -1,9 +1,7 @@
 const { ERROR_CODES } = require('../protocol/errorCodes');
-const storeConfig = require('../config/storeConfig');
-const { withTransaction } = require('../db/mysql');
 const docLock = require('../infra/redis/lock');
 const docsService = require('./docsService');
-const historyStore = require('../store/historyStore');
+const docRealtimeService = require('./docRealtimeService');
 const auditService = require('../audit/auditService');
 const { normalizeBaseSeq } = require('./cellOtService');
 const { rebaseSetTitleCommand } = require('./titleOtService');
@@ -43,61 +41,47 @@ function normalizeSetTitleCommand(command = {}) {
 async function applySetTitle(command = {}) {
   const normalizedCommand = normalizeSetTitleCommand(command);
   return docLock.withDocLock(normalizedCommand.docId, async () => {
-    let updatedDoc = null;
+    let currentDoc = null;
     let seq = 0;
+    let updatedAt = null;
     let rebaseResult = {
       enabled: false,
       rebased: false,
       baseSeq: null,
       conflictSeq: null,
     };
+    currentDoc = await docRealtimeService.getRealtimeDoc(normalizedCommand.docId);
 
-    const executeMutation = async (connection = null) => {
-      const currentDoc = await docsService.getDocStateForWrite(normalizedCommand.docId, {
-        connection,
-        forUpdate: Boolean(connection),
-      });
-
-      if (!currentDoc) {
-        throw createServiceError(ERROR_CODES.DOCUMENT_NOT_FOUND, `document not found: ${normalizedCommand.docId}`);
-      }
-
-      const otResult = await rebaseSetTitleCommand({
-        command: normalizedCommand,
-        currentDoc,
-      });
-
-      rebaseResult = otResult.rebaseResult;
-
-      updatedDoc = await docsService.applySetTitle({
-        ...otResult.command,
-      }, {
-        connection,
-      });
-
-      if (!updatedDoc) {
-        throw createServiceError(ERROR_CODES.DOCUMENT_NOT_FOUND, `document not found: ${normalizedCommand.docId}`);
-      }
-
-      seq = updatedDoc.currentSeq;
-      const oldTitle = updatedDoc._before.title;
-
-      await historyStore.append({
-        docId: normalizedCommand.docId,
-        clientId: normalizedCommand.clientId,
-        seq,
-        baseSeq: rebaseResult.baseSeq,
-        opType: 'set_title',
-        oldValueJson: { title: oldTitle },
-        newValueJson: { title: normalizedCommand.title },
-      }, { connection });
-    };
-
-    if (storeConfig.driver === 'mysql') {
-      await withTransaction(async (connection) => executeMutation(connection));
-    } else {
-      await executeMutation();
+    if (!currentDoc) {
+      throw createServiceError(ERROR_CODES.DOCUMENT_NOT_FOUND, `document not found: ${normalizedCommand.docId}`);
     }
+
+    const otResult = await rebaseSetTitleCommand({
+      command: normalizedCommand,
+      currentDoc,
+    });
+
+    rebaseResult = otResult.rebaseResult;
+    seq = await docRealtimeService.allocateNextSeq(normalizedCommand.docId);
+    updatedAt = new Date().toISOString();
+
+    await docRealtimeService.saveRealtimeDoc(normalizedCommand.docId, {
+      title: normalizedCommand.title,
+      snapshotJson: currentDoc.snapshotJson,
+      currentSeq: seq,
+      updatedAt,
+    });
+
+    await docRealtimeService.appendOp(normalizedCommand.docId, {
+      docId: normalizedCommand.docId,
+      clientId: normalizedCommand.clientId,
+      seq,
+      baseSeq: rebaseResult.baseSeq,
+      opType: 'set_title',
+      oldValueJson: { title: currentDoc.title },
+      newValueJson: { title: normalizedCommand.title },
+      createdAt: updatedAt,
+    });
 
     await docsService.invalidateDocCaches(normalizedCommand.docId);
 

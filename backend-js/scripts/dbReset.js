@@ -6,6 +6,9 @@ const RESET_TABLES = [
   'user_op_state',
   'audit_log',
   'room_user',
+  'doc_barrier_state',
+  'snapshot_checkpoint',
+  'worker_consumer_checkpoint',
   'doc',
 ];
 

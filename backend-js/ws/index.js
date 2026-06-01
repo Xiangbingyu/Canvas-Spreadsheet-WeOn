@@ -6,7 +6,9 @@ const { validateWsMessageShape } = require('../security/wsGuard');
 const { createWsSuccess, createWsError } = require('../utils/response');
 const roomService = require('../service/roomService');
 const { createCollabBroadcastService } = require('../service/collabBroadcastService');
+const docRealtimeService = require('../service/docRealtimeService');
 const auditService = require('../audit/auditService');
+const opLogFlushWorker = require('../worker/opLogFlushWorker');
 
 let nextConnId = 0;
 
@@ -35,6 +37,9 @@ function createWebSocketServer(server) {
   const readyPromise = collabBroadcastService.start().catch((error) => {
     console.error('collab broadcast service start failed:', error);
   });
+  const workerReadyPromise = opLogFlushWorker.start().catch((error) => {
+    console.error('op-log flush worker start failed:', error);
+  });
   let resourceClosePromise = null;
   let isShuttingDown = false;
 
@@ -44,8 +49,14 @@ function createWebSocketServer(server) {
         collabBroadcastService.close().catch((error) => {
           console.error('collab broadcast service close failed:', error);
         }),
+        opLogFlushWorker.close().catch((error) => {
+          console.error('op-log flush worker close failed:', error);
+        }),
         roomService.closeRuntimeState().catch((error) => {
           console.error('room runtime close failed:', error);
+        }),
+        docRealtimeService.closeRuntimeState().catch((error) => {
+          console.error('doc realtime close failed:', error);
         }),
       ]);
     }
@@ -117,7 +128,7 @@ function createWebSocketServer(server) {
 
   wss.ready = readyPromise;
   wss.shutdown = async () => {
-    await readyPromise.catch(() => {});
+    await Promise.allSettled([readyPromise, workerReadyPromise]);
     isShuttingDown = true;
 
     for (const client of wss.clients) {

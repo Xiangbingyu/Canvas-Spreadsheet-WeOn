@@ -6,8 +6,12 @@ const { createDocRequestKey } = require('../idempotency/idempotencyKeys');
 const { ERROR_CODES } = require('../protocol/errorCodes');
 const { isNonEmptyString, isPositiveInteger } = require('../protocol/validators');
 const docStore = require('../store/docStore');
+const snapshotCheckpointStore = require('../store/snapshotCheckpointStore');
+const docBarrierStore = require('../store/docBarrierStore');
 const roomUserStore = require('../store/roomUserStore');
 const auditService = require('../audit/auditService');
+const runtimeConfig = require('../config/runtimeConfig');
+const docRealtimeService = require('./docRealtimeService');
 const { normalizeDocSnapshot } = require('../domain/entities/doc');
 
 // ==================== 公共方法 ====================
@@ -143,8 +147,9 @@ async function getDocMeta(docId) {
     return null;
   }
 
-  await primeDocCaches(storedDoc);
-  return toDocMeta(storedDoc);
+  const resolvedDoc = await overlayRealtimeDoc(storedDoc);
+  await primeDocCaches(resolvedDoc);
+  return toDocMeta(resolvedDoc);
 }
 
 async function invalidateUserDocsListCaches(userIds = []) {
@@ -253,6 +258,15 @@ async function createDoc(input = {}) {
       title: normalizedInput.title,
       createdBy: normalizedInput.createdBy,
     });
+    await snapshotCheckpointStore.saveCheckpoint({
+      docId: createdDoc.docId,
+      checkpointSeq: createdDoc.currentSeq,
+      title: createdDoc.title,
+      snapshotJson: createdDoc.snapshotJson,
+      createdAt: createdDoc.createdAt,
+      updatedAt: createdDoc.updatedAt,
+    });
+    await docBarrierStore.clearByDocId(createdDoc.docId);
     const docView = toDocView(createdDoc);
 
     await primeDocCaches(createdDoc);
@@ -331,11 +345,14 @@ async function listDocsByUser(input = {}) {
   }
 
   const allDocs = await docStore.list();
+  const resolvedDocs = shouldUseRealtimeOverlay()
+    ? await Promise.all(allDocs.map((doc) => overlayRealtimeDoc(doc)))
+    : allDocs;
   const createdDocs = [];
   const participatedDocs = [];
 
   if (normalizedInput.scope === 'created' || normalizedInput.scope === 'all') {
-    for (const doc of allDocs) {
+    for (const doc of resolvedDocs) {
       if (doc.createdBy === normalizedInput.userId) {
         createdDocs.push(toDocListItem(doc, 'created'));
       }
@@ -344,7 +361,7 @@ async function listDocsByUser(input = {}) {
 
   if (normalizedInput.scope === 'participated' || normalizedInput.scope === 'all') {
     const roomUsers = await roomUserStore.listByClientId(normalizedInput.userId);
-    const docsById = new Map(allDocs.map((doc) => [doc.docId, doc]));
+    const docsById = new Map(resolvedDocs.map((doc) => [doc.docId, doc]));
 
     for (const roomUser of roomUsers) {
       const doc = docsById.get(roomUser.docId);
@@ -431,8 +448,9 @@ async function getDocState(docId) {
     throw createServiceError(ERROR_CODES.DOCUMENT_NOT_FOUND, `document not found: ${normalizedDocId}`);
   }
 
-  const docView = toDocView(storedDoc);
-  await primeDocCaches(storedDoc);
+  const resolvedDoc = await overlayRealtimeDoc(storedDoc);
+  const docView = toDocView(resolvedDoc);
+  await primeDocCaches(resolvedDoc);
   return docView;
 }
 
@@ -464,6 +482,33 @@ async function applyAddSheet(command, options = {}) {
 async function applySheetStructureChange(command, options = {}) {
   const { connection = null } = options;
   return docStore.applySheetStructureChange(command, { connection });
+}
+
+function shouldUseRealtimeOverlay() {
+  return runtimeConfig.driver === 'redis';
+}
+
+function mergeRealtimeDoc(baseDoc, realtimeDoc) {
+  if (!baseDoc || !realtimeDoc) {
+    return baseDoc;
+  }
+
+  return {
+    ...baseDoc,
+    title: realtimeDoc.title,
+    snapshotJson: normalizeDocSnapshot(realtimeDoc.snapshotJson, { docId: baseDoc.docId }),
+    currentSeq: realtimeDoc.currentSeq,
+    updatedAt: realtimeDoc.updatedAt || baseDoc.updatedAt,
+  };
+}
+
+async function overlayRealtimeDoc(baseDoc) {
+  if (!baseDoc || !shouldUseRealtimeOverlay()) {
+    return baseDoc;
+  }
+
+  const realtimeDoc = await docRealtimeService.getRealtimeDoc(baseDoc.docId);
+  return mergeRealtimeDoc(baseDoc, realtimeDoc);
 }
 
 module.exports = {
