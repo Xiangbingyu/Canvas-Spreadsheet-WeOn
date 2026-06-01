@@ -185,16 +185,9 @@ export class InteractionEngine {
     }
 
     if (event.shiftKey) {
-      console.log(
-        '[interactionEngine] Shift+Click at',
-        coord,
-        'current selection.start:',
-        this.state.selection.start
-      )
       this.state.isSelecting = true
       this.state.isDragging = false
       this.state.selectionStart = this.state.selection.start
-      console.log('[interactionEngine] set selectionStart to:', this.state.selectionStart)
       this.updateSelection(this.normalizeSelection(this.state.selection.start, coord), 'mouse')
     } else {
       this.state.isSelecting = true
@@ -241,16 +234,6 @@ export class InteractionEngine {
     if (!coord) return
 
     const start = this.state.selectionStart ?? this.state.selection.start
-    console.log(
-      '[interactionEngine] pointerMove - selectionStart:',
-      this.state.selectionStart,
-      'selection.start:',
-      this.state.selection.start,
-      'using start:',
-      start,
-      'current coord:',
-      coord
-    )
     if (coord.row !== start.row || coord.col !== start.col) {
       this.state.isDragging = true
     }
@@ -323,7 +306,6 @@ export class InteractionEngine {
   }
 
   handleCanvasPointerUp() {
-    console.log('[interactionEngine] pointerUp - clearing selectionStart')
     this.stopAutoScroll()
     this.state.isSelecting = false
     this.state.isDragging = false
@@ -456,7 +438,6 @@ export class InteractionEngine {
   }
 
   handleCompositionStart() {
-    console.log('[interactionEngine] composition start')
     // 不需要 coord 和 event，直接调用回调
     if (this.callbacks.onCellCompositionStart) {
       this.callbacks.onCellCompositionStart({
@@ -467,7 +448,6 @@ export class InteractionEngine {
   }
 
   handleCompositionEnd() {
-    console.log('[interactionEngine] composition end')
     // 不需要 coord 和 event，直接调用回调
     if (this.callbacks.onCellCompositionEnd) {
       this.callbacks.onCellCompositionEnd({
