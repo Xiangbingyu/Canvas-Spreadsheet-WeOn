@@ -3,7 +3,7 @@
  *
  * 后端统一响应：{ code: 0, message: "ok", data: T }
  * - code !== 0 时抛出 ApiError
- * - 开发环境 VITE_API_BASE_URL 留空，请求走 Vite proxy → localhost:3000
+ * - VITE_API_BASE_URL 留空时走 Vite proxy → 本机后端；远程后端见 frontend/.env.example
  */
 
 import axios, { isAxiosError } from 'axios'

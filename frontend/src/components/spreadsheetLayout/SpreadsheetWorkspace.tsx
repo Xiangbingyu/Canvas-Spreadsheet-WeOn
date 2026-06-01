@@ -17,7 +17,7 @@ import { addSheet as addSheetAction, setWorksheet, store } from '@/spreadsheet/s
 import type { WorkbookSnapshotPayload } from '@/spreadsheet/store/workbookStore'
 import { setSelectedCell } from '@/spreadsheet/store/selectStore'
 
-/** WS 地址：开发环境走 Vite 代理 /ws → 后端 3000 */
+/** WS：优先 VITE_WS_URL；未配置时走 Vite 代理 /ws → 本机后端 */
 const COLLAB_WS_URL =
   import.meta.env.VITE_WS_URL ||
   `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`
