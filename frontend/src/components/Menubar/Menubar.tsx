@@ -8,11 +8,12 @@ import { ExportExcelModal } from './ExportExcelModal'
 import { ImportExcelModal } from './ImportExcelModal'
 import type { RootState } from '@/spreadsheet/store'
 import { buildDocShareUrl } from '@/spreadsheet/utils/shareLink'
-import type { WorksheetData } from '@/spreadsheet/model/types'
+import type { WorkbookSnapshotPayload } from '@/spreadsheet/store/workbookStore'
 
 type MenubarProps = {
   userInitial?: string
-  importSheet: (worksheet: WorksheetData, eventId?: string) => boolean
+  /** Excel 导入：写入 Redux workbook，暂不经过 WS */
+  onImportWorkbook: (workbook: WorkbookSnapshotPayload) => void
   /** 提交文档标题（WS set_title）；缺省时标题只读 */
   onSetTitle?: (title: string) => void
 }
@@ -21,7 +22,7 @@ const menuBtnClass = 'rounded px-2 py-0.5 text-[13px] leading-6 text-[#202124] h
 
 const DEFAULT_DOC_TITLE = '未命名表格'
 
-export function Menubar({ userInitial = 'd', importSheet, onSetTitle }: MenubarProps) {
+export function Menubar({ userInitial = 'd', onImportWorkbook, onSetTitle }: MenubarProps) {
   const navigate = useNavigate()
   const clientId = useSelector((s: RootState) => s.collab.clientId) || 'system'
   const docId = useSelector((s: RootState) => s.collab.docId)
@@ -154,7 +155,7 @@ export function Menubar({ userInitial = 'd', importSheet, onSetTitle }: MenubarP
       <ImportExcelModal
         open={importOpen}
         onClose={() => setImportOpen(false)}
-        onImport={(worksheet) => importSheet(worksheet)}
+        onImport={onImportWorkbook}
       />
       <CreateBlankSheetModal
         open={createModalOpen}

@@ -8,7 +8,7 @@ import type { CommitCellFn } from '@/hooks/useSpreadsheetInteraction'
 type SetCellFn = (
   row: number,
   col: number,
-  value?: string,
+  value: string,
   style?: Record<string, unknown> | null
 ) => void
 

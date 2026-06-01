@@ -1,12 +1,13 @@
 import { useEffect, useRef, useCallback, useMemo } from 'react'
-import { useDispatch } from 'react-redux'
-import { message } from 'antd'
+import { useDispatch, useSelector } from 'react-redux'
+import { message as antMessage } from 'antd'
 import { CollabClient } from '../spreadsheet/collab/CollabClient'
 import type { CollabCallbacks } from '../spreadsheet/collab/CollabClient'
 import type {
   Snapshot,
   CellUpdated,
   TitleUpdated,
+  CursorUpdate,
   SheetImported,
 } from '../spreadsheet/model/collabProtocol'
 import {
@@ -14,11 +15,14 @@ import {
   updateCell,
   setDocTitle,
   setOnlineUsers,
+  setUserCursor,
   setCurrentSeq,
   setConnectionStatus,
 } from '@/spreadsheet/store'
+import { insertRow, deleteRow, insertCol, deleteCol } from '@/spreadsheet/store/workSheetStore'
 import { fromServerSnapshot, toServerSnapshot } from '@/spreadsheet/utils/fromServerSnapshot'
 import type { Style, WorksheetData } from '@/spreadsheet/model/types'
+import type { RootState } from '@/spreadsheet/store'
 
 interface UseCollabOptions {
   url: string
@@ -30,6 +34,7 @@ interface UseCollabOptions {
 
 export function useCollab({ url, docId, clientId, userName, userColor }: UseCollabOptions) {
   const dispatch = useDispatch()
+  const sheetId = useSelector((s: RootState) => s.workSheet.sheetId)
   const clientRef = useRef<CollabClient | null>(null)
 
   const callbacks = useMemo<CollabCallbacks>(
@@ -85,15 +90,38 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
         dispatch(setCurrentSeq(data.seq))
       },
 
+      onCursor(data: CursorUpdate['data']) {
+        dispatch(setUserCursor({ clientId: data.clientId, row: data.row, col: data.col }))
+      },
+
+      onRowInserted(data) {
+        dispatch(insertRow({ row: data.row }))
+        dispatch(setCurrentSeq(data.seq))
+      },
+
+      onRowDeleted(data) {
+        dispatch(deleteRow({ row: data.row }))
+        dispatch(setCurrentSeq(data.seq))
+      },
+
+      onColInserted(data) {
+        dispatch(insertCol({ col: data.col }))
+        dispatch(setCurrentSeq(data.seq))
+      },
+
+      onColDeleted(data) {
+        dispatch(deleteCol({ col: data.col }))
+        dispatch(setCurrentSeq(data.seq))
+      },
+
       onPresence(users) {
         dispatch(setOnlineUsers(users))
       },
 
-      onError(code) {
-        if (code === 4090) {
-          message.warning('文档已被他人修改，请刷新页面后重试')
+      onError(_code) {
+        if (_code === 4090) {
+          antMessage.warning('文档已被他人修改，请刷新页面后重试')
         }
-        console.error(`[Collab] code=${code}`)
       },
 
       onConnectionChange(status) {
@@ -125,10 +153,10 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
   return {
     connect,
     disconnect,
-    setCell: (row: number, col: number, value: string, style: Record<string, unknown> | null) => {
+    setCell: (row: number, col: number, value: string, style?: Record<string, unknown> | null) => {
       const client = clientRef.current
       if (!client) return
-      client.setCell(row, col, value, style, client.currentSeq)
+      client.setCell(row, col, value, style ?? null, sheetId, client.currentSeq)
     },
     setTitle: (title: string) => {
       const trimmed = title.trim() || '未命名表格'
@@ -144,8 +172,21 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
       client.importSheet(toServerSnapshot(worksheet) as Snapshot, eventId)
       return true
     },
+    sendCursor: (row: number, col: number) => clientRef.current?.sendCursor(row, col),
+    insertRow: (sheetId: string, row: number) => {
+      clientRef.current?.insertRow(sheetId, row)
+    },
+    deleteRow: (sheetId: string, row: number) => {
+      clientRef.current?.deleteRow(sheetId, row)
+    },
+    insertCol: (sheetId: string, col: number) => {
+      clientRef.current?.insertCol(sheetId, col)
+    },
+    deleteCol: (sheetId: string, col: number) => {
+      clientRef.current?.deleteCol(sheetId, col)
+    },
     undo: () => clientRef.current?.undo(),
     redo: () => clientRef.current?.redo(),
-    getClient: () => clientRef.current,
+    getClient: () => clientRef.current ?? undefined,
   }
 }
