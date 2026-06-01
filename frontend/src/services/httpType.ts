@@ -1,4 +1,4 @@
-import type { WorksheetData } from '@/spreadsheet/model/types'
+import type { Cell, Style } from '@/spreadsheet/model/types'
 /** GET / — 服务根路由 */
 export interface ServiceRootData {
   service: string
@@ -35,7 +35,25 @@ export interface CreateDocParams {
 //     "createdBy": "user_001",
 //     "eventId": "evt_create_doc_001"
 //   }
-//响应体
+/** GET /docs/:docId、POST /docs 响应中的单个 sheet */
+export interface ServerSheetSnapshot {
+  id: string
+  name: string
+  defaultRowHeight?: number
+  defaultColWidth?: number
+  rowCount?: number
+  colCount?: number
+  styles?: Record<string, Style>
+  cells?: Record<string, Cell>
+}
+
+/** GET /docs/:docId 响应中的 workbook 快照 */
+export interface WorkbookSnapshot {
+  activeSheetId: string
+  sheetOrder: string[]
+  sheets: Record<string, ServerSheetSnapshot>
+}
+
 export interface DocDetail {
   docId: string
   title: string
@@ -43,30 +61,8 @@ export interface DocDetail {
   createdBy: string | null
   createdAt: string
   updatedAt: string
-  snapshot: WorksheetData
+  snapshot: WorkbookSnapshot
 }
-// {
-//     "code": 0,
-//     "message": "ok",
-//     "data": {
-//       "docId": "doc_001",
-//       "title": "季度报表",
-//       "currentSeq": 0,
-//       "createdBy": "user_001",
-//       "createdAt": "2026-05-27T10:00:00.000Z",
-//       "updatedAt": "2026-05-27T10:00:00.000Z",
-//       "snapshot": {
-//         "id": "sheet_doc_001_001",
-//         "name": "Sheet1",
-//         "defaultRowHeight": 25,
-//         "defaultColWidth": 100,
-//         "rowCount": 0,
-//         "colCount": 0,
-//         "styles": {},
-//         "cells": {}
-//       }
-//     }
-//   }
 
 /** GET /docs — 查询文档列表 */
 export type DocListScope = 'created' | 'participated' | 'all'

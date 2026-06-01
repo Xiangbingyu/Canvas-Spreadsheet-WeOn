@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react'
-import { useSelector } from 'react-redux'
 import { Modal, Typography, Upload, message } from 'antd'
 import type { UploadFile, UploadProps } from 'antd'
 import { Loading } from '@/components/Loading/Loading'
@@ -8,14 +7,13 @@ import {
   parseExcelFromBuffer,
   type ParseExcelProgress,
 } from '@/spreadsheet/excel/excelImport'
-import type { WorksheetData } from '@/spreadsheet/model/types'
-import type { RootState } from '@/spreadsheet/store'
+import type { WorkbookSnapshotPayload } from '@/spreadsheet/store/workbookStore'
 
 type ImportExcelModalProps = {
   open: boolean
   onClose: () => void
-  /** 解析完成后由父组件写入 store 并发送 WS import_sheet；返回 false 表示协同未发出 */
-  onImport: (worksheet: WorksheetData) => boolean
+  /** 解析完成后写入 workbook + 激活首个 sheet */
+  onImport: (workbook: WorkbookSnapshotPayload) => void
 }
 
 const INITIAL_PROGRESS: ParseExcelProgress = {
@@ -25,7 +23,6 @@ const INITIAL_PROGRESS: ParseExcelProgress = {
 }
 
 export function ImportExcelModal({ open, onClose, onImport }: ImportExcelModalProps) {
-  const activeSheet = useSelector((s: RootState) => s.workSheet)
   const [fileList, setFileList] = useState<UploadFile[]>([])
   const [importing, setImporting] = useState(false)
   const [progress, setProgress] = useState<ParseExcelProgress>(INITIAL_PROGRESS)
@@ -89,18 +86,14 @@ export function ImportExcelModal({ open, onClose, onImport }: ImportExcelModalPr
       const buffer = await file.arrayBuffer()
       assertNotAborted(controller.signal)
 
-      const parsed = await parseExcelFromBuffer(buffer, {
+      const workbook = await parseExcelFromBuffer(buffer, {
         signal: controller.signal,
         onProgress: setProgress,
       })
-      // 导入覆盖当前活动 sheet 内容，保留 tab 的 sheetId / sheetName
-      const worksheet: WorksheetData = {
-        ...parsed,
-        sheetId: activeSheet.sheetId,
-        sheetName: activeSheet.sheetName,
-      }
-      const sent = onImport(worksheet)
-      message.success(sent ? '导入成功' : '已更新本地表格，协同未连接，其他人暂不可见')
+
+      onImport(workbook)
+      message.success(`导入成功，共 ${workbook.sheetOrder.length} 个工作表`)
+      console.log(workbook)
       setFileList([])
       onClose()
     } catch (error) {
@@ -151,7 +144,7 @@ export function ImportExcelModal({ open, onClose, onImport }: ImportExcelModalPr
       mask={{ closable: !importing }}
     >
       <Typography.Text type="secondary" className="mb-4 block">
-        选择本地 Excel 文件（.xlsx / .xls）导入到当前表格；大文件将显示解析进度
+        选择本地 Excel 文件（.xlsx / .xls）
       </Typography.Text>
       <Upload.Dragger {...uploadProps}>
         <p className="text-[14px] text-[#5f6368]">将文件拖到此处，或点击选择文件</p>

@@ -219,6 +219,7 @@ export interface UndoApplied {
   data: {
     docId: string
     clientId: string
+    sheetId: string
     seq: number
     row: number
     col: number
