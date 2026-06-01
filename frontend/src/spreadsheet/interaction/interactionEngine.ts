@@ -276,10 +276,14 @@ export class InteractionEngine {
         const viewport = this.viewportController.getViewport()
         this.setScroll(viewport.scrollX, viewport.scrollY)
 
+        // 对视口外坐标做 clamp，确保 hitTest 不返回 null
+        const clampedX = Math.max(headerWidth, Math.min(this.lastMouseX, rect.width - 1))
+        const clampedY = Math.max(headerHeight, Math.min(this.lastMouseY, rect.height - 1))
+
         // 重新 hitTest 并更新选区
         const coord = hitTest(
-          this.lastMouseX,
-          this.lastMouseY,
+          clampedX,
+          clampedY,
           this.config,
           this.scrollX,
           this.scrollY,
