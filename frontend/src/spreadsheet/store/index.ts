@@ -29,6 +29,7 @@ import {
   syncActiveSheetCache,
   workbookReducer,
 } from './workbookStore'
+import { clipboardReducer, setClipboard, clearClipboard } from './clipboardStore'
 
 export const store = configureStore({
   reducer: {
@@ -36,6 +37,7 @@ export const store = configureStore({
     workbook: workbookReducer,
     selection: selectionReducer,
     collab: collabReducer,
+    clipboard: clipboardReducer,
   },
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({
@@ -61,7 +63,9 @@ export {
   syncActiveSheetCache,
   switchSheet,
   addSheet,
+  setClipboard,
+  clearClipboard,
 }
-export { workSheetReducer, workbookReducer, selectionReducer, collabReducer }
+export { workSheetReducer, workbookReducer, selectionReducer, collabReducer, clipboardReducer }
 
 export type { UpdateCellPayload, SelectedCell, SelectionState, SetSelectedCellPayload }

@@ -32,5 +32,8 @@
     "frontend/**/*.{ts,tsx}": [
       "pnpm --filter frontend exec eslint --fix"
     ]
+  },
+  "dependencies": {
+    "react-router-dom": "^7.16.0"
   }
 }

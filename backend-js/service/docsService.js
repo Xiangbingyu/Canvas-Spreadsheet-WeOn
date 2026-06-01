@@ -8,6 +8,7 @@ const { isNonEmptyString, isPositiveInteger } = require('../protocol/validators'
 const docStore = require('../store/docStore');
 const roomUserStore = require('../store/roomUserStore');
 const auditService = require('../audit/auditService');
+const { normalizeDocSnapshot } = require('../domain/entities/doc');
 
 // ==================== 公共方法 ====================
 
@@ -71,7 +72,7 @@ function toDocView(docRecord) {
     createdBy: docRecord.createdBy,
     createdAt: docRecord.createdAt,
     updatedAt: docRecord.updatedAt,
-    snapshot: docRecord.snapshotJson,
+    snapshot: normalizeDocSnapshot(docRecord.snapshotJson, { docId: docRecord.docId }),
   };
 }
 
@@ -455,6 +456,16 @@ async function applyImportSheet(command, options = {}) {
   return docStore.applyImportSheet(command, { connection });
 }
 
+async function applyAddSheet(command, options = {}) {
+  const { connection = null } = options;
+  return docStore.applyAddSheet(command, { connection });
+}
+
+async function applySheetStructureChange(command, options = {}) {
+  const { connection = null } = options;
+  return docStore.applySheetStructureChange(command, { connection });
+}
+
 module.exports = {
   createDoc,
   listDocsByUser,
@@ -464,6 +475,8 @@ module.exports = {
   applySetCell,
   applySetTitle,
   applyImportSheet,
+  applyAddSheet,
+  applySheetStructureChange,
   primeDocCaches,
   invalidateDocCaches,
   invalidateUserDocsListCaches,

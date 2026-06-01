@@ -6,6 +6,10 @@ import type {
   SheetImported,
   UndoApplied,
   RedoApplied,
+  RowInserted,
+  RowDeleted,
+  ColInserted,
+  ColDeleted,
   UserInfo,
   Snapshot,
 } from '../model/collabProtocol'
@@ -28,6 +32,14 @@ export interface CollabCallbacks {
   onUndoApplied: (data: UndoApplied['data']) => void
   /** 重做 */
   onRedoApplied: (data: RedoApplied['data']) => void
+  /** 行被插入 */
+  onRowInserted?: (data: RowInserted['data']) => void
+  /** 行被删除 */
+  onRowDeleted?: (data: RowDeleted['data']) => void
+  /** 列被插入 */
+  onColInserted?: (data: ColInserted['data']) => void
+  /** 列被删除 */
+  onColDeleted?: (data: ColDeleted['data']) => void
   /** 在线用户列表更新 */
   onPresence: (users: UserInfo[]) => void
   /** 错误 */
@@ -159,16 +171,18 @@ export class CollabClient {
     col: number,
     value: string,
     style: Record<string, unknown> | null,
+    sheetId: string,
     baseSeq: number
   ): void {
     this.send({
       type: 'set_cell',
       docId: this.docId,
       clientId: this.clientId,
+      sheetId,
       row,
       col,
       value,
-      style,
+      style: style ?? null,
       baseSeq,
     })
   }
@@ -203,6 +217,46 @@ export class CollabClient {
 
   redo(): void {
     this.send({ type: 'redo', docId: this.docId, clientId: this.clientId })
+  }
+
+  insertRow(sheetId: string, row: number): void {
+    this.send({
+      type: 'insert_row',
+      docId: this.docId,
+      clientId: this.clientId,
+      sheetId,
+      row,
+    })
+  }
+
+  deleteRow(sheetId: string, row: number): void {
+    this.send({
+      type: 'delete_row',
+      docId: this.docId,
+      clientId: this.clientId,
+      sheetId,
+      row,
+    })
+  }
+
+  insertCol(sheetId: string, col: number): void {
+    this.send({
+      type: 'insert_col',
+      docId: this.docId,
+      clientId: this.clientId,
+      sheetId,
+      col,
+    })
+  }
+
+  deleteCol(sheetId: string, col: number): void {
+    this.send({
+      type: 'delete_col',
+      docId: this.docId,
+      clientId: this.clientId,
+      sheetId,
+      col,
+    })
   }
 
   // ============================
@@ -260,6 +314,30 @@ export class CollabClient {
       case 'redo_applied':
         this.applyOrdered(msg.data.seq, () => {
           this.callbacks.onRedoApplied(msg.data)
+        })
+        break
+
+      case 'row_inserted':
+        this.applyOrdered(msg.data.seq, () => {
+          this.callbacks.onRowInserted?.(msg.data)
+        })
+        break
+
+      case 'row_deleted':
+        this.applyOrdered(msg.data.seq, () => {
+          this.callbacks.onRowDeleted?.(msg.data)
+        })
+        break
+
+      case 'col_inserted':
+        this.applyOrdered(msg.data.seq, () => {
+          this.callbacks.onColInserted?.(msg.data)
+        })
+        break
+
+      case 'col_deleted':
+        this.applyOrdered(msg.data.seq, () => {
+          this.callbacks.onColDeleted?.(msg.data)
         })
         break
 
@@ -344,7 +422,10 @@ export class CollabClient {
       this.onSend(msg)
       return
     }
-    const data = JSON.stringify(msg)
+    // 使用自定义 replacer 保留 null 值
+    const data = JSON.stringify(msg, (_key, value) => {
+      return value === undefined ? null : value
+    })
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(data)
       return

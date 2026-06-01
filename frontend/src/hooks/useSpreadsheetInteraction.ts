@@ -4,6 +4,10 @@ import { InteractionEngine } from '@/spreadsheet/interaction/interactionEngine'
 import { GRID_CHROME } from '@/spreadsheet/utils/coordinates'
 import { updateCell } from '@/spreadsheet/store/workSheetStore'
 import { setSelectedCell } from '@/spreadsheet/store/selectStore'
+import { setClipboard } from '@/spreadsheet/store'
+import { cellsToTSV, parseTSV } from '@/spreadsheet/utils/tsvConverter'
+import { parseFormula, isFormula } from '@/spreadsheet/utils/formulaParser'
+import { calculateFormula } from '@/spreadsheet/utils/formulaCalculator'
 import type { RootState } from '@/spreadsheet/store'
 import type { Style } from '@/spreadsheet/model/types'
 import type { GrideCanvasHandle } from '@/components/grideCanvas/GrideCanvas'
@@ -86,7 +90,15 @@ export function useSpreadsheetInteraction(options: UseSpreadsheetInteractionOpti
       const cell = ws.cells[`${row}:${col}`]
       setEditingCell({ row, col })
       editingCellRef.current = { row, col }
-      setEditValue(initialValue !== undefined ? initialValue : (cell?.value ?? ''))
+
+      // 如果初始值未提供，从单元格读取
+      const editValue = initialValue !== undefined ? initialValue : (cell?.value ?? '')
+
+      // 如果单元格值是公式结果（以 #ERROR 开头），尝试恢复原始公式
+      // 但由于我们没有存储原始公式，这里只能显示计算结果
+      // 用户可以手动编辑为公式
+
+      setEditValue(editValue)
       // 立即 focus textarea，确保中文输入法能正确进入 composition
       setTimeout(() => {
         if (textareaRef.current) {
@@ -104,9 +116,27 @@ export function useSpreadsheetInteraction(options: UseSpreadsheetInteractionOpti
       const target = editingCellRef.current
       if (!target) return
       const value = textareaRef.current?.value ?? ''
+
+      // 检查是否是公式
+      let displayValue = value
+      if (isFormula(value)) {
+        const ws = reduxStore.getState().workSheet
+        const parsed = parseFormula(value)
+        const { result, error } = calculateFormula(ws, parsed)
+        if (error) {
+          // 公式计算错误，显示错误信息
+          displayValue = `#ERROR: ${error}`
+        } else {
+          // 公式计算成功，显示结果
+          displayValue = String(result)
+        }
+      }
+
       // 走协同链路（或本地兜底）；选中态本地即时更新以保证 UI 响应
-      commitCell(target.row, target.col, value)
-      dispatch(setSelectedCell({ row: target.row, col: target.col, value, style: undefined }))
+      commitCell(target.row, target.col, displayValue)
+      dispatch(
+        setSelectedCell({ row: target.row, col: target.col, value: displayValue, style: undefined })
+      )
       setEditingCell(null)
       editingCellRef.current = null
       if (move) {
@@ -114,7 +144,7 @@ export function useSpreadsheetInteraction(options: UseSpreadsheetInteractionOpti
       }
       canvasHandleRef.current?.focus()
     },
-    [commitCell, dispatch, engine]
+    [commitCell, dispatch, engine, reduxStore]
   )
 
   const cancelEdit = useCallback(() => {
@@ -161,6 +191,135 @@ export function useSpreadsheetInteraction(options: UseSpreadsheetInteractionOpti
       },
       onKeyboard: ({ event }) => {
         const sel = reduxStore.getState().selection
+
+        // Ctrl+C / Cmd+C：复制
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'c') {
+          const ws = reduxStore.getState().workSheet
+          const range = sel.range
+          const cells: Record<string, { value: string; style?: Style }> = {}
+
+          // 遍历选区范围内的所有单元格
+          for (let row = range.start.row; row <= range.end.row; row++) {
+            for (let col = range.start.col; col <= range.end.col; col++) {
+              const key = `${row}:${col}`
+              const cell = ws.cells[key]
+              const style = cell?.styleId ? ws.styles[cell.styleId] : undefined
+              cells[key] = {
+                value: cell?.value ?? '',
+                style,
+              }
+            }
+          }
+
+          // 存到内部剪贴板
+          dispatch(
+            setClipboard({
+              cells,
+              range: {
+                startRow: range.start.row,
+                startCol: range.start.col,
+                endRow: range.end.row,
+                endCol: range.end.col,
+              },
+            })
+          )
+
+          // 写入系统剪贴板（TSV 格式）
+          const tsv = cellsToTSV(cells, {
+            startRow: range.start.row,
+            startCol: range.start.col,
+            endRow: range.end.row,
+            endCol: range.end.col,
+          })
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(tsv).catch((err) => {
+              console.warn('[useSpreadsheetInteraction] Failed to write to system clipboard:', err)
+            })
+          }
+
+          event.preventDefault()
+          return
+        }
+
+        // Ctrl+V / Cmd+V：粘贴
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'v') {
+          const pasteFromClipboard = async () => {
+            const clipboard = reduxStore.getState().clipboard
+            const ws = reduxStore.getState().workSheet
+            const sel = reduxStore.getState().selection
+
+            // 优先使用内部剪贴板（保留样式）
+            if (clipboard.range && Object.keys(clipboard.cells).length > 0) {
+              const pasteStartRow = sel.row
+              const pasteStartCol = sel.col
+              const rowOffset = pasteStartRow - clipboard.range.startRow
+              const colOffset = pasteStartCol - clipboard.range.startCol
+
+              for (const [key, clipCell] of Object.entries(clipboard.cells)) {
+                const [rowStr, colStr] = key.split(':')
+                const origRow = parseInt(rowStr, 10)
+                const origCol = parseInt(colStr, 10)
+                const targetRow = origRow + rowOffset
+                const targetCol = origCol + colOffset
+
+                if (
+                  targetRow < 1 ||
+                  targetRow > ws.rowCount ||
+                  targetCol < 1 ||
+                  targetCol > ws.colCount
+                ) {
+                  continue
+                }
+
+                commitCell(targetRow, targetCol, clipCell.value, clipCell.style)
+              }
+              return
+            }
+
+            // 内部剪贴板为空，尝试系统剪贴板（跨应用复制粘贴）
+            try {
+              if (!navigator.clipboard || !navigator.clipboard.readText) {
+                throw new Error('System clipboard not available')
+              }
+              const text = await navigator.clipboard.readText()
+              const parsed = parseTSV(text)
+              if (!parsed) {
+                throw new Error('Failed to parse clipboard content')
+              }
+
+              const pasteStartRow = sel.row
+              const pasteStartCol = sel.col
+              const rowOffset = pasteStartRow - parsed.range.startRow
+              const colOffset = pasteStartCol - parsed.range.startCol
+
+              for (const [key, clipCell] of Object.entries(parsed.cells)) {
+                const [rowStr, colStr] = key.split(':')
+                const origRow = parseInt(rowStr, 10)
+                const origCol = parseInt(colStr, 10)
+                const targetRow = origRow + rowOffset
+                const targetCol = origCol + colOffset
+
+                if (
+                  targetRow < 1 ||
+                  targetRow > ws.rowCount ||
+                  targetCol < 1 ||
+                  targetCol > ws.colCount
+                ) {
+                  continue
+                }
+
+                commitCell(targetRow, targetCol, clipCell.value)
+              }
+            } catch (err) {
+              console.warn('[useSpreadsheetInteraction] System clipboard read failed:', err)
+            }
+          }
+
+          pasteFromClipboard()
+          event.preventDefault()
+          return
+        }
+
         if (event.key === 'Enter' || event.key === 'F2') {
           startEdit(sel.row, sel.col)
           event.preventDefault()

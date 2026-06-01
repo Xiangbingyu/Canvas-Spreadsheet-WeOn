@@ -4,13 +4,16 @@ export interface ContextMenuProps {
   visible: boolean
   x: number
   y: number
-  type: 'row' | 'col' | null
+  type: 'row' | 'col' | 'cell' | null
   index: number | null
   onClose: () => void
   executeWithHistory?: (
     action: 'insert_row' | 'delete_row' | 'insert_col' | 'delete_col',
     index: number
   ) => void
+  onCopy?: () => void
+  onPaste?: () => void
+  canPaste?: boolean
 }
 
 export function ContextMenu({
@@ -21,6 +24,9 @@ export function ContextMenu({
   index,
   onClose,
   executeWithHistory,
+  onCopy,
+  onPaste,
+  canPaste = false,
 }: ContextMenuProps) {
   const handleInsert = useCallback(() => {
     if (index === null) return
@@ -42,32 +48,74 @@ export function ContextMenu({
     onClose()
   }, [executeWithHistory, type, index, onClose])
 
-  if (!visible || type === null || index === null) {
+  const handleCopy = useCallback(() => {
+    onCopy?.()
+    onClose()
+  }, [onCopy, onClose])
+
+  const handlePaste = useCallback(() => {
+    onPaste?.()
+    onClose()
+  }, [onPaste, onClose])
+
+  if (!visible || type === null) {
     return null
   }
 
-  const isRow = type === 'row'
-  const insertLabel = isRow ? '插入行' : '插入列'
-  const deleteLabel = isRow ? '删除行' : '删除列'
+  // 行/列操作菜单
+  if ((type === 'row' || type === 'col') && index !== null) {
+    const isRow = type === 'row'
+    const insertLabel = isRow ? '插入行' : '插入列'
+    const deleteLabel = isRow ? '删除行' : '删除列'
 
-  return (
-    <div
-      className="fixed z-50 min-w-32 rounded border border-[#dadce0] bg-white shadow-lg"
-      style={{ left: `${x}px`, top: `${y}px` }}
-      onClick={(e) => e.stopPropagation()}
-    >
-      <button
-        className="block w-full px-4 py-2 text-left text-sm hover:bg-[#f0f4f9]"
-        onClick={handleInsert}
+    return (
+      <div
+        className="fixed z-50 min-w-32 rounded border border-[#dadce0] bg-white shadow-lg"
+        style={{ left: `${x}px`, top: `${y}px` }}
+        onClick={(e) => e.stopPropagation()}
       >
-        {insertLabel}
-      </button>
-      <button
-        className="block w-full px-4 py-2 text-left text-sm hover:bg-[#f0f4f9]"
-        onClick={handleDelete}
+        <button
+          className="block w-full px-4 py-2 text-left text-sm hover:bg-[#f0f4f9]"
+          onClick={handleInsert}
+        >
+          {insertLabel}
+        </button>
+        <button
+          className="block w-full px-4 py-2 text-left text-sm hover:bg-[#f0f4f9]"
+          onClick={handleDelete}
+        >
+          {deleteLabel}
+        </button>
+      </div>
+    )
+  }
+
+  // 单元格操作菜单
+  if (type === 'cell') {
+    return (
+      <div
+        className="fixed z-50 min-w-32 rounded border border-[#dadce0] bg-white shadow-lg"
+        style={{ left: `${x}px`, top: `${y}px` }}
+        onClick={(e) => e.stopPropagation()}
       >
-        {deleteLabel}
-      </button>
-    </div>
-  )
+        <button
+          className="block w-full px-4 py-2 text-left text-sm hover:bg-[#f0f4f9]"
+          onClick={handleCopy}
+        >
+          复制
+        </button>
+        <button
+          className={`block w-full px-4 py-2 text-left text-sm ${
+            canPaste ? 'hover:bg-[#f0f4f9]' : 'cursor-not-allowed text-[#9aa0a6]'
+          }`}
+          onClick={handlePaste}
+          disabled={!canPaste}
+        >
+          粘贴
+        </button>
+      </div>
+    )
+  }
+
+  return null
 }

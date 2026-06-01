@@ -14,6 +14,7 @@ const { createRedisConnection } = require('../infra/redis/client');
 const projectRoot = path.resolve(__dirname, '..');
 const serverEntry = path.join(projectRoot, 'server.js');
 const envFilePath = path.join(projectRoot, '.env');
+const DEFAULT_SHEET_ID = 'sheet_20260527_001';
 
 async function resetRedisTestKeys() {
   const client = createRedisConnection('cache-redis-test-reset');
@@ -152,6 +153,20 @@ async function getJson(baseUrl, pathname) {
   return {
     status: response.status,
     json: await response.json(),
+  };
+}
+
+function getActiveSheetSnapshot(snapshot) {
+  assert.ok(snapshot && typeof snapshot === 'object');
+  assert.ok(typeof snapshot.activeSheetId === 'string' && snapshot.activeSheetId);
+  assert.ok(snapshot.sheets && typeof snapshot.sheets === 'object');
+  return snapshot.sheets[snapshot.activeSheetId];
+}
+
+function withDefaultSheetId(message) {
+  return {
+    sheetId: DEFAULT_SHEET_ID,
+    ...message,
   };
 }
 
@@ -397,6 +412,51 @@ test('redis cache invalidates GET /docs list after set_title across instances', 
   }
 });
 
+test('redis cache serves fresh snapshot after insert_row across instances', async () => {
+  const portA = await getFreePort();
+  const portB = await getFreePort();
+
+  const serverA = await startServerInstance({ port: portA, serverId: 'cache-redis-insert-row-a' });
+  const serverB = await startServerInstance({ port: portB, serverId: 'cache-redis-insert-row-b' });
+  const editor = await connect(serverA.wsUrl);
+  const observer = await connect(serverB.wsUrl);
+
+  try {
+    const firstDocRead = await getJson(serverA.baseUrl, '/docs/doc_sys_001');
+    assert.equal(firstDocRead.status, 200);
+    assert.equal(firstDocRead.json.data.snapshot.sheets[DEFAULT_SHEET_ID].cells['1:1'].value, '9999.00');
+
+    await joinRoom(editor, 'doc_sys_001', 'cache-insert-row-editor');
+    await joinRoom(observer, 'doc_sys_001', 'cache-insert-row-observer');
+
+    editor.send({
+      type: 'insert_row',
+      docId: 'doc_sys_001',
+      clientId: 'cache-insert-row-editor',
+      sheetId: DEFAULT_SHEET_ID,
+      row: 1,
+    });
+    await observer.waitFor((message) => (
+      message.type === 'row_inserted'
+      && message.data.docId === 'doc_sys_001'
+      && message.data.sheetId === DEFAULT_SHEET_ID
+      && message.data.row === 1
+    ));
+
+    const secondDocRead = await getJson(serverB.baseUrl, '/docs/doc_sys_001');
+    assert.equal(secondDocRead.status, 200);
+    const sheet = secondDocRead.json.data.snapshot.sheets[DEFAULT_SHEET_ID];
+    assert.equal(sheet.rowCount, 101);
+    assert.equal(sheet.cells['1:1'], undefined);
+    assert.equal(sheet.cells['2:1'].value, '9999.00');
+  } finally {
+    await editor.close();
+    await observer.close();
+    await serverA.stop();
+    await serverB.stop();
+  }
+});
+
 test('redis cache invalidates participated and all lists after set_title across instances', async () => {
   const portA = await getFreePort();
   const portB = await getFreePort();
@@ -518,9 +578,9 @@ test('redis cache invalidates participated and all lists after import_sheet acro
       message.type === 'sheet_imported'
       && message.data.docId === 'doc_sys_001'
       && message.data.snapshot
-      && message.data.snapshot.cells
-      && message.data.snapshot.cells['5:5']
-      && message.data.snapshot.cells['5:5'].value === 'imported-list-seq'
+      && getActiveSheetSnapshot(message.data.snapshot)
+      && getActiveSheetSnapshot(message.data.snapshot).cells['5:5']
+      && getActiveSheetSnapshot(message.data.snapshot).cells['5:5'].value === 'imported-list-seq'
     ));
 
     const secondParticipatedRead = await getJson(
@@ -565,6 +625,7 @@ test('redis doc lock keeps concurrent cross-instance set_cell writes ordered on 
 
     clientA.send({
       type: 'set_cell',
+      sheetId: DEFAULT_SHEET_ID,
       docId: 'doc_sys_001',
       clientId: 'doc-lock-user-a',
       row: 20,
@@ -573,6 +634,7 @@ test('redis doc lock keeps concurrent cross-instance set_cell writes ordered on 
     });
     clientB.send({
       type: 'set_cell',
+      sheetId: DEFAULT_SHEET_ID,
       docId: 'doc_sys_001',
       clientId: 'doc-lock-user-b',
       row: 20,
@@ -600,8 +662,8 @@ test('redis doc lock keeps concurrent cross-instance set_cell writes ordered on 
     assert.notEqual(firstUpdate.data.seq, secondUpdate.data.seq);
     assert.equal(finalDocRead.json.data.currentSeq, Math.max(firstUpdate.data.seq, secondUpdate.data.seq));
     assert.ok(finalDocRead.json.data.currentSeq >= initialSeq + 1);
-    assert.equal(finalDocRead.json.data.snapshot.cells['20:1'].value, 'lock-a');
-    assert.equal(finalDocRead.json.data.snapshot.cells['20:2'].value, 'lock-b');
+    assert.equal(getActiveSheetSnapshot(finalDocRead.json.data.snapshot).cells['20:1'].value, 'lock-a');
+    assert.equal(getActiveSheetSnapshot(finalDocRead.json.data.snapshot).cells['20:2'].value, 'lock-b');
   } finally {
     await clientA.close();
     await clientB.close();
@@ -626,6 +688,7 @@ test('redis OT rebases stale baseSeq set_cell across instances on the same cell'
 
     clientA.send({
       type: 'set_cell',
+      sheetId: DEFAULT_SHEET_ID,
       docId: 'doc_sys_001',
       clientId: 'ot-user-a',
       row: 30,
@@ -643,6 +706,7 @@ test('redis OT rebases stale baseSeq set_cell across instances on the same cell'
 
     clientB.send({
       type: 'set_cell',
+      sheetId: DEFAULT_SHEET_ID,
       docId: 'doc_sys_001',
       clientId: 'ot-user-b',
       row: 30,
@@ -663,7 +727,7 @@ test('redis OT rebases stale baseSeq set_cell across instances on the same cell'
 
     const finalDocRead = await getJson(serverA.baseUrl, '/docs/doc_sys_001');
     assert.equal(finalDocRead.status, 200);
-    assert.equal(finalDocRead.json.data.snapshot.cells['30:1'].value, 'ot-second');
+    assert.equal(getActiveSheetSnapshot(finalDocRead.json.data.snapshot).cells['30:1'].value, 'ot-second');
   } finally {
     await clientA.close();
     await clientB.close();
@@ -741,6 +805,7 @@ test('redis OT turns stale undo and redo on the same cell into noop across insta
 
     clientA.send({
       type: 'set_cell',
+      sheetId: DEFAULT_SHEET_ID,
       docId: 'doc_sys_001',
       clientId: 'undo-redo-ot-a',
       row: 31,
@@ -757,6 +822,7 @@ test('redis OT turns stale undo and redo on the same cell into noop across insta
 
     clientB.send({
       type: 'set_cell',
+      sheetId: DEFAULT_SHEET_ID,
       docId: 'doc_sys_001',
       clientId: 'undo-redo-ot-b',
       row: 31,
@@ -802,7 +868,7 @@ test('redis OT turns stale undo and redo on the same cell into noop across insta
 
     const finalDocRead = await getJson(serverA.baseUrl, '/docs/doc_sys_001');
     assert.equal(finalDocRead.status, 200);
-    assert.equal(finalDocRead.json.data.snapshot.cells['31:2'].value, 'other-latest');
+    assert.equal(getActiveSheetSnapshot(finalDocRead.json.data.snapshot).cells['31:2'].value, 'other-latest');
   } finally {
     await clientA.close();
     await clientB.close();
@@ -832,6 +898,7 @@ test('redis cache keeps doc snapshot fresh across instances after set_cell undo 
 
     editor.send({
       type: 'set_cell',
+      sheetId: DEFAULT_SHEET_ID,
       docId: 'doc_sys_001',
       clientId: 'cache-ops-editor',
       row: 12,
@@ -848,7 +915,7 @@ test('redis cache keeps doc snapshot fresh across instances after set_cell undo 
 
     const afterSetCellRead = await getJson(serverB.baseUrl, '/docs/doc_sys_001');
     assert.equal(afterSetCellRead.status, 200);
-    assert.equal(afterSetCellRead.json.data.snapshot.cells['12:3'].value, 'redis-cache-cell');
+    assert.equal(getActiveSheetSnapshot(afterSetCellRead.json.data.snapshot).cells['12:3'].value, 'redis-cache-cell');
 
     editor.send({
       type: 'undo',
@@ -865,7 +932,7 @@ test('redis cache keeps doc snapshot fresh across instances after set_cell undo 
 
     const afterUndoRead = await getJson(serverB.baseUrl, '/docs/doc_sys_001');
     assert.equal(afterUndoRead.status, 200);
-    assert.equal(afterUndoRead.json.data.snapshot.cells['12:3'].value, '');
+    assert.equal(getActiveSheetSnapshot(afterUndoRead.json.data.snapshot).cells['12:3'].value, '');
 
     editor.send({
       type: 'redo',
@@ -882,7 +949,7 @@ test('redis cache keeps doc snapshot fresh across instances after set_cell undo 
 
     const afterRedoRead = await getJson(serverB.baseUrl, '/docs/doc_sys_001');
     assert.equal(afterRedoRead.status, 200);
-    assert.equal(afterRedoRead.json.data.snapshot.cells['12:3'].value, 'redis-cache-cell');
+    assert.equal(getActiveSheetSnapshot(afterRedoRead.json.data.snapshot).cells['12:3'].value, 'redis-cache-cell');
 
     editor.send({
       type: 'import_sheet',
@@ -910,15 +977,15 @@ test('redis cache keeps doc snapshot fresh across instances after set_cell undo 
       message.type === 'sheet_imported'
       && message.data.docId === 'doc_sys_001'
       && message.data.snapshot
-      && message.data.snapshot.cells
-      && message.data.snapshot.cells['2:2']
-      && message.data.snapshot.cells['2:2'].value === 'imported-from-redis-cache-test'
+      && getActiveSheetSnapshot(message.data.snapshot)
+      && getActiveSheetSnapshot(message.data.snapshot).cells['2:2']
+      && getActiveSheetSnapshot(message.data.snapshot).cells['2:2'].value === 'imported-from-redis-cache-test'
     ));
 
     const afterImportRead = await getJson(serverB.baseUrl, '/docs/doc_sys_001');
     assert.equal(afterImportRead.status, 200);
-    assert.equal(afterImportRead.json.data.snapshot.cells['2:2'].value, 'imported-from-redis-cache-test');
-    assert.equal(afterImportRead.json.data.snapshot.cells['12:3'], undefined);
+    assert.equal(getActiveSheetSnapshot(afterImportRead.json.data.snapshot).cells['2:2'].value, 'imported-from-redis-cache-test');
+    assert.equal(getActiveSheetSnapshot(afterImportRead.json.data.snapshot).cells['12:3'], undefined);
   } finally {
     await editor.close();
     await observer.close();
