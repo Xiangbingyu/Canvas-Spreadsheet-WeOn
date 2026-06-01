@@ -377,9 +377,12 @@ export class CollabClient {
   private replayOfflineQueue(): void {
     const ops = OfflineQueue.dequeueAll()
     if (ops.length === 0) return
-    const replayed: QueuedOp[] = []
+    const remaining: QueuedOp[] = []
     for (const op of ops) {
-      if (op.docId !== this.docId) continue // 跳过其他文档，保留在队列
+      if (op.docId !== this.docId) {
+        remaining.push(op)
+        continue
+      }
       this.send({
         type: 'set_cell',
         docId: this.docId,
@@ -390,10 +393,11 @@ export class CollabClient {
         style: op.style,
         baseSeq: op.baseSeq,
       })
-      replayed.push(op)
     }
-    // 只清除已回放的，其他文档的操作保留
-    if (replayed.length > 0) OfflineQueue.removeOps(replayed)
+    // 放回其他文档的操作，避免 dequeueAll 误删
+    for (const op of remaining) {
+      OfflineQueue.enqueue(op)
+    }
   }
 
   get currentSeq(): number {

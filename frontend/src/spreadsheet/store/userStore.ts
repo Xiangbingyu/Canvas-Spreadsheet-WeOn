@@ -40,9 +40,15 @@ const collabSlice = createSlice({
       state.clientId = action.payload.clientId
     },
 
-    /** 更新在线用户列表 */
+    /** 更新在线用户列表，同时清理已离开用户的光标 */
     setOnlineUsers(state, action: PayloadAction<OnlineUser[]>) {
       state.users = action.payload
+      const activeIds = new Set(action.payload.map((u) => u.clientId))
+      for (const clientId of Object.keys(state.userCursors)) {
+        if (!activeIds.has(clientId)) {
+          delete state.userCursors[clientId]
+        }
+      }
     },
 
     /** 更新当前已确认的最大 seq */
