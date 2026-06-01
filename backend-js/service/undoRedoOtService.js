@@ -219,9 +219,180 @@ function createRedoStackEntry({
   });
 }
 
+function transformBatchUpdatesThroughHistory({
+  entry,
+  historyEntries,
+  currentDoc,
+}) {
+  return (entry.updates || []).map((update) => {
+    const transformedTarget = transformCellReferenceThroughHistory({
+      sheetId: entry.sheetId || null,
+      row: update.row,
+      col: update.col,
+      historyEntries,
+      currentDoc,
+    });
+
+    return {
+      ...update,
+      row: transformedTarget.row,
+      col: transformedTarget.col,
+    };
+  });
+}
+
+async function resolveUndoRedoBatchOperation({
+  docId,
+  entry,
+  currentDoc,
+  historyStore,
+  connection = null,
+  direction = 'undo',
+}) {
+  const referenceSeq = Number(entry && entry.sourceSeq);
+
+  if (!Number.isInteger(referenceSeq) || referenceSeq <= 0) {
+    throw createServiceError(ERROR_CODES.INVALID_PARAMS, 'undo/redo sourceSeq is invalid', {
+      docId,
+      sourceSeq: entry ? entry.sourceSeq : null,
+    });
+  }
+
+  if (referenceSeq > currentDoc.currentSeq) {
+    throw createServiceError(ERROR_CODES.CONFLICT, 'undo/redo sourceSeq is ahead of current document version', {
+      docId,
+      sourceSeq: referenceSeq,
+      currentSeq: currentDoc.currentSeq,
+    });
+  }
+
+  const normalizedUpdates = Array.isArray(entry.updates) ? entry.updates : [];
+
+  if (referenceSeq === currentDoc.currentSeq) {
+    return {
+      sheetId: entry.sheetId || null,
+      sourceSeq: referenceSeq,
+      baseSeq: currentDoc.currentSeq,
+      rebased: false,
+      updates: normalizedUpdates.map((update) => ({
+        row: update.row,
+        col: update.col,
+        value: direction === 'undo' ? update.oldValue : update.newValue,
+        style: direction === 'undo' ? update.oldStyle : update.newStyle,
+      })),
+    };
+  }
+
+  const historyEntries = await historyStore.listByDocIdSeqRange(
+    docId,
+    referenceSeq,
+    currentDoc.currentSeq,
+    { connection }
+  );
+  const barrierEntry = historyEntries.find((historyEntry) => shouldTreatAsOtBarrier(historyEntry));
+
+  if (barrierEntry) {
+    throw createServiceError(ERROR_CODES.CONFLICT, 'document changed by import_sheet, please refresh and retry', {
+      docId,
+      sourceSeq: referenceSeq,
+      currentSeq: currentDoc.currentSeq,
+      conflictSeq: barrierEntry.seq,
+      conflictOpType: barrierEntry.opType,
+    });
+  }
+
+  const transformedUpdates = transformBatchUpdatesThroughHistory({
+    entry,
+    historyEntries,
+    currentDoc,
+  });
+  const dedupedByPosition = new Map();
+
+  for (let index = 0; index < transformedUpdates.length; index += 1) {
+    const transformed = transformedUpdates[index];
+    const original = normalizedUpdates[index];
+    dedupedByPosition.set(`${transformed.row}:${transformed.col}`, {
+      row: transformed.row,
+      col: transformed.col,
+      oldValue: original.oldValue,
+      oldStyle: original.oldStyle,
+      newValue: original.newValue,
+      newStyle: original.newStyle,
+    });
+  }
+
+  return {
+    sheetId: entry.sheetId || null,
+    sourceSeq: referenceSeq,
+    baseSeq: currentDoc.currentSeq,
+    rebased: true,
+    updates: Array.from(dedupedByPosition.values()).map((update) => ({
+      row: update.row,
+      col: update.col,
+      value: direction === 'undo' ? update.oldValue : update.newValue,
+      style: direction === 'undo' ? update.oldStyle : update.newStyle,
+      oldValue: update.oldValue,
+      oldStyle: update.oldStyle,
+      newValue: update.newValue,
+      newStyle: update.newStyle,
+    })),
+  };
+}
+
+function createAppliedBatchStackEntry({
+  sourceSeq,
+  docId,
+  clientId,
+  sheetId = null,
+  baseSeq = null,
+  patch = {},
+  updates = [],
+}) {
+  return {
+    sourceSeq,
+    docId,
+    clientId,
+    opType: 'batch_set_cell',
+    sheetId,
+    baseSeq,
+    patch: JSON.parse(JSON.stringify(patch)),
+    updates: JSON.parse(JSON.stringify(updates)),
+  };
+}
+
+function createRedoBatchStackEntry({
+  sourceSeq,
+  docId,
+  clientId,
+  sheetId = null,
+  baseSeq = null,
+  patch = {},
+  updates = [],
+}) {
+  return createAppliedBatchStackEntry({
+    sourceSeq,
+    docId,
+    clientId,
+    sheetId,
+    baseSeq,
+    patch,
+    updates: updates.map((update) => ({
+      row: update.row,
+      col: update.col,
+      oldValue: update.newValue,
+      oldStyle: update.newStyle,
+      newValue: update.oldValue,
+      newStyle: update.oldStyle,
+    })),
+  });
+}
+
 module.exports = {
   normalizeCellState,
   resolveUndoRedoOperation,
+  resolveUndoRedoBatchOperation,
   createAppliedStackEntry,
   createRedoStackEntry,
+  createAppliedBatchStackEntry,
+  createRedoBatchStackEntry,
 };
