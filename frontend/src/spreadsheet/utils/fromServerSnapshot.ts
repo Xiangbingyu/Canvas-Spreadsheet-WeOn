@@ -130,16 +130,25 @@ export function fromHttpDocWorkbookSnapshot(snapshot: WorkbookSnapshot): {
   return { activeSheetId, sheetOrder, sheets }
 }
 
-/** 将前端 WorksheetData 转为后端单个 sheet 快照形态（协作 import_sheet 等） */
-export function toServerSnapshot(worksheet: WorksheetData): ServerSnapshotInput {
+/** 将前端 WorksheetData 转为后端 workbook 快照形态（协同 import_sheet 用） */
+export function toWorkbookSnapshot(
+  worksheet: WorksheetData
+): import('@/services/httpType').WorkbookSnapshot {
+  const sheetId = worksheet.sheetId
   return {
-    id: worksheet.sheetId,
-    name: worksheet.sheetName,
-    defaultRowHeight: worksheet.defaultRowHeight,
-    defaultColWidth: worksheet.defaultColWidth,
-    rowCount: worksheet.rowCount,
-    colCount: worksheet.colCount,
-    styles: worksheet.styles,
-    cells: worksheet.cells,
+    activeSheetId: sheetId,
+    sheetOrder: [sheetId],
+    sheets: {
+      [sheetId]: {
+        id: sheetId,
+        name: worksheet.sheetName,
+        defaultRowHeight: worksheet.defaultRowHeight,
+        defaultColWidth: worksheet.defaultColWidth,
+        rowCount: worksheet.rowCount,
+        colCount: worksheet.colCount,
+        styles: worksheet.styles,
+        cells: worksheet.cells,
+      },
+    },
   }
 }

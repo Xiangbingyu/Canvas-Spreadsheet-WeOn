@@ -2,10 +2,10 @@
 // 消息字段对齐: docs/接口文档.md v1
 // 数据结构对齐: @/spreadsheet/model/types.ts
 
-import type { Cell, Style, WorksheetData } from '@/spreadsheet/model/types'
+import type { Cell, Style } from '@/spreadsheet/model/types'
+import type { WorkbookSnapshot } from '@/services/httpType'
 
-// 类型别名，保持 WS 消息定义可读
-export type Snapshot = WorksheetData
+export type Snapshot = WorkbookSnapshot
 export type CellStyle = Style
 export type { Cell }
 

@@ -20,7 +20,7 @@ import {
   setConnectionStatus,
 } from '@/spreadsheet/store'
 import { insertRow, deleteRow, insertCol, deleteCol } from '@/spreadsheet/store/workSheetStore'
-import { fromServerSnapshot, toServerSnapshot } from '@/spreadsheet/utils/fromServerSnapshot'
+import { fromServerSnapshot, toWorkbookSnapshot } from '@/spreadsheet/utils/fromServerSnapshot'
 import type { Style, WorksheetData } from '@/spreadsheet/model/types'
 import type { RootState } from '@/spreadsheet/store'
 
@@ -157,6 +157,10 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
     connect,
     disconnect,
     setCell: (row: number, col: number, value: string, style?: Record<string, unknown> | null) => {
+      // 乐观更新：先改本地 UI，再发 WS（离线时 UI 也有反馈）
+      dispatch(
+        updateCell({ row, col, value, sheetId, style: style ? (style as Style) : undefined })
+      )
       const client = clientRef.current
       if (!client) return
       client.setCell(row, col, value, style ?? null, sheetId, client.currentSeq)
@@ -172,7 +176,7 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
       dispatch(setWorksheet(worksheet))
       const client = clientRef.current
       if (!client) return false
-      client.importSheet(toServerSnapshot(worksheet) as Snapshot, eventId)
+      client.importSheet(toWorkbookSnapshot(worksheet), eventId)
       return true
     },
     sendCursor: (row: number, col: number) => clientRef.current?.sendCursor(row, col),
