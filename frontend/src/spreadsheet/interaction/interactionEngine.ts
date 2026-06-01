@@ -125,7 +125,8 @@ export class InteractionEngine {
         range = { start: { row: 1, col: 1 }, end: { row: rowCount, col: colCount } }
         break
     }
-    this.updateSelection(range, 'mouse')
+    // 点击行头/列头时，滚动目标用 start（避免跳到末尾）
+    this.updateSelection(range, 'mouse', range.start)
   }
 
   private normalizeSelection(
@@ -146,12 +147,15 @@ export class InteractionEngine {
 
   private updateSelection(
     newSelection: SelectionRange,
-    reason: SelectionChangeEventArgs['reason'] = 'mouse'
+    reason: SelectionChangeEventArgs['reason'] = 'mouse',
+    scrollTarget?: { row: number; col: number }
   ) {
     this.state.selection = newSelection
     this.callbacks.onSelectionChange?.({ newSelection, reason })
     // 触发自动滚动回调，让 GrideCanvas 处理滚动
-    this.callbacks.onAutoScroll?.({ row: newSelection.end.row, col: newSelection.end.col })
+    // 默认滚到 end，但点击行头/列头时滚到 start（避免跳到末尾）
+    const target = scrollTarget ?? newSelection.end
+    this.callbacks.onAutoScroll?.({ row: target.row, col: target.col })
   }
 
   handleCanvasPointerDown(event: {
