@@ -50,6 +50,11 @@ type AddSheetPayload = {
   sheetName: string
 }
 
+export type UpdateRangePayload = {
+  sheetId: string
+  updates: Array<{ row: number; col: number; value: string; style?: Style | null }>
+}
+
 const workbookSlice = createSlice({
   name: 'workbook',
   initialState,
@@ -124,9 +129,33 @@ const workbookSlice = createSlice({
       if (!sheet) return
       applyUpdateCellToWorksheet(sheet, action.payload)
     },
+
+    /**
+     * 批量更新工作簿内指定范围的单元格（原子操作）
+     *
+     * - 始终写入 state.sheets[sheetId]（无论是否当前激活表）
+     * - 若改的是本端正在看的表，workSheetStore 会通过 extraReducer 同步，Canvas 才会重绘
+     *
+     * 协作模块收到广播后只需：dispatch(updateRange({ sheetId, updates }))
+     */
+    updateRange(state, action: PayloadAction<UpdateRangePayload>) {
+      const { sheetId, updates } = action.payload
+      const sheet = state.sheets[sheetId]
+      if (!sheet) return
+      for (const u of updates) {
+        applyUpdateCellToWorksheet(sheet, { sheetId, ...u })
+      }
+    },
   },
 })
 
-export const { initFromDoc, setDocTitle, switchSheet, addSheet, importWorkbook, updateCell } =
-  workbookSlice.actions
+export const {
+  initFromDoc,
+  setDocTitle,
+  switchSheet,
+  addSheet,
+  importWorkbook,
+  updateCell,
+  updateRange,
+} = workbookSlice.actions
 export const workbookReducer = workbookSlice.reducer

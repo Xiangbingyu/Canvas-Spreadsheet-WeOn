@@ -259,6 +259,26 @@ export class CollabClient {
     })
   }
 
+  setBatchCells(
+    sheetId: string,
+    baseSeq: number,
+    updates: Array<{
+      row: number
+      col: number
+      value: string
+      style: Record<string, unknown> | null
+    }>
+  ): void {
+    this.send({
+      type: 'batch_set_cell',
+      docId: this.docId,
+      clientId: this.clientId,
+      sheetId,
+      baseSeq,
+      updates,
+    })
+  }
+
   // ============================
   //  消息入口（公开，方便 stub server 注入）
   // ============================
@@ -338,6 +358,27 @@ export class CollabClient {
       case 'col_deleted':
         this.applyOrdered(msg.data.seq, () => {
           this.callbacks.onColDeleted?.(msg.data)
+        })
+        break
+
+      case 'batch_cell_updated':
+        this.applyOrdered(msg.data.seq, () => {
+          // 批量单元格更新：逐个调用 onCellUpdated 回调
+          // 这样可以复用现有的协同处理逻辑
+          for (const update of msg.data.updates) {
+            this.callbacks.onCellUpdated({
+              docId: msg.data.docId,
+              clientId: msg.data.clientId,
+              sheetId: msg.data.sheetId,
+              seq: msg.data.seq,
+              row: update.row,
+              col: update.col,
+              value: update.value,
+              style: update.style,
+              canUndo: msg.data.canUndo,
+              canRedo: msg.data.canRedo,
+            })
+          }
         })
         break
 
