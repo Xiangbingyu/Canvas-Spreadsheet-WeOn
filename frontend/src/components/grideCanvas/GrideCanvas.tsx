@@ -30,7 +30,7 @@ import {
   renderOverlayLayer,
   type RenderGridOptions,
 } from '@/spreadsheet/render'
-import { canvasPerf } from '@/spreadsheet/render/perfMonitor'
+import { canvasPerf, sheetUpdatePerf } from '@/spreadsheet/render/perfMonitor'
 import type { Viewport } from '@/spreadsheet/render'
 import type { RootState } from '@/spreadsheet/store'
 import { setClipboard } from '@/spreadsheet/store'
@@ -327,6 +327,9 @@ function GrideCanvas(
   const reduxStore = useStore<RootState>()
   const worksheet = useSelector((state: RootState) => state.workSheet)
   const selection = useSelector((state: RootState) => state.selection)
+  const userCursors = useSelector((state: RootState) => state.collab.userCursors)
+  const users = useSelector((state: RootState) => state.collab.users)
+  const myClientId = useSelector((state: RootState) => state.collab.clientId)
   const viewportRef = useRef<Viewport>(createViewport())
 
   const layout: LayeredCanvasLayout = useMemo(
@@ -380,6 +383,14 @@ function GrideCanvas(
           end: { row: state.selection.row, col: state.selection.col },
         } satisfies RenderGridOptions['selection']),
       activeCell: { row: state.selection.row, col: state.selection.col },
+      remoteCursors: Object.entries(state.collab.userCursors)
+        .filter(([clientId]) => clientId !== state.collab.clientId)
+        .map(([clientId, cursor]) => ({
+          clientId,
+          row: cursor.row,
+          col: cursor.col,
+          color: state.collab.users.find((user) => user.clientId === clientId)?.color ?? '#3b82f6',
+        })),
     }
   }, [reduxStore])
 
@@ -401,6 +412,8 @@ function GrideCanvas(
 
       const options: RenderGridOptions = getRenderOptions()
       const renderStart = performance.now()
+      const dirtyLayerList = Array.from(dirtyLayers)
+      sheetUpdatePerf.markRenderStart(dirtyLayerList)
 
       if (dirtyLayers.has('grid')) {
         renderGridLayer(contexts.grid, options)
@@ -412,7 +425,9 @@ function GrideCanvas(
         renderOverlayLayer(contexts.overlay, options)
       }
 
-      canvasPerf.recordRender(performance.now() - renderStart)
+      const renderDuration = performance.now() - renderStart
+      canvasPerf.recordRender(renderDuration)
+      sheetUpdatePerf.markRenderEnd(renderDuration, dirtyLayerList)
     },
     [contentCanvasRef, getRenderOptions, gridCanvasRef, overlayCanvasRef]
   )
@@ -748,6 +763,7 @@ function GrideCanvas(
   }, [interactionEngine, layoutVersion, onScrollChange, publishScrollUi, scheduleRender])
 
   useEffect(() => {
+    sheetUpdatePerf.markWorksheetObserved()
     scheduleRender(ALL_CANVAS_LAYERS)
   }, [scheduleRender, worksheet.cells, worksheet.styles])
 
@@ -813,12 +829,15 @@ function GrideCanvas(
     scheduleRender(overlayOnly)
   }, [
     scheduleRender,
+    myClientId,
     selection.col,
     selection.row,
     selection.range.end.col,
     selection.range.end.row,
     selection.range.start.col,
     selection.range.start.row,
+    userCursors,
+    users,
   ])
 
   const maxScrollX = Math.max(0, scrollUi.sheetWidth - scrollUi.dataViewportWidth)

@@ -24,11 +24,19 @@ export type RenderRect = {
   height: number
 }
 
+export type RemoteCursorRenderData = {
+  clientId: string
+  row: number
+  col: number
+  color: string
+}
+
 export type RenderGridOptions = {
   worksheet: WorksheetData
   viewport: Viewport
   selection: GridSelection
   activeCell: CellCoord | null
+  remoteCursors?: RemoteCursorRenderData[]
 }
 
 type DrawContext = {
@@ -42,6 +50,7 @@ type DrawContext = {
   scrollY: number
   selection: GridSelection
   activeCell: CellCoord | null
+  remoteCursors: RemoteCursorRenderData[]
 }
 
 const COLORS = {
@@ -81,7 +90,7 @@ function createDrawContext(
   options: RenderGridOptions,
   rangeOverride?: VisibleRange
 ): DrawContext {
-  const { worksheet, viewport, selection, activeCell } = options
+  const { worksheet, viewport, selection, activeCell, remoteCursors = [] } = options
   const rowHeight = worksheet.defaultRowHeight
   const colWidth = worksheet.defaultColWidth
   const range =
@@ -99,6 +108,7 @@ function createDrawContext(
     scrollY: viewport.scrollY,
     selection,
     activeCell,
+    remoteCursors,
   }
 }
 
@@ -295,6 +305,44 @@ function drawFillHandle(
  * 传入参数：draw 为本次绘制上下文。
  * 返回结果：无返回值，只绘制数据区背景。
  */
+/**
+ * 作用：绘制其他在线用户的单格光标，用于协同模块的多用户位置提醒。
+ * 传入参数：draw.remoteCursors 为 GrideCanvas 从 Redux collab 状态整理出的非本人光标；返回结果：只绘制 overlay，不修改数据。
+ */
+function drawRemoteCursors(draw: DrawContext): void {
+  const { ctx, remoteCursors, viewport, worksheet, rowHeight, colWidth, scrollX, scrollY } = draw
+  if (remoteCursors.length === 0) {
+    return
+  }
+
+  ctx.save()
+  clipDataArea(ctx, viewport)
+  for (const cursor of remoteCursors) {
+    if (
+      cursor.row < 1 ||
+      cursor.col < 1 ||
+      cursor.row > worksheet.rowCount ||
+      cursor.col > worksheet.colCount
+    ) {
+      continue
+    }
+
+    const rect = getCellRect(cursor.row, cursor.col, scrollX, scrollY, rowHeight, colWidth)
+    if (!isRectInDataArea(rect, viewport)) {
+      continue
+    }
+
+    ctx.save()
+    ctx.globalAlpha = 0.15
+    ctx.fillStyle = cursor.color
+    ctx.fillRect(rect.x + 1, rect.y + 1, Math.max(0, rect.width - 2), Math.max(0, rect.height - 2))
+    ctx.restore()
+
+    strokeCellBorder(ctx, rect.x, rect.y, rect.width, rect.height, cursor.color, 2)
+  }
+  ctx.restore()
+}
+
 function drawSheetBackground(draw: DrawContext): void {
   const { ctx, worksheet, viewport, colWidth, rowHeight } = draw
   const { headerColWidth, headerRowHeight } = GRID_CHROME
@@ -690,9 +738,18 @@ function drawSelectionOverlay(draw: DrawContext): void {
     Math.max(0, selectionRect.height - 2)
   )
 
-  const isSingleCell = rowStart === rowEnd && colStart === colEnd
-  // 多选时 active 常在左上角，与选区外框重合；只描一次边框，避免双重高亮
-  if (isSingleCell && isActiveCellInSelection(activeCell, rowStart, rowEnd, colStart, colEnd)) {
+  // 选区外框较细，active cell 额外绘制粗边框，两者共享同一层浅蓝填充。
+  strokeCellBorder(
+    ctx,
+    selectionRect.x,
+    selectionRect.y,
+    selectionRect.width,
+    selectionRect.height,
+    COLORS.selectionBorder,
+    1
+  )
+
+  if (isActiveCellInSelection(activeCell, rowStart, rowEnd, colStart, colEnd)) {
     const activeRect = getCellRect(
       activeCell.row,
       activeCell.col,
@@ -712,16 +769,6 @@ function drawSelectionOverlay(draw: DrawContext): void {
         2
       )
     }
-  } else {
-    strokeCellBorder(
-      ctx,
-      selectionRect.x,
-      selectionRect.y,
-      selectionRect.width,
-      selectionRect.height,
-      COLORS.selectionBorder,
-      2
-    )
   }
 
   drawFillHandle(ctx, selectionRect, viewport)
@@ -772,6 +819,7 @@ export function renderOverlayLayer(
   const draw = createDrawContext(ctx, options)
   clearCanvas(ctx, options.viewport)
   drawSelectionOverlay(draw)
+  drawRemoteCursors(draw)
 }
 
 /**

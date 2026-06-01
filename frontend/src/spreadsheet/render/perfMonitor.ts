@@ -1,5 +1,6 @@
 // Canvas 渲染性能监控工具，用于开发阶段基线测量。
-// 输入渲染耗时和手动会话，输出可填表的控制台统计。
+// 输入渲染耗时与更新链路时间点，输出控制台统计结果。
+
 export type CanvasPerfSummary = {
   caseName: string
   operation: string
@@ -11,6 +12,23 @@ export type CanvasPerfSummary = {
   maxLongTaskMs: number
   totalLongTaskMs: number
   elapsedMs: number
+}
+
+export type SheetUpdateOperation = 'edit' | 'style' | 'delete' | 'unknown'
+
+export type SheetUpdatePerfSummary = {
+  id: number
+  operation: SheetUpdateOperation
+  cell: string
+  historySnapshotMs: number | null
+  commitMs: number | null
+  historyPushMs: number | null
+  storeToEffectMs: number | null
+  effectToRenderStartMs: number | null
+  renderMs: number | null
+  endToEndMs: number | null
+  layers: string
+  status: 'active' | 'done'
 }
 
 type CanvasPerfSession = {
@@ -25,6 +43,23 @@ type CanvasPerfSession = {
   totalLongTaskMs: number
 }
 
+type SheetUpdateTrace = {
+  id: number
+  operation: SheetUpdateOperation
+  row: number
+  col: number
+  label?: string
+  startedAt: number
+  historySnapshotDoneAt?: number
+  commitEndAt?: number
+  historyPushDoneAt?: number
+  worksheetObservedAt?: number
+  renderStartAt?: number
+  renderEndAt?: number
+  renderDurationMs?: number
+  layers?: string[]
+}
+
 type CanvasPerfApi = {
   start: (caseName: string, operation: string) => void
   stop: () => CanvasPerfSummary | null
@@ -33,15 +68,36 @@ type CanvasPerfApi = {
   summary: () => CanvasPerfSummary | null
 }
 
+type SheetUpdatePerfApi = {
+  start: (
+    operation: SheetUpdateOperation,
+    row: number,
+    col: number,
+    label?: string
+  ) => number | null
+  markHistorySnapshotDone: (id: number | null) => void
+  markCommitEnd: (id: number | null) => void
+  markHistoryPushDone: (id: number | null) => void
+  markWorksheetObserved: () => void
+  markRenderStart: (layers: string[]) => void
+  markRenderEnd: (durationMs: number, layers: string[]) => void
+  summary: () => SheetUpdatePerfSummary | null
+  reset: () => void
+}
+
 declare global {
   interface Window {
     __canvasPerf?: CanvasPerfApi
+    __sheetUpdatePerf?: SheetUpdatePerfApi
   }
 }
 
 const enabled = import.meta.env.DEV
 let activeSession: CanvasPerfSession | null = null
 let lastSummary: CanvasPerfSummary | null = null
+let activeUpdateTrace: SheetUpdateTrace | null = null
+let lastUpdateSummary: SheetUpdatePerfSummary | null = null
+let updateTraceSeq = 0
 let longTaskObserver: PerformanceObserver | null = null
 
 function ensureLongTaskObserver() {
@@ -86,6 +142,76 @@ function toSummary(session: CanvasPerfSession, endedAt = performance.now()): Can
     totalLongTaskMs: Number(session.totalLongTaskMs.toFixed(2)),
     elapsedMs: Number((endedAt - session.startedAt).toFixed(2)),
   }
+}
+
+function roundOrNull(value: number | undefined): number | null {
+  return value === undefined ? null : Number(value.toFixed(2))
+}
+
+function findActiveUpdateTrace(id: number | null): SheetUpdateTrace | null {
+  if (!id || !activeUpdateTrace || activeUpdateTrace.id !== id) {
+    return null
+  }
+
+  return activeUpdateTrace
+}
+
+function toSheetUpdateSummary(
+  trace: SheetUpdateTrace,
+  status: SheetUpdatePerfSummary['status']
+): SheetUpdatePerfSummary {
+  return {
+    id: trace.id,
+    operation: trace.operation,
+    cell: `${trace.row}:${trace.col}`,
+    historySnapshotMs: roundOrNull(
+      trace.historySnapshotDoneAt ? trace.historySnapshotDoneAt - trace.startedAt : undefined
+    ),
+    commitMs: roundOrNull(
+      trace.commitEndAt && trace.historySnapshotDoneAt
+        ? trace.commitEndAt - trace.historySnapshotDoneAt
+        : undefined
+    ),
+    historyPushMs: roundOrNull(
+      trace.historyPushDoneAt && trace.commitEndAt
+        ? trace.historyPushDoneAt - trace.commitEndAt
+        : undefined
+    ),
+    storeToEffectMs: roundOrNull(
+      trace.worksheetObservedAt && trace.commitEndAt
+        ? trace.worksheetObservedAt - trace.commitEndAt
+        : undefined
+    ),
+    effectToRenderStartMs: roundOrNull(
+      trace.renderStartAt && trace.worksheetObservedAt
+        ? trace.renderStartAt - trace.worksheetObservedAt
+        : undefined
+    ),
+    renderMs: roundOrNull(trace.renderDurationMs),
+    endToEndMs: roundOrNull(
+      trace.renderEndAt ? trace.renderEndAt - trace.startedAt : performance.now() - trace.startedAt
+    ),
+    layers: trace.layers?.join(',') ?? '',
+    status,
+  }
+}
+
+function printSheetUpdateSummary(summary: SheetUpdatePerfSummary) {
+  console.table([
+    {
+      id: summary.id,
+      操作: summary.operation,
+      单元格: summary.cell,
+      '历史快照(ms)': summary.historySnapshotMs,
+      '提交耗时(ms)': summary.commitMs,
+      '历史入栈(ms)': summary.historyPushMs,
+      'Store->组件(ms)': summary.storeToEffectMs,
+      '组件->rAF(ms)': summary.effectToRenderStartMs,
+      'Canvas render(ms)': summary.renderMs,
+      '端到端(ms)': summary.endToEndMs,
+      layers: summary.layers,
+    },
+  ])
 }
 
 export const canvasPerf: CanvasPerfApi = {
@@ -155,9 +281,120 @@ export const canvasPerf: CanvasPerfApi = {
   },
 }
 
+export const sheetUpdatePerf: SheetUpdatePerfApi = {
+  start(operation, row, col, label) {
+    if (!enabled) {
+      return null
+    }
+
+    updateTraceSeq += 1
+    activeUpdateTrace = {
+      id: updateTraceSeq,
+      operation,
+      row,
+      col,
+      label,
+      startedAt: performance.now(),
+    }
+    lastUpdateSummary = null
+    console.info(`[sheet-update-perf] start #${updateTraceSeq}: ${operation} ${row}:${col}`)
+    return updateTraceSeq
+  },
+
+  markHistorySnapshotDone(id) {
+    const trace = findActiveUpdateTrace(id)
+    if (!enabled || !trace) {
+      return
+    }
+
+    trace.historySnapshotDoneAt = performance.now()
+  },
+
+  markCommitEnd(id) {
+    const trace = findActiveUpdateTrace(id)
+    if (!enabled || !trace) {
+      return
+    }
+
+    trace.commitEndAt = performance.now()
+  },
+
+  markHistoryPushDone(id) {
+    const trace = findActiveUpdateTrace(id)
+    if (!enabled || !trace) {
+      return
+    }
+
+    trace.historyPushDoneAt = performance.now()
+  },
+
+  markWorksheetObserved() {
+    if (!enabled || !activeUpdateTrace || activeUpdateTrace.worksheetObservedAt) {
+      return
+    }
+
+    activeUpdateTrace.worksheetObservedAt = performance.now()
+  },
+
+  markRenderStart(layers) {
+    if (
+      !enabled ||
+      !activeUpdateTrace ||
+      !activeUpdateTrace.worksheetObservedAt ||
+      activeUpdateTrace.renderStartAt
+    ) {
+      return
+    }
+
+    activeUpdateTrace.renderStartAt = performance.now()
+    activeUpdateTrace.layers = layers
+  },
+
+  markRenderEnd(durationMs, layers) {
+    if (
+      !enabled ||
+      !activeUpdateTrace ||
+      !activeUpdateTrace.worksheetObservedAt ||
+      !activeUpdateTrace.renderStartAt ||
+      activeUpdateTrace.renderEndAt
+    ) {
+      return
+    }
+
+    activeUpdateTrace.renderEndAt = performance.now()
+    activeUpdateTrace.renderDurationMs = durationMs
+    activeUpdateTrace.layers = layers
+    lastUpdateSummary = toSheetUpdateSummary(activeUpdateTrace, 'done')
+    activeUpdateTrace = null
+    printSheetUpdateSummary(lastUpdateSummary)
+  },
+
+  summary() {
+    if (!enabled) {
+      return null
+    }
+
+    if (activeUpdateTrace) {
+      return toSheetUpdateSummary(activeUpdateTrace, 'active')
+    }
+
+    return lastUpdateSummary
+  },
+
+  reset() {
+    activeUpdateTrace = null
+    lastUpdateSummary = null
+    console.info('[sheet-update-perf] reset')
+  },
+}
+
 if (enabled && typeof window !== 'undefined') {
   window.__canvasPerf = canvasPerf
+  window.__sheetUpdatePerf = sheetUpdatePerf
   console.info(
     "[canvas-perf] ready. Use window.__canvasPerf.start('A 空表', '连续滚动 5s') and window.__canvasPerf.stop()."
+  )
+  console.info(
+    '[sheet-update-perf] ready. Edit a cell or apply a style, then run window.__sheetUpdatePerf.summary().'
   )
 }
