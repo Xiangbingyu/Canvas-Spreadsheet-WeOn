@@ -78,7 +78,6 @@ export function useUnifiedHistory(
         const key = `${row}:${col}`
         data[key] = ws.cells[key]
       }
-      console.log('[useUnifiedHistory] readRowData for row', row, ':', data)
       return data
     },
     [reduxStore]
@@ -93,7 +92,6 @@ export function useUnifiedHistory(
         const key = `${row}:${col}`
         data[key] = ws.cells[key]
       }
-      console.log('[useUnifiedHistory] readColData for col', col, ':', data)
       return data
     },
     [reduxStore]
@@ -137,7 +135,6 @@ export function useUnifiedHistory(
   // 行列操作入口
   const executeRowColWithHistory = useCallback(
     (action: 'insert_row' | 'delete_row' | 'insert_col' | 'delete_col', index: number) => {
-      console.log('[useUnifiedHistory] executeRowColWithHistory:', action, 'at index', index)
       let op: RowColOperation
 
       const sheetId = reduxStore.getState().workSheet.sheetId
@@ -175,14 +172,7 @@ export function useUnifiedHistory(
         }
       }
 
-      console.log('[useUnifiedHistory] pushing operation to history:', op)
       historyRef.current.push(op)
-      console.log(
-        '[useUnifiedHistory] history state - canUndo:',
-        historyRef.current.canUndo,
-        'canRedo:',
-        historyRef.current.canRedo
-      )
     },
     [dispatch, readRowData, readColData, collabClient, reduxStore]
   )
@@ -210,23 +200,16 @@ export function useUnifiedHistory(
   )
 
   const undo = useCallback(() => {
-    console.log('[useUnifiedHistory] undo triggered, canUndo:', historyRef.current.canUndo)
     const op = historyRef.current.popUndo()
-    console.log('[useUnifiedHistory] popped operation:', op)
     if (!op) return
 
     if ('before' in op && 'after' in op) {
       // 单个单元格操作
       const cellOp = op as CellOperation
-      console.log('[useUnifiedHistory] replaying cell undo')
       replayCellOp(cellOp, cellOp.before)
     } else if ('type' in op && op.type === 'batch_cell') {
       // 批量单元格操作 — 合并多个 dispatch 为一次
       const batchOp = op as BatchCellOperation
-      console.log(
-        '[useUnifiedHistory] replaying batch cell undo, count:',
-        batchOp.operations.length
-      )
       batch(() => {
         for (const cellOp of batchOp.operations) {
           replayCellOp(cellOp, cellOp.before)
@@ -235,36 +218,17 @@ export function useUnifiedHistory(
     } else if ('type' in op) {
       // 行列操作
       const rowColOp = op as RowColOperation
-      console.log(
-        '[useUnifiedHistory] executing reverse row/col operation:',
-        rowColOp.type,
-        'data:',
-        rowColOp.data
-      )
       // 反向操作：insert → delete，delete → insert
       if (rowColOp.type === 'insert_row') {
-        console.log('[useUnifiedHistory] undo insert_row → delete_row at index', rowColOp.index)
         replayRowColOp({ type: 'delete_row', index: rowColOp.index })
       } else if (rowColOp.type === 'delete_row') {
-        console.log(
-          '[useUnifiedHistory] undo delete_row → insert_row at index',
-          rowColOp.index,
-          'with data:',
-          rowColOp.data
-        )
         replayRowColOp({ type: 'insert_row', index: rowColOp.index })
         // 需要恢复被删除行的单元格数据
         if (rowColOp.data) {
-          console.log(
-            '[useUnifiedHistory] restoring deleted row data:',
-            Object.keys(rowColOp.data).length,
-            'cells'
-          )
           const ws = reduxStore.getState().workSheet
           batch(() => {
-            for (const [key, cell] of Object.entries(rowColOp.data ?? {})) {
+            for (const [, cell] of Object.entries(rowColOp.data ?? {})) {
               if (cell) {
-                console.log('[useUnifiedHistory] restoring cell', key, ':', cell)
                 const style = cell.styleId ? (ws.styles[cell.styleId] ?? {}) : undefined
                 rawCommit(cell.row, cell.col, cell.value, style)
               }
@@ -272,28 +236,15 @@ export function useUnifiedHistory(
           })
         }
       } else if (rowColOp.type === 'insert_col') {
-        console.log('[useUnifiedHistory] undo insert_col → delete_col at index', rowColOp.index)
         replayRowColOp({ type: 'delete_col', index: rowColOp.index })
       } else if (rowColOp.type === 'delete_col') {
-        console.log(
-          '[useUnifiedHistory] undo delete_col → insert_col at index',
-          rowColOp.index,
-          'with data:',
-          rowColOp.data
-        )
         replayRowColOp({ type: 'insert_col', index: rowColOp.index })
         // 需要恢复被删除列的单元格数据
         if (rowColOp.data) {
-          console.log(
-            '[useUnifiedHistory] restoring deleted col data:',
-            Object.keys(rowColOp.data).length,
-            'cells'
-          )
           const ws = reduxStore.getState().workSheet
           batch(() => {
-            for (const [key, cell] of Object.entries(rowColOp.data ?? {})) {
+            for (const [, cell] of Object.entries(rowColOp.data ?? {})) {
               if (cell) {
-                console.log('[useUnifiedHistory] restoring cell', key, ':', cell)
                 const style = cell.styleId ? (ws.styles[cell.styleId] ?? {}) : undefined
                 rawCommit(cell.row, cell.col, cell.value, style)
               }
@@ -305,23 +256,16 @@ export function useUnifiedHistory(
   }, [replayCellOp, replayRowColOp, rawCommit, reduxStore])
 
   const redo = useCallback(() => {
-    console.log('[useUnifiedHistory] redo triggered, canRedo:', historyRef.current.canRedo)
     const op = historyRef.current.popRedo()
-    console.log('[useUnifiedHistory] popped redo operation:', op)
     if (!op) return
 
     if ('after' in op && 'before' in op) {
       // 单个单元格操作
       const cellOp = op as CellOperation
-      console.log('[useUnifiedHistory] replaying cell redo')
       replayCellOp(cellOp, cellOp.after)
     } else if ('type' in op && op.type === 'batch_cell') {
       // 批量单元格操作 — 合并多个 dispatch 为一次
       const batchOp = op as BatchCellOperation
-      console.log(
-        '[useUnifiedHistory] replaying batch cell redo, count:',
-        batchOp.operations.length
-      )
       batch(() => {
         for (const cellOp of batchOp.operations) {
           replayCellOp(cellOp, cellOp.after)
@@ -329,7 +273,6 @@ export function useUnifiedHistory(
       })
     } else if ('type' in op) {
       // 行列操作
-      console.log('[useUnifiedHistory] replaying row/col operation:', op.type)
       replayRowColOp(op as RowColOperation)
     }
   }, [replayCellOp, replayRowColOp])
@@ -342,7 +285,6 @@ export function useUnifiedHistory(
       const target = e.target as HTMLElement | null
       if (target && (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT')) return
       e.preventDefault()
-      console.log('[useUnifiedHistory] keyboard shortcut triggered, shiftKey:', e.shiftKey)
       if (e.shiftKey) redo()
       else undo()
     }

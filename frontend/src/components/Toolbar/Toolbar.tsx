@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useDispatch, useSelector } from 'react-redux'
 import { IconButton } from '@/components/IconButton/IconButton'
 import { setSelectedCell } from '@/spreadsheet/store/selectStore'
+import { generateStyleId } from '@/spreadsheet/utils/generateStyleId'
 import type { RootState } from '@/spreadsheet/store'
 import type { Style } from '@/spreadsheet/model/types'
 import type { CommitCellFn } from '@/hooks/useSpreadsheetInteraction'
@@ -187,7 +188,7 @@ export function Toolbar({ onCommitCell, onCommitBatch, onUndo, onRedo }: Toolbar
     const minCol = Math.min(start.col, end.col)
     const maxCol = Math.max(start.col, end.col)
 
-    // 收集所有需要更新的单元格
+    // 收集所有需要更新的单元格（跳过样式无变化的格子，减少无效 dispatch / WS 发送）
     const updates: Array<{ row: number; col: number; value: string; style: Style }> = []
     for (let row = minRow; row <= maxRow; row++) {
       for (let col = minCol; col <= maxCol; col++) {
@@ -195,9 +196,16 @@ export function Toolbar({ onCommitCell, onCommitBatch, onUndo, onRedo }: Toolbar
         const cellStyle: Style = cell?.styleId ? (worksheet.styles[cell.styleId] ?? {}) : {}
         const cellValue = cell?.value ?? ''
         const next: Style = { ...cellStyle, ...patch }
+        // 样式无变化则跳过（同 styleId hash 即视为相同内容）
+        if (generateStyleId(next) === generateStyleId(cellStyle)) {
+          continue
+        }
         updates.push({ row, col, value: cellValue, style: next })
       }
     }
+
+    // 整个选区都无变化，直接返回
+    if (updates.length === 0) return
 
     // 如果只有一个单元格，直接用 onCommitCell；否则用批量提交
     if (updates.length === 1) {
