@@ -1025,6 +1025,62 @@ test('restored ws test 34', async () => {
   }
 });
 
+// ==================== cursor ====================
+
+test('cursor broadcasts cursor_update to room without audit log', async () => {
+  const srv = await createTestServer();
+  const sender = await connect(srv.wsUrl);
+  const other = await connect(srv.wsUrl);
+  try {
+    sender.send({ type: 'join', docId: 'doc_sys_001', clientId: 'cursor_sender' });
+    await sender.waitFor(2); // join_ack + self-presence
+
+    other.send({ type: 'join', docId: 'doc_sys_001', clientId: 'cursor_other' });
+    await other.waitFor(1); // join_ack
+    await sender.waitFor(3); // other join presence
+
+    const baseSender = sender.received.length;
+    const baseOther = other.received.length;
+
+    sender.send({
+      type: 'cursor',
+      docId: 'doc_sys_001',
+      clientId: 'cursor_sender',
+      row: 5,
+      col: 3,
+    });
+
+    await sender.waitFor(baseSender + 1);
+    await other.waitFor(baseOther + 1);
+
+    const expectedPayload = {
+      type: 'cursor_update',
+      code: 0,
+      message: 'ok',
+      data: {
+        docId: 'doc_sys_001',
+        clientId: 'cursor_sender',
+        row: 5,
+        col: 3,
+      },
+    };
+
+    const senderCursor = sender.received.slice(baseSender).find((message) => message.type === 'cursor_update');
+    const otherCursor = other.received.slice(baseOther).find((message) => message.type === 'cursor_update');
+
+    assert.deepEqual(senderCursor, expectedPayload);
+    assert.deepEqual(otherCursor, expectedPayload);
+
+    const auditLogStore = require('../store/auditLogStore');
+    const cursorLogs = await auditLogStore.listByEventType('cursor');
+    assert.equal(cursorLogs.length, 0);
+  } finally {
+    await sender.close();
+    await other.close();
+    await srv.close();
+  }
+});
+
 // ==================== 通用 WS 错误处理 ====================
 
 test('restored ws test 35', async () => {

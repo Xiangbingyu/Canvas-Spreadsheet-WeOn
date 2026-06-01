@@ -440,6 +440,76 @@ test('presence request returns cross-instance users and leave presence syncs acr
   }
 });
 
+test('cursor updates broadcast across instances', async () => {
+  const portA = await getFreePort();
+  const portB = await getFreePort();
+
+  const serverA = await startServerInstance({ port: portA, serverId: 'test-server-a-cursor' });
+  const serverB = await startServerInstance({ port: portB, serverId: 'test-server-b-cursor' });
+
+  const clientA = await connect(serverA.wsUrl);
+  const clientB = await connect(serverB.wsUrl);
+
+  try {
+    clientA.send({ type: 'join', docId: 'doc_sys_001', clientId: 'cursor-a' });
+    await clientA.waitFor((message) => message.type === 'join_ack' && message.data.clientId === 'cursor-a');
+
+    clientB.send({ type: 'join', docId: 'doc_sys_001', clientId: 'cursor-b' });
+    await clientB.waitFor((message) => message.type === 'join_ack' && message.data.clientId === 'cursor-b');
+
+    await clientA.waitFor((message) => (
+      message.type === 'presence'
+      && message.data.docId === 'doc_sys_001'
+      && Array.isArray(message.data.users)
+      && message.data.users.some((user) => user.clientId === 'cursor-a')
+      && message.data.users.some((user) => user.clientId === 'cursor-b')
+    ));
+
+    clientA.send({
+      type: 'cursor',
+      docId: 'doc_sys_001',
+      clientId: 'cursor-a',
+      row: 8,
+      col: 2,
+    });
+
+    const expectedPayload = {
+      type: 'cursor_update',
+      code: 0,
+      message: 'ok',
+      data: {
+        docId: 'doc_sys_001',
+        clientId: 'cursor-a',
+        row: 8,
+        col: 2,
+      },
+    };
+
+    const senderCursor = await clientA.waitFor((message) => (
+      message.type === 'cursor_update'
+      && message.data.docId === 'doc_sys_001'
+      && message.data.clientId === 'cursor-a'
+      && message.data.row === 8
+      && message.data.col === 2
+    ));
+    const otherCursor = await clientB.waitFor((message) => (
+      message.type === 'cursor_update'
+      && message.data.docId === 'doc_sys_001'
+      && message.data.clientId === 'cursor-a'
+      && message.data.row === 8
+      && message.data.col === 2
+    ));
+
+    assert.deepEqual(senderCursor, expectedPayload);
+    assert.deepEqual(otherCursor, expectedPayload);
+  } finally {
+    await clientA.close();
+    await clientB.close();
+    await serverA.stop();
+    await serverB.stop();
+  }
+});
+
 test('same client stays online until last cross-instance socket disconnects', async () => {
   const portA = await getFreePort();
   const portB = await getFreePort();

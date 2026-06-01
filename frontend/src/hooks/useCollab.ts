@@ -50,6 +50,7 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
             row: data.row,
             col: data.col,
             value: data.value,
+            sheetId: data.sheetId,
             style: data.style ? (data.style as Style) : undefined,
           })
         )
@@ -72,6 +73,7 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
             row: data.row,
             col: data.col,
             value: data.value,
+            sheetId: data.sheetId,
             style: data.style ? (data.style as Style) : undefined,
           })
         )
@@ -84,6 +86,7 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
             row: data.row,
             col: data.col,
             value: data.value,
+            sheetId: data.sheetId,
             style: data.style ? (data.style as Style) : undefined,
           })
         )
