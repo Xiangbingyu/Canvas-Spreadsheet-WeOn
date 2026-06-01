@@ -208,6 +208,7 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
       return true
     },
     sendCursor: (row: number, col: number) => clientRef.current?.sendCursor(row, col),
+    addSheet: (sheetName?: string) => clientRef.current?.addSheet(sheetName),
     insertRow: (sheetId: string, row: number) => {
       clientRef.current?.insertRow(sheetId, row)
     },
