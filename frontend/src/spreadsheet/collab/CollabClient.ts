@@ -435,6 +435,7 @@ export class CollabClient {
       const m = msg as Record<string, unknown>
       OfflineQueue.enqueue({
         docId: this.docId,
+        sheetId: (m.sheetId as string) ?? '',
         row: m.row as number,
         col: m.col as number,
         value: (m.value as string) ?? '',
@@ -468,6 +469,7 @@ export class CollabClient {
         type: 'set_cell',
         docId: this.docId,
         clientId: this.clientId,
+        sheetId: op.sheetId,
         row: op.row,
         col: op.col,
         value: op.value,
