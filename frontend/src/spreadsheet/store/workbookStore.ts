@@ -16,10 +16,16 @@ const initialState: WorkbookState = {
   sheets: {},
 }
 
+/** GET /docs/:docId 加载后写入 workbook（sheets 已由 HTTP 层规范化） */
+export type WorkbookSnapshotPayload = {
+  activeSheetId: string
+  sheetOrder: string[]
+  sheets: Record<string, WorksheetData>
+}
+
 type InitFromDocPayload = {
   docTitle: string
-  worksheet: WorksheetData
-}
+} & WorkbookSnapshotPayload
 
 type SwitchSheetPayload = {
   savedSheet: WorksheetData
@@ -35,13 +41,13 @@ const workbookSlice = createSlice({
   name: 'workbook',
   initialState,
   reducers: {
-    /** GET /docs 或新建文档后：单 sheet 快照 → 工作簿 */
+    /** GET /docs/:docId 加载：workbook 快照 → 工作簿 */
     initFromDoc(state, action: PayloadAction<InitFromDocPayload>) {
-      const { docTitle, worksheet } = action.payload
+      const { docTitle, activeSheetId, sheetOrder, sheets } = action.payload
       state.docTitle = docTitle
-      state.activeSheetId = worksheet.sheetId
-      state.sheetOrder = [worksheet.sheetId]
-      state.sheets = { [worksheet.sheetId]: worksheet }
+      state.activeSheetId = activeSheetId
+      state.sheetOrder = sheetOrder
+      state.sheets = sheets
     },
 
     setDocTitle(state, action: PayloadAction<string>) {
