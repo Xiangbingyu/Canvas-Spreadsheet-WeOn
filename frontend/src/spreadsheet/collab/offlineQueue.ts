@@ -47,6 +47,13 @@ export const OfflineQueue = {
     return ops
   },
 
+  /** 仅移除指定的操作，保留其他文档的队列 */
+  removeOps(toRemove: QueuedOp[]): void {
+    const ops = loadAll()
+    const set = new Set(toRemove)
+    saveAll(ops.filter((op) => !set.has(op)))
+  },
+
   clear(): void {
     saveAll([])
   },

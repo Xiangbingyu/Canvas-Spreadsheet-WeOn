@@ -9,7 +9,7 @@ import type {
   UserInfo,
   Snapshot,
 } from '../model/collabProtocol'
-import { OfflineQueue } from './offlineQueue'
+import { OfflineQueue, type QueuedOp } from './offlineQueue'
 
 // ===== 回调接口 =====
 
@@ -94,7 +94,6 @@ export class CollabClient {
       this.callbacks.onConnectionChange('connected')
       this.join()
       this.flushSendQueue()
-      this.replayOfflineQueue()
     }
 
     this.ws.onmessage = (event) => {
@@ -227,6 +226,7 @@ export class CollabClient {
         this.pendingOps.clear()
         this.callbacks.onSnapshot(msg.data.snapshot, msg.data.currentSeq)
         this.callbacks.onPresence(msg.data.users)
+        this.replayOfflineQueue()
         break
 
       case 'cell_updated':
@@ -377,8 +377,9 @@ export class CollabClient {
   private replayOfflineQueue(): void {
     const ops = OfflineQueue.dequeueAll()
     if (ops.length === 0) return
+    const replayed: QueuedOp[] = []
     for (const op of ops) {
-      if (op.docId !== this.docId) continue // 跳过其他文档的旧操作
+      if (op.docId !== this.docId) continue // 跳过其他文档，保留在队列
       this.send({
         type: 'set_cell',
         docId: this.docId,
@@ -389,7 +390,10 @@ export class CollabClient {
         style: op.style,
         baseSeq: op.baseSeq,
       })
+      replayed.push(op)
     }
+    // 只清除已回放的，其他文档的操作保留
+    if (replayed.length > 0) OfflineQueue.removeOps(replayed)
   }
 
   get currentSeq(): number {

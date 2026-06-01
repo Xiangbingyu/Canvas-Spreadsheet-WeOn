@@ -46,23 +46,36 @@ React 18 + Vite + TypeScript + Redux Toolkit + Canvas 2D + WebSocket (ws) + Shee
 - `frontend/src/spreadsheet/collab/LocalStubServer_test.ts`
 - `frontend/src/spreadsheet/collab/CollabTestPanel.tsx`
 
-## 还没做 / 待定
+## P1 已完成（在 feature/yjy-collaboration 分支）
 
-### 等别人对接
-- 在线用户列表 UI 未实现（数据已在 Redux `state.collab.users`）
-- title_updated 后 Menubar 读 `collab.docTitle`（dsx）
-- 彩色光标提醒未实现（P1）
+| # | 功能 | 状态 |
+|---|------|:---:|
+| 1 | 光标协议 + Redux（cursor/cursor_update 消息、sendCursor/onCursor、userCursors store） | ✅ |
+| 2 | OnlineUsers 组件（头像圆点+状态灯+断线横幅） | ✅ |
+| 3 | 离线队列 localStorage 持久化（OfflineQueue 工具类、send 断线写盘、replayOfflineQueue 补发） | ✅ |
 
-### P1（见 P1计划.md）
-- 离线编辑持久化 + 补发
-- 编辑框不同颜色 UI 实时显示避免冲突
-- 服务器部署后联机测试
-- 连接/在线用户 UI（下方状态栏）
-- 多用户协作 UI（和堵世轩对）
-- 更好的协同策略：悲观锁→乐观锁（和 xby 讨论）
+## 明天（6/1）要做
+
+1. **从 dev 建新分支**，组长要求基于新分支开发
+2. 把 P1 代码（已 commit 在 feature/yjy-collaboration）cherry-pick 或搬过去
+3. 继续 P1 剩余部分（见下方）
+4. 找 dsx/邓宏江/xby 对接（见 `P1对接说明.md`）
+
+## P1 待联调
+
+| 谁 | 做什么 |
+|----|------|
+| dsx | ① useEffect 调 sendCursor ② StatusBar 放 `<OnlineUsers />` ③ ImportExcelModal 换 importSheet ④ Menubar 读 docTitle |
+| 邓宏江 | Canvas 读 userCursors 画高亮背景 |
+| xby | cursor 后端 relay handler |
+
+## 本地未提交
+
+`CollabClient.ts` + `offlineQueue.ts` — 测试时修的 bug（replay 移入 join_ack、offlineQueue 加 removeOps）。明天在新分支上重新应用。
 
 ### 待定
-- 后端悲观锁是否改乐观锁（和 xby 协商）
+- 后端悲观锁（组长已定：Redis 悲观锁）
+- 离线同格冲突：当前 LWW，P2 加弹窗提示（见 `边界处理调研.md`）
 
 ## 协同核心概念
 - **seq**：服务端分配的全服自增序号，所有客户端按 seq 顺序 apply → 最终一致
@@ -81,12 +94,15 @@ cd frontend && npm run dev       # → localhost:5173
 
 ## 文档
 所有设计文档在 `ignore_协同实现/`：
-- `协同流程.md` — 完整协同链路（6 阶段，带代码行号）
-- `P0实现说明.md` — P0 要求逐项对照
-- `5.31改动.md` — 5.31 代码改动详情（权威）
-- `5.31合并冲突升级（配合后端）+改bug.md` — 后端变更 + 前端改动计划
-- `5.31对接说明.md` — 给 dsx 和卢晓玲的对接说明
-- `P1计划.md` — 后续优化计划
+- `协同流程.md` — 完整协同链路
+- `P0实现说明.md` — P0 逐项对照
+- `5.31改动.md` — 5.31 代码改动详情
+- `5.31对接说明.md` — dsx/卢晓玲对接
+- `P1计划.md` — P1 策略文档
+- `P1实施计划.md` — P1 详细步骤
+- `P1对接说明.md` — dsx/邓宏江/xby 对接
+- `P1完成清单+后续联调说明.md` — 完成情况+待联调
+- `边界处理调研.md` — 协同异常边界处理
+- `5.31工作日志.md` — 5.31 开发日志
 - `接口文档 5.31.md` — 最新后端接口文档
 - `worklog.md` — 开发日志
-- `进度汇报.md` — 进度汇报
