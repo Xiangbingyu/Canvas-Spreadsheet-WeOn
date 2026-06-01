@@ -2544,6 +2544,250 @@ test('add_sheet validates params and records history and audit', async () => {
   }
 });
 
+test('insert_row persists row shifts and clears document undo state', async () => {
+  const srv = await createTestServer();
+  const c = await connect(srv.wsUrl);
+  try {
+    await joinDoc(c, 'doc_sys_001', 'u_insert_row_clear');
+    const base = c.received.length;
+    c.send({
+      type: 'set_cell',
+      sheetId: DEFAULT_SHEET_ID,
+      docId: 'doc_sys_001',
+      clientId: 'u_insert_row_clear',
+      row: 2,
+      col: 2,
+      value: 'before-insert-row',
+    });
+    await c.waitFor(base + 2);
+
+    const userOpStateStore = require('../store/userOpStateStore');
+    const beforeInsert = await userOpStateStore.getState('doc_sys_001', 'u_insert_row_clear');
+    assert.ok(beforeInsert);
+    assert.equal(beforeInsert.undoStackJson.length, 1);
+
+    const insertBase = c.received.length;
+    c.send({
+      type: 'insert_row',
+      sheetId: DEFAULT_SHEET_ID,
+      docId: 'doc_sys_001',
+      clientId: 'u_insert_row_clear',
+      row: 2,
+    });
+    await c.waitFor(insertBase + 2);
+
+    const reply = c.received[insertBase];
+    assert.equal(reply.type, 'row_inserted');
+    assert.equal(reply.code, 0);
+    assert.equal(reply.data.docId, 'doc_sys_001');
+    assert.equal(reply.data.sheetId, DEFAULT_SHEET_ID);
+    assert.equal(reply.data.row, 2);
+    assert.equal(reply.data.canUndo, false);
+    assert.equal(reply.data.canRedo, false);
+
+    const { getDocState } = require('../service/docsService');
+    const docState = await getDocState('doc_sys_001');
+    const sheet = docState.snapshot.sheets[DEFAULT_SHEET_ID];
+    assert.equal(sheet.rowCount, 101);
+    assert.equal(sheet.cells['2:2'], undefined);
+    assert.equal(sheet.cells['3:2'].value, 'before-insert-row');
+    assert.equal(sheet.cells['0:1'].value, '销售金额');
+
+    const afterInsert = await userOpStateStore.getState('doc_sys_001', 'u_insert_row_clear');
+    assert.ok(afterInsert);
+    assert.equal(afterInsert.undoStackJson.length, 0);
+    assert.equal(afterInsert.redoStackJson.length, 0);
+  } finally {
+    await c.close();
+    await srv.close();
+  }
+});
+
+test('delete_row deletes target row and shifts following rows', async () => {
+  const srv = await createTestServer();
+  const c = await connect(srv.wsUrl);
+  try {
+    await joinDoc(c, 'doc_sys_001', 'u_delete_row_shift');
+    let base = c.received.length;
+    c.send({
+      type: 'set_cell',
+      sheetId: DEFAULT_SHEET_ID,
+      docId: 'doc_sys_001',
+      clientId: 'u_delete_row_shift',
+      row: 3,
+      col: 5,
+      value: 'delete-me',
+    });
+    await c.waitFor(base + 2);
+
+    base = c.received.length;
+    c.send({
+      type: 'set_cell',
+      sheetId: DEFAULT_SHEET_ID,
+      docId: 'doc_sys_001',
+      clientId: 'u_delete_row_shift',
+      row: 4,
+      col: 5,
+      value: 'move-up',
+    });
+    await c.waitFor(base + 2);
+
+    const deleteBase = c.received.length;
+    c.send({
+      type: 'delete_row',
+      sheetId: DEFAULT_SHEET_ID,
+      docId: 'doc_sys_001',
+      clientId: 'u_delete_row_shift',
+      row: 3,
+    });
+    await c.waitFor(deleteBase + 2);
+
+    const reply = c.received[deleteBase];
+    assert.equal(reply.type, 'row_deleted');
+    assert.equal(reply.data.row, 3);
+    assert.equal(reply.data.canUndo, false);
+    assert.equal(reply.data.canRedo, false);
+
+    const { getDocState } = require('../service/docsService');
+    const docState = await getDocState('doc_sys_001');
+    const sheet = docState.snapshot.sheets[DEFAULT_SHEET_ID];
+    assert.equal(sheet.cells['3:5'].value, 'move-up');
+    assert.equal(sheet.cells['4:5'], undefined);
+  } finally {
+    await c.close();
+    await srv.close();
+  }
+});
+
+test('insert_col broadcasts and shifts cells to the right', async () => {
+  const srv = await createTestServer();
+  const sender = await connect(srv.wsUrl);
+  const other = await connect(srv.wsUrl);
+  try {
+    await joinDoc(sender, 'doc_sys_001', 'u_insert_col_sender');
+    await joinDoc(other, 'doc_sys_001', 'u_insert_col_other');
+
+    let senderBase = sender.received.length;
+    let otherBase = other.received.length;
+    sender.send({
+      type: 'set_cell',
+      sheetId: DEFAULT_SHEET_ID,
+      docId: 'doc_sys_001',
+      clientId: 'u_insert_col_sender',
+      row: 6,
+      col: 2,
+      value: 'move-right',
+    });
+    await Promise.all([
+      sender.waitFor(senderBase + 2),
+      other.waitFor(otherBase + 1),
+    ]);
+
+    senderBase = sender.received.length;
+    otherBase = other.received.length;
+    sender.send({
+      type: 'insert_col',
+      sheetId: DEFAULT_SHEET_ID,
+      docId: 'doc_sys_001',
+      clientId: 'u_insert_col_sender',
+      col: 2,
+    });
+    await Promise.all([
+      sender.waitFor(senderBase + 2),
+      other.waitFor(otherBase + 1),
+    ]);
+
+    const senderReply = sender.received[senderBase];
+    const otherBroadcast = other.received[otherBase];
+    assert.equal(senderReply.type, 'col_inserted');
+    assert.equal(otherBroadcast.type, 'col_inserted');
+    assert.deepEqual(senderReply.data, otherBroadcast.data);
+    assert.equal(senderReply.data.col, 2);
+
+    const { getDocState } = require('../service/docsService');
+    const docState = await getDocState('doc_sys_001');
+    const sheet = docState.snapshot.sheets[DEFAULT_SHEET_ID];
+    assert.equal(sheet.cells['6:2'], undefined);
+    assert.equal(sheet.cells['6:3'].value, 'move-right');
+  } finally {
+    await sender.close();
+    await other.close();
+    await srv.close();
+  }
+});
+
+test('delete_col validates params and removes target column data', async () => {
+  const srv = await createTestServer();
+  const c = await connect(srv.wsUrl);
+  try {
+    c.send({ type: 'delete_col', docId: 'doc_sys_001', clientId: 'u1', sheetId: DEFAULT_SHEET_ID });
+    await c.waitFor(1);
+    assert.equal(c.received[0].type, 'error');
+    assert.equal(c.received[0].code, 4000);
+
+    await joinDoc(c, 'doc_sys_001', 'u_delete_col');
+    let base = c.received.length;
+    c.send({
+      type: 'set_cell',
+      sheetId: DEFAULT_SHEET_ID,
+      docId: 'doc_sys_001',
+      clientId: 'u_delete_col',
+      row: 8,
+      col: 4,
+      value: 'delete-col-target',
+    });
+    await c.waitFor(base + 2);
+
+    base = c.received.length;
+    c.send({
+      type: 'set_cell',
+      sheetId: DEFAULT_SHEET_ID,
+      docId: 'doc_sys_001',
+      clientId: 'u_delete_col',
+      row: 8,
+      col: 5,
+      value: 'shift-left',
+    });
+    await c.waitFor(base + 2);
+
+    const deleteBase = c.received.length;
+    c.send({
+      type: 'delete_col',
+      sheetId: DEFAULT_SHEET_ID,
+      docId: 'doc_sys_001',
+      clientId: 'u_delete_col',
+      col: 4,
+    });
+    await c.waitFor(deleteBase + 2);
+
+    const reply = c.received[deleteBase];
+    assert.equal(reply.type, 'col_deleted');
+    assert.equal(reply.data.col, 4);
+    assert.equal(reply.data.canUndo, false);
+    assert.equal(reply.data.canRedo, false);
+
+    const { getDocState } = require('../service/docsService');
+    const docState = await getDocState('doc_sys_001');
+    const sheet = docState.snapshot.sheets[DEFAULT_SHEET_ID];
+    assert.equal(sheet.cells['8:4'].value, 'shift-left');
+    assert.equal(sheet.cells['8:5'], undefined);
+
+    c.send({
+      type: 'delete_col',
+      sheetId: DEFAULT_SHEET_ID,
+      docId: 'doc_sys_001',
+      clientId: 'u_delete_col',
+      col: 999,
+    });
+    await c.waitFor(deleteBase + 3);
+    assert.equal(c.received.at(-1).type, 'error');
+    assert.equal(c.received.at(-1).code, 4000);
+  } finally {
+    await c.close();
+    await srv.close();
+  }
+});
+
 
 // ==================== undo ====================
 

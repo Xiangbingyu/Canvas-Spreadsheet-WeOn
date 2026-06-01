@@ -142,6 +142,25 @@ function createUserOpStateMemoryStore() {
       return deleteStoredRow(docId, clientId);
     },
 
+    async clearByDocId(docId) {
+      purgeExpiredRows();
+
+      for (const row of rowsById.values()) {
+        if (row.docId !== docId) {
+          continue;
+        }
+
+        upsert({
+          docId: row.docId,
+          clientId: row.clientId,
+          undoStackJson: [],
+          redoStackJson: [],
+        });
+      }
+
+      return cloneRecords(Array.from(rowsById.values()).filter((row) => row.docId === docId));
+    },
+
     async purgeExpired() {
       purgeExpiredRows();
       return cloneRecords(Array.from(rowsById.values()));

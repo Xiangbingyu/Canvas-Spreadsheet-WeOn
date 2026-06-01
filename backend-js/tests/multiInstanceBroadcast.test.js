@@ -327,6 +327,22 @@ test('redis pubsub broadcasts join/add_sheet/set_cell/set_title/import_sheet/und
     assert.equal(redoApplied.data.value, 'from-a');
 
     clientA.send({
+       type: 'insert_row',
+      docId: 'doc_sys_001',
+      clientId: 'uA',
+      sheetId: addedSheetId,
+      row: 9,
+    });
+    const rowInserted = await clientB.waitFor((message) => (
+      message.type === 'row_inserted'
+      && message.data.docId === 'doc_sys_001'
+      && message.data.sheetId === addedSheetId
+      && message.data.row === 9
+    ));
+    assert.equal(rowInserted.data.canUndo, false);
+    assert.equal(rowInserted.data.canRedo, false);
+
+    clientA.send({
       type: 'import_sheet',
       docId: 'doc_sys_001',
       clientId: 'uA',

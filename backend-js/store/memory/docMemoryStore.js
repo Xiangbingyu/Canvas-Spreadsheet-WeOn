@@ -6,6 +6,7 @@ const {
   buildDefaultSheetName,
 } = require('../../domain/entities/doc');
 const { deepClone } = require('../../utils/clone');
+const { applySheetStructureChangeToSnapshot } = require('../../utils/sheetStructure');
 
 function stableStringify(value) {
   if (Array.isArray(value)) {
@@ -284,6 +285,45 @@ function createDocMemoryStore() {
       }
 
       return { ...updatedDoc, _before: { title: current.title } };
+    },
+
+    async applySheetStructureChange(command) {
+      const current = getStoredRowByDocId(command.docId);
+
+      if (!current) {
+        return null;
+      }
+
+      const structureResult = applySheetStructureChangeToSnapshot(current.snapshotJson, {
+        docId: command.docId,
+        sheetId: command.sheetId,
+        opType: command.opType,
+        row: command.row,
+        col: command.col,
+      });
+
+      if (!structureResult.ok || !structureResult.targetSheetId) {
+        return null;
+      }
+
+      const updatedDoc = updateByDocId(command.docId, {
+        snapshotJson: structureResult.nextSnapshot,
+        currentSeq: Number.isInteger(command.seq) ? command.seq : current.currentSeq + 1,
+      });
+
+      if (!updatedDoc) {
+        return null;
+      }
+
+      return {
+        ...updatedDoc,
+        _targetSheetId: structureResult.targetSheetId,
+        _structureChange: {
+          opType: command.opType,
+          row: Number.isInteger(command.row) ? command.row : null,
+          col: Number.isInteger(command.col) ? command.col : null,
+        },
+      };
     },
 
     async applyImportSheet(command) {

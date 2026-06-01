@@ -6,6 +6,7 @@ const {
   buildDefaultSheetName,
 } = require('../../domain/entities/doc');
 const { ensureMysqlReady, query, execute, withTransaction } = require('../../db/mysql');
+const { applySheetStructureChangeToSnapshot } = require('../../utils/sheetStructure');
 
 function cloneJsonValue(value) {
   if (value === undefined || value === null) {
@@ -429,6 +430,56 @@ function createDocMysqlStore() {
 
         const updatedDoc = await findByDocId(command.docId, { connection });
         return { ...updatedDoc, _before: { title: current.title } };
+      }, options);
+    },
+
+    async applySheetStructureChange(command, options = {}) {
+      await ensureReady();
+
+      return runWithOptionalTransaction(async (connection) => {
+        const current = await findByDocId(command.docId, { connection, forUpdate: true });
+
+        if (!current) {
+          return null;
+        }
+
+        const structureResult = applySheetStructureChangeToSnapshot(current.snapshotJson, {
+          docId: command.docId,
+          sheetId: command.sheetId,
+          opType: command.opType,
+          row: command.row,
+          col: command.col,
+        });
+
+        if (!structureResult.ok || !structureResult.targetSheetId) {
+          return null;
+        }
+
+        const nextSeq = Number.isInteger(command.seq) ? command.seq : current.currentSeq + 1;
+        const updatedAt = new Date().toISOString();
+
+        await connection.execute(
+          `UPDATE doc
+          SET snapshot_json = CAST(? AS JSON), current_seq = ?, updated_at = ?
+          WHERE id = ?`,
+          [
+            stringifyJsonValue(structureResult.nextSnapshot, {}),
+            nextSeq,
+            toMysqlDateValue(updatedAt),
+            current.id,
+          ]
+        );
+
+        const updatedDoc = await findByDocId(command.docId, { connection });
+        return {
+          ...updatedDoc,
+          _targetSheetId: structureResult.targetSheetId,
+          _structureChange: {
+            opType: command.opType,
+            row: Number.isInteger(command.row) ? command.row : null,
+            col: Number.isInteger(command.col) ? command.col : null,
+          },
+        };
       }, options);
     },
 

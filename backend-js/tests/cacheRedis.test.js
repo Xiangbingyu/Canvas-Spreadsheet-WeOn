@@ -412,6 +412,51 @@ test('redis cache invalidates GET /docs list after set_title across instances', 
   }
 });
 
+test('redis cache serves fresh snapshot after insert_row across instances', async () => {
+  const portA = await getFreePort();
+  const portB = await getFreePort();
+
+  const serverA = await startServerInstance({ port: portA, serverId: 'cache-redis-insert-row-a' });
+  const serverB = await startServerInstance({ port: portB, serverId: 'cache-redis-insert-row-b' });
+  const editor = await connect(serverA.wsUrl);
+  const observer = await connect(serverB.wsUrl);
+
+  try {
+    const firstDocRead = await getJson(serverA.baseUrl, '/docs/doc_sys_001');
+    assert.equal(firstDocRead.status, 200);
+    assert.equal(firstDocRead.json.data.snapshot.sheets[DEFAULT_SHEET_ID].cells['1:1'].value, '9999.00');
+
+    await joinRoom(editor, 'doc_sys_001', 'cache-insert-row-editor');
+    await joinRoom(observer, 'doc_sys_001', 'cache-insert-row-observer');
+
+    editor.send({
+      type: 'insert_row',
+      docId: 'doc_sys_001',
+      clientId: 'cache-insert-row-editor',
+      sheetId: DEFAULT_SHEET_ID,
+      row: 1,
+    });
+    await observer.waitFor((message) => (
+      message.type === 'row_inserted'
+      && message.data.docId === 'doc_sys_001'
+      && message.data.sheetId === DEFAULT_SHEET_ID
+      && message.data.row === 1
+    ));
+
+    const secondDocRead = await getJson(serverB.baseUrl, '/docs/doc_sys_001');
+    assert.equal(secondDocRead.status, 200);
+    const sheet = secondDocRead.json.data.snapshot.sheets[DEFAULT_SHEET_ID];
+    assert.equal(sheet.rowCount, 101);
+    assert.equal(sheet.cells['1:1'], undefined);
+    assert.equal(sheet.cells['2:1'].value, '9999.00');
+  } finally {
+    await editor.close();
+    await observer.close();
+    await serverA.stop();
+    await serverB.stop();
+  }
+});
+
 test('redis cache invalidates participated and all lists after set_title across instances', async () => {
   const portA = await getFreePort();
   const portB = await getFreePort();

@@ -331,7 +331,7 @@
         </div>
         <div class="hero-card">
           <div class="hero-label">WebSocket message types</div>
-          <div class="hero-value">join, presence, set_cell, set_title, add_sheet, import_sheet, undo, redo</div>
+          <div class="hero-value">join, presence, set_cell, insert_row, delete_row, insert_col, delete_col, set_title, add_sheet, import_sheet, undo, redo</div>
         </div>
       </div>
     </section>
@@ -559,6 +559,54 @@
             color: '#ffffff',
             bgColor: '#0f766e',
           },
+        },
+      },
+      {
+        title: 'Insert Row',
+        type: 'insert_row',
+        description: 'Insert one empty row before the specified 1-based row. Success messages use row_inserted and clear the document undo/redo stacks.',
+        template: {
+          type: 'insert_row',
+          docId: 'doc_sys_001',
+          clientId: 'user_001',
+          sheetId: 'sheet_20260527_001',
+          row: 3,
+        },
+      },
+      {
+        title: 'Delete Row',
+        type: 'delete_row',
+        description: 'Delete the specified 1-based row. Success messages use row_deleted and clear the document undo/redo stacks.',
+        template: {
+          type: 'delete_row',
+          docId: 'doc_sys_001',
+          clientId: 'user_001',
+          sheetId: 'sheet_20260527_001',
+          row: 3,
+        },
+      },
+      {
+        title: 'Insert Column',
+        type: 'insert_col',
+        description: 'Insert one empty column before the specified 1-based column. Success messages use col_inserted and clear the document undo/redo stacks.',
+        template: {
+          type: 'insert_col',
+          docId: 'doc_sys_001',
+          clientId: 'user_001',
+          sheetId: 'sheet_20260527_001',
+          col: 2,
+        },
+      },
+      {
+        title: 'Delete Column',
+        type: 'delete_col',
+        description: 'Delete the specified 1-based column. Success messages use col_deleted and clear the document undo/redo stacks.',
+        template: {
+          type: 'delete_col',
+          docId: 'doc_sys_001',
+          clientId: 'user_001',
+          sheetId: 'sheet_20260527_001',
+          col: 2,
         },
       },
       {

@@ -461,6 +461,11 @@ async function applyAddSheet(command, options = {}) {
   return docStore.applyAddSheet(command, { connection });
 }
 
+async function applySheetStructureChange(command, options = {}) {
+  const { connection = null } = options;
+  return docStore.applySheetStructureChange(command, { connection });
+}
+
 module.exports = {
   createDoc,
   listDocsByUser,
@@ -471,6 +476,7 @@ module.exports = {
   applySetTitle,
   applyImportSheet,
   applyAddSheet,
+  applySheetStructureChange,
   primeDocCaches,
   invalidateDocCaches,
   invalidateUserDocsListCaches,
