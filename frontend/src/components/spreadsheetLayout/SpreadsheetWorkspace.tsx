@@ -12,7 +12,7 @@ import { useSpreadsheetInteraction } from '@/hooks/useSpreadsheetInteraction'
 import { useCommitCell } from '@/hooks/useCommitCell'
 import { useCollab } from '@/hooks/useCollab'
 import { useUnifiedHistory } from '@/hooks/useUnifiedHistory'
-import { importWorkbook, setWorksheet, type RootState } from '@/spreadsheet/store'
+import type { RootState } from '@/spreadsheet/store'
 import type { WorkbookSnapshotPayload } from '@/spreadsheet/store/workbookStore'
 import { setSelectedCell } from '@/spreadsheet/store/selectStore'
 
@@ -26,28 +26,29 @@ export function SpreadsheetWorkspace() {
   const docId = useSelector((s: RootState) => s.collab.docId)
   const clientId = useSelector((s: RootState) => s.collab.clientId)
 
-  const { connect, disconnect, setCell, setTitle, getClient } = useCollab({
+  const { connect, disconnect, setCell, setTitle, importWorkbook, getClient } = useCollab({
     url: COLLAB_WS_URL,
     docId,
     clientId,
   })
 
   const handleImportWorkbook = useCallback(
-    (workbook: WorkbookSnapshotPayload) => {
-      dispatch(importWorkbook(workbook))
+    (workbook: WorkbookSnapshotPayload): boolean => {
+      const sent = importWorkbook(workbook)
       const activeSheet = workbook.sheets[workbook.activeSheetId]
-      if (!activeSheet) return
-      dispatch(setWorksheet(activeSheet))
-      dispatch(
-        setSelectedCell({
-          row: 1,
-          col: 1,
-          value: activeSheet.cells['1:1']?.value ?? '',
-          style: {},
-        })
-      )
+      if (activeSheet) {
+        dispatch(
+          setSelectedCell({
+            row: 1,
+            col: 1,
+            value: activeSheet.cells['1:1']?.value ?? '',
+            style: {},
+          })
+        )
+      }
+      return sent
     },
-    [dispatch]
+    [importWorkbook, dispatch]
   )
 
   useEffect(() => {
@@ -56,7 +57,6 @@ export function SpreadsheetWorkspace() {
       return
     }
 
-    // disconnect()
     connect()
 
     return () => {

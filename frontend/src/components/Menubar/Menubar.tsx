@@ -12,8 +12,8 @@ import type { WorkbookSnapshotPayload } from '@/spreadsheet/store/workbookStore'
 
 type MenubarProps = {
   userInitial?: string
-  /** Excel 导入：写入 Redux workbook，暂不经过 WS */
-  onImportWorkbook: (workbook: WorkbookSnapshotPayload) => void
+  /** Excel 导入：乐观更新本地 + WS import_sheet；返回是否已同步到服务端 */
+  onImportWorkbook: (workbook: WorkbookSnapshotPayload) => boolean
   /** 提交文档标题（WS set_title）；缺省时标题只读 */
   onSetTitle?: (title: string) => void
 }

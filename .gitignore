@@ -35,6 +35,13 @@ lerna-debug.log*
 # Test / coverage
 coverage/
 
+# Claude Code 本地配置（不进 git）
+.claude/
+
+# 本地协同测试（不进 git）
+frontend/src/spreadsheet/collab/LocalStubServer_test.ts
+frontend/src/spreadsheet/collab/CollabTestPanel.tsx
+
 # Lock files from other package managers (本仓库统一使用 pnpm)
 package-lock.json
 yarn.lock

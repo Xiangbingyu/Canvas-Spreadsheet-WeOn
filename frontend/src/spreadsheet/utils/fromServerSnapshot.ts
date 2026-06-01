@@ -1,5 +1,6 @@
 import type { Cell, WorksheetData } from '@/spreadsheet/model/types'
 import type { ServerSheetSnapshot, WorkbookSnapshot } from '@/services/httpType'
+import type { WorkbookSnapshotPayload } from '@/spreadsheet/store/workbookStore'
 
 /** 与 workSheetStore 初始态一致：后端新建文档 snapshot 常为 rowCount/colCount=0，需补全才能绘制网格 */
 const DEFAULT_ROW_COUNT = 1000
@@ -130,8 +131,7 @@ export function fromHttpDocWorkbookSnapshot(snapshot: WorkbookSnapshot): {
   return { activeSheetId, sheetOrder, sheets }
 }
 
-/** 将前端 WorksheetData 转为后端单个 sheet 快照形态（协作 import_sheet 等） */
-export function toServerSnapshot(worksheet: WorksheetData): ServerSnapshotInput {
+function worksheetToServerSheet(worksheet: WorksheetData): ServerSheetSnapshot {
   return {
     id: worksheet.sheetId,
     name: worksheet.sheetName,
@@ -141,5 +141,30 @@ export function toServerSnapshot(worksheet: WorksheetData): ServerSnapshotInput 
     colCount: worksheet.colCount,
     styles: worksheet.styles,
     cells: worksheet.cells,
+  }
+}
+
+/** 单 sheet → workbook 快照（仅含一张表，协同 import_sheet 兜底） */
+export function toWorkbookSnapshot(worksheet: WorksheetData): WorkbookSnapshot {
+  const sheetId = worksheet.sheetId
+  return {
+    activeSheetId: sheetId,
+    sheetOrder: [sheetId],
+    sheets: { [sheetId]: worksheetToServerSheet(worksheet) },
+  }
+}
+
+/** Excel 多表导入结果 → WS import_sheet 请求体 */
+export function toServerWorkbookSnapshotFromPayload(
+  payload: WorkbookSnapshotPayload
+): WorkbookSnapshot {
+  const sheets: Record<string, ServerSheetSnapshot> = {}
+  for (const [sheetId, worksheet] of Object.entries(payload.sheets)) {
+    sheets[sheetId] = worksheetToServerSheet(worksheet)
+  }
+  return {
+    activeSheetId: payload.activeSheetId,
+    sheetOrder: payload.sheetOrder,
+    sheets,
   }
 }
