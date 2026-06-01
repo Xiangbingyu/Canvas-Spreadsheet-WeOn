@@ -268,6 +268,71 @@ function createDocMemoryStore() {
       };
     },
 
+    async applyBatchSetCell(command) {
+      const current = getStoredRowByDocId(command.docId);
+
+      if (!current) {
+        return null;
+      }
+
+      const nextSnapshot = normalizeDocSnapshot(current.snapshotJson, { docId: command.docId });
+      const { sheetId: targetSheetId, sheet: targetSheet } = resolveTargetSheet(nextSnapshot, command.sheetId);
+
+      if (!targetSheetId || !targetSheet) {
+        return null;
+      }
+
+      const appliedUpdates = [];
+
+      for (const update of command.updates || []) {
+        const cellKey = `${update.row}:${update.col}`;
+        const previousCell = targetSheet.cells[cellKey] || {};
+        const oldValue = previousCell.value ?? '';
+        const oldStyleId = typeof previousCell.styleId === 'string' ? previousCell.styleId : null;
+        const oldStyle = oldStyleId ? deepClone(targetSheet.styles[oldStyleId] || null) : null;
+        const nextStyleIdValue = findOrCreateStyleId(targetSheet, update.style);
+
+        targetSheet.cells[cellKey] = {
+          row: update.row,
+          col: update.col,
+          value: update.value ?? '',
+          styleId: nextStyleIdValue,
+        };
+
+        if (update.row > targetSheet.rowCount) {
+          targetSheet.rowCount = update.row;
+        }
+
+        if (update.col > targetSheet.colCount) {
+          targetSheet.colCount = update.col;
+        }
+
+        appliedUpdates.push({
+          row: update.row,
+          col: update.col,
+          oldValue,
+          oldStyle,
+          newValue: update.value ?? '',
+          newStyle: update.style ?? null,
+        });
+      }
+
+      const updatedDoc = updateByDocId(command.docId, {
+        snapshotJson: nextSnapshot,
+        currentSeq: Number.isInteger(command.seq) ? command.seq : current.currentSeq + 1,
+      });
+
+      if (!updatedDoc) {
+        return null;
+      }
+
+      return {
+        ...updatedDoc,
+        _targetSheetId: targetSheetId,
+        _batchUpdates: appliedUpdates,
+      };
+    },
+
     async applySetTitle(command) {
       const current = getStoredRowByDocId(command.docId);
 

@@ -446,6 +446,11 @@ async function applySetCell(command, options = {}) {
   return docStore.applySetCell(command, { connection });
 }
 
+async function applyBatchSetCell(command, options = {}) {
+  const { connection = null } = options;
+  return docStore.applyBatchSetCell(command, { connection });
+}
+
 async function applySetTitle(command, options = {}) {
   const { connection = null } = options;
   return docStore.applySetTitle(command, { connection });
@@ -473,6 +478,7 @@ module.exports = {
   getDocStateForWrite,
   getDocMeta,
   applySetCell,
+  applyBatchSetCell,
   applySetTitle,
   applyImportSheet,
   applyAddSheet,

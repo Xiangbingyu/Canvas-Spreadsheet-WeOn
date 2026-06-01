@@ -190,9 +190,103 @@ async function rebaseSetCellCommand({
   };
 }
 
+async function rebaseBatchSetCellCommand({
+  command,
+  currentDoc,
+  historyStore,
+  connection = null,
+}) {
+  const normalizedBaseSeq = normalizeBaseSeq(command.baseSeq);
+
+  if (normalizedBaseSeq === null) {
+    return {
+      command: {
+        ...command,
+        baseSeq: null,
+      },
+      rebaseResult: {
+        enabled: false,
+        rebased: false,
+        baseSeq: null,
+        conflictSeq: null,
+      },
+    };
+  }
+
+  if (normalizedBaseSeq > currentDoc.currentSeq) {
+    throw createServiceError(ERROR_CODES.CONFLICT, 'baseSeq is ahead of current document version', {
+      docId: command.docId,
+      baseSeq: normalizedBaseSeq,
+      currentSeq: currentDoc.currentSeq,
+    });
+  }
+
+  if (normalizedBaseSeq === currentDoc.currentSeq) {
+    return {
+      command: {
+        ...command,
+        baseSeq: normalizedBaseSeq,
+      },
+      rebaseResult: {
+        enabled: true,
+        rebased: false,
+        baseSeq: normalizedBaseSeq,
+        conflictSeq: null,
+      },
+    };
+  }
+
+  const historyEntries = await historyStore.listByDocIdSeqRange(
+    command.docId,
+    normalizedBaseSeq,
+    currentDoc.currentSeq,
+    { connection }
+  );
+  const barrierEntry = historyEntries.find((entry) => shouldTreatAsOtBarrier(entry));
+
+  if (barrierEntry) {
+    throw createServiceError(ERROR_CODES.CONFLICT, 'document changed by import_sheet, please refresh and retry', {
+      docId: command.docId,
+      baseSeq: normalizedBaseSeq,
+      currentSeq: currentDoc.currentSeq,
+      conflictSeq: barrierEntry.seq,
+      conflictOpType: barrierEntry.opType,
+    });
+  }
+
+  return {
+    command: {
+      ...command,
+      baseSeq: normalizedBaseSeq,
+      updates: (command.updates || []).map((update) => {
+        const transformedTarget = transformCellReferenceThroughHistory({
+          sheetId: command.sheetId,
+          row: update.row,
+          col: update.col,
+          historyEntries,
+          currentDoc,
+        });
+
+        return {
+          ...update,
+          row: transformedTarget.row,
+          col: transformedTarget.col,
+        };
+      }),
+    },
+    rebaseResult: {
+      enabled: true,
+      rebased: true,
+      baseSeq: normalizedBaseSeq,
+      conflictSeq: null,
+    },
+  };
+}
+
 module.exports = {
   normalizeBaseSeq,
   shouldTreatAsOtBarrier,
   transformCellReferenceThroughHistory,
   rebaseSetCellCommand,
+  rebaseBatchSetCellCommand,
 };

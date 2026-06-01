@@ -2167,6 +2167,172 @@ test('stale set_cell is transformed across delete_col on the same sheet', async 
   }
 });
 
+test('batch_set_cell applies one shared patch with a single seq', async () => {
+  const srv = await createTestServer();
+  const c = await connect(srv.wsUrl);
+  try {
+    const joinAck = await joinDoc(c, 'doc_sys_001', 'u_batch_basic');
+    const baseSeq = joinAck.data.currentSeq;
+
+    const base = c.received.length;
+    c.send({
+      type: 'batch_set_cell',
+      docId: 'doc_sys_001',
+      clientId: 'u_batch_basic',
+      sheetId: DEFAULT_SHEET_ID,
+      baseSeq,
+      updates: [
+        { row: 2, col: 2 },
+        { row: 2, col: 3 },
+        { row: 3, col: 2 },
+      ],
+      value: 'batch-basic',
+      style: { bold: true, color: '#ffffff', bgColor: '#2563eb' },
+    });
+    await c.waitFor(base + 2);
+
+    const reply = c.received[base];
+    assert.equal(reply.type, 'batch_cell_updated');
+    assert.equal(reply.data.updates.length, 3);
+    assert.equal(typeof reply.data.seq, 'number');
+
+    const { getDocState } = require('../service/docsService');
+    const docState = await getDocState('doc_sys_001');
+    const sheet = docState.snapshot.sheets[DEFAULT_SHEET_ID];
+    assert.equal(sheet.cells['2:2'].value, 'batch-basic');
+    assert.equal(sheet.cells['2:3'].value, 'batch-basic');
+    assert.equal(sheet.cells['3:2'].value, 'batch-basic');
+  } finally {
+    await c.close();
+    await srv.close();
+  }
+});
+
+test('batch_set_cell transforms each target through structure changes and dedupes collisions', async () => {
+  const srv = await createTestServer();
+  const c = await connect(srv.wsUrl);
+  try {
+    const joinAck = await joinDoc(c, 'doc_sys_001', 'u_batch_transform');
+    const staleBaseSeq = joinAck.data.currentSeq;
+
+    let base = c.received.length;
+    c.send({
+      type: 'delete_col',
+      docId: 'doc_sys_001',
+      clientId: 'u_batch_transform',
+      sheetId: DEFAULT_SHEET_ID,
+      col: 2,
+    });
+    await c.waitFor(base + 2);
+
+    base = c.received.length;
+    c.send({
+      type: 'batch_set_cell',
+      docId: 'doc_sys_001',
+      clientId: 'u_batch_transform',
+      sheetId: DEFAULT_SHEET_ID,
+      baseSeq: staleBaseSeq,
+      updates: [
+        { row: 1, col: 2 },
+        { row: 1, col: 3 },
+      ],
+      value: 'batch-after-delete-col',
+    });
+    await c.waitFor(base + 2);
+
+    const reply = c.received[base];
+    assert.equal(reply.type, 'batch_cell_updated');
+    assert.equal(reply.data.updates.length, 1);
+    assert.deepEqual(reply.data.updates[0], {
+      row: 1,
+      col: 2,
+      value: 'batch-after-delete-col',
+      style: null,
+    });
+
+    const { getDocState } = require('../service/docsService');
+    const docState = await getDocState('doc_sys_001');
+    const sheet = docState.snapshot.sheets[DEFAULT_SHEET_ID];
+    assert.equal(sheet.cells['1:2'].value, 'batch-after-delete-col');
+  } finally {
+    await c.close();
+    await srv.close();
+  }
+});
+
+test('batch_set_cell supports batch undo and redo after structure changes', async () => {
+  const srv = await createTestServer();
+  const c = await connect(srv.wsUrl);
+  try {
+    const joinAck = await joinDoc(c, 'doc_sys_001', 'u_batch_undo_redo');
+    const baseSeq = joinAck.data.currentSeq;
+
+    let base = c.received.length;
+    c.send({
+      type: 'batch_set_cell',
+      docId: 'doc_sys_001',
+      clientId: 'u_batch_undo_redo',
+      sheetId: DEFAULT_SHEET_ID,
+      baseSeq,
+      updates: [
+        { row: 10, col: 2 },
+        { row: 10, col: 3 },
+      ],
+      value: 'batch-before-transform',
+    });
+    await c.waitFor(base + 2);
+
+    base = c.received.length;
+    c.send({
+      type: 'insert_row',
+      docId: 'doc_sys_001',
+      clientId: 'u_batch_undo_redo',
+      sheetId: DEFAULT_SHEET_ID,
+      row: 5,
+    });
+    await c.waitFor(base + 2);
+
+    base = c.received.length;
+    c.send({
+      type: 'undo',
+      docId: 'doc_sys_001',
+      clientId: 'u_batch_undo_redo',
+    });
+    await c.waitFor(base + 2);
+
+    const undoReply = c.received[base];
+    assert.equal(undoReply.type, 'undo_applied');
+    assert.equal(Array.isArray(undoReply.data.updates), true);
+    assert.equal(undoReply.data.updates.length, 2);
+
+    base = c.received.length;
+    c.send({
+      type: 'redo',
+      docId: 'doc_sys_001',
+      clientId: 'u_batch_undo_redo',
+    });
+    await c.waitFor(base + 2);
+
+    const redoReply = c.received[base];
+    assert.equal(redoReply.type, 'redo_applied');
+    assert.equal(Array.isArray(redoReply.data.updates), true);
+    assert.equal(redoReply.data.updates.length, 2);
+    assert.deepEqual(
+      redoReply.data.updates.map((update) => `${update.row}:${update.col}`).sort(),
+      ['11:2', '11:3']
+    );
+
+    const { getDocState } = require('../service/docsService');
+    const docState = await getDocState('doc_sys_001');
+    const sheet = docState.snapshot.sheets[DEFAULT_SHEET_ID];
+    assert.equal(sheet.cells['11:2'].value, 'batch-before-transform');
+    assert.equal(sheet.cells['11:3'].value, 'batch-before-transform');
+  } finally {
+    await c.close();
+    await srv.close();
+  }
+});
+
 test('delayed set_cell overwrites the transformed target after one insert_col', async () => {
   const srv = await createTestServer();
   const c = await connect(srv.wsUrl);

@@ -1,4 +1,4 @@
-﻿﻿﻿﻿const WS_MESSAGE_TYPES = {
+﻿﻿﻿﻿﻿const WS_MESSAGE_TYPES = {
   JOIN: 'join',
   JOIN_ACK: 'join_ack',
   PRESENCE: 'presence',
@@ -6,6 +6,8 @@
   CURSOR_UPDATE: 'cursor_update',
   SET_CELL: 'set_cell',
   CELL_UPDATED: 'cell_updated',
+  BATCH_SET_CELL: 'batch_set_cell',
+  BATCH_CELL_UPDATED: 'batch_cell_updated',
   INSERT_ROW: 'insert_row',
   ROW_INSERTED: 'row_inserted',
   DELETE_ROW: 'delete_row',

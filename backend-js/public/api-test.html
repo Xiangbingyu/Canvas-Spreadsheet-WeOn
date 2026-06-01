@@ -331,7 +331,7 @@
         </div>
         <div class="hero-card">
           <div class="hero-label">WebSocket message types</div>
-          <div class="hero-value">join, presence, cursor, set_cell, insert_row, delete_row, insert_col, delete_col, set_title, add_sheet, import_sheet, undo, redo</div>
+          <div class="hero-value">join, presence, cursor, set_cell, batch_set_cell, insert_row, delete_row, insert_col, delete_col, set_title, add_sheet, import_sheet, undo, redo</div>
         </div>
       </div>
     </section>
@@ -571,6 +571,29 @@
             bold: true,
             color: '#ffffff',
             bgColor: '#0f766e',
+          },
+        },
+      },
+      {
+        title: 'Batch Set Cell',
+        type: 'batch_set_cell',
+        description: 'Apply one shared value/style patch to multiple cells. baseSeq should come from join_ack.data.currentSeq or the latest successful mutation seq when testing OT/version checks.',
+        template: {
+          type: 'batch_set_cell',
+          docId: 'doc_sys_001',
+          clientId: 'user_001',
+          sheetId: 'sheet_20260527_001',
+          baseSeq: 1,
+          updates: [
+            { row: 2, col: 2 },
+            { row: 2, col: 3 },
+            { row: 3, col: 2 },
+          ],
+          value: 'Batch value from test page',
+          style: {
+            bold: true,
+            color: '#ffffff',
+            bgColor: '#2563eb',
           },
         },
       },

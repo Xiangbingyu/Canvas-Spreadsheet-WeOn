@@ -9,8 +9,11 @@ const collabConfig = require('../config/collabConfig');
 const { isNonEmptyString } = require('../protocol/validators');
 const {
   resolveUndoRedoOperation,
+  resolveUndoRedoBatchOperation,
   createAppliedStackEntry,
   createRedoStackEntry,
+  createAppliedBatchStackEntry,
+  createRedoBatchStackEntry,
 } = require('./undoRedoOtService');
 
 function createServiceError(code, message, details = null) {
@@ -43,6 +46,10 @@ function trimUndoStack(entries) {
   }
 
   return entries.slice(entries.length - limit);
+}
+
+function isBatchEntry(entry) {
+  return entry && entry.opType === 'batch_set_cell' && Array.isArray(entry.updates);
 }
 
 async function appendHistoryBestEffort(historyStore, entry, label) {
@@ -100,28 +107,47 @@ async function applyUndo(command = {}) {
       }
 
       entry = undoStack.pop();
-      otResult = await resolveUndoRedoOperation({
-        docId: normalizedCommand.docId,
-        entry,
-        desiredState: {
-          value: entry.oldValue,
-          style: entry.oldStyle,
-        },
-        currentDoc,
-        historyStore,
-        connection,
-      });
+      if (isBatchEntry(entry)) {
+        otResult = await resolveUndoRedoBatchOperation({
+          docId: normalizedCommand.docId,
+          entry,
+          currentDoc,
+          historyStore,
+          connection,
+          direction: 'undo',
+        });
 
-      updatedDoc = await docsService.applySetCell({
-        docId: normalizedCommand.docId,
-        sheetId: otResult.sheetId,
-        row: otResult.row,
-        col: otResult.col,
-        value: otResult.targetState.value,
-        style: otResult.targetState.style,
-      }, {
-        connection,
-      });
+        updatedDoc = await docsService.applyBatchSetCell({
+          docId: normalizedCommand.docId,
+          sheetId: otResult.sheetId,
+          updates: otResult.updates,
+        }, {
+          connection,
+        });
+      } else {
+        otResult = await resolveUndoRedoOperation({
+          docId: normalizedCommand.docId,
+          entry,
+          desiredState: {
+            value: entry.oldValue,
+            style: entry.oldStyle,
+          },
+          currentDoc,
+          historyStore,
+          connection,
+        });
+
+        updatedDoc = await docsService.applySetCell({
+          docId: normalizedCommand.docId,
+          sheetId: otResult.sheetId,
+          row: otResult.row,
+          col: otResult.col,
+          value: otResult.targetState.value,
+          style: otResult.targetState.style,
+        }, {
+          connection,
+        });
+      }
 
       if (!updatedDoc) {
         throw createServiceError(ERROR_CODES.DOCUMENT_NOT_FOUND, `document not found: ${normalizedCommand.docId}`);
@@ -129,19 +155,34 @@ async function applyUndo(command = {}) {
 
       seq = updatedDoc.currentSeq;
 
-      const undoHistoryEntry = {
-        docId: normalizedCommand.docId,
-        clientId: normalizedCommand.clientId,
-        seq,
-        baseSeq: otResult.baseSeq,
-        opType: 'undo',
-        sourceSeq: entry.sourceSeq,
-        targetSheetId: updatedDoc._targetSheetId || otResult.sheetId || entry.sheetId || null,
-        targetRow: otResult.row,
-        targetCol: otResult.col,
-        oldValueJson: { value: otResult.currentState.value, style: otResult.currentState.style },
-        newValueJson: { value: otResult.targetState.value, style: otResult.targetState.style },
-      };
+      const undoHistoryEntry = isBatchEntry(entry)
+        ? {
+          docId: normalizedCommand.docId,
+          clientId: normalizedCommand.clientId,
+          seq,
+          baseSeq: otResult.baseSeq,
+          opType: 'undo',
+          sourceSeq: entry.sourceSeq,
+          targetSheetId: updatedDoc._targetSheetId || otResult.sheetId || entry.sheetId || null,
+          payloadJson: {
+            type: 'batch_set_cell',
+            sheetId: updatedDoc._targetSheetId || otResult.sheetId || entry.sheetId || null,
+            updates: updatedDoc._batchUpdates || [],
+          },
+        }
+        : {
+          docId: normalizedCommand.docId,
+          clientId: normalizedCommand.clientId,
+          seq,
+          baseSeq: otResult.baseSeq,
+          opType: 'undo',
+          sourceSeq: entry.sourceSeq,
+          targetSheetId: updatedDoc._targetSheetId || otResult.sheetId || entry.sheetId || null,
+          targetRow: otResult.row,
+          targetCol: otResult.col,
+          oldValueJson: { value: otResult.currentState.value, style: otResult.currentState.style },
+          newValueJson: { value: otResult.targetState.value, style: otResult.targetState.style },
+        };
 
       if (connection) {
         await historyStore.append(undoHistoryEntry, { connection });
@@ -149,16 +190,28 @@ async function applyUndo(command = {}) {
         await appendHistoryBestEffort(historyStore, undoHistoryEntry, 'undo');
       }
 
-      redoStack.push(createRedoStackEntry({
-        sourceSeq: seq,
-        docId: normalizedCommand.docId,
-        clientId: normalizedCommand.clientId,
-        sheetId: updatedDoc._targetSheetId || otResult.sheetId || entry.sheetId || null,
-        row: otResult.row,
-        col: otResult.col,
-        beforeState: otResult.currentState,
-        afterState: otResult.targetState,
-      }));
+      if (isBatchEntry(entry)) {
+        redoStack.push(createRedoBatchStackEntry({
+          sourceSeq: seq,
+          docId: normalizedCommand.docId,
+          clientId: normalizedCommand.clientId,
+          sheetId: updatedDoc._targetSheetId || otResult.sheetId || entry.sheetId || null,
+          baseSeq: otResult.baseSeq,
+          patch: entry.patch || {},
+          updates: updatedDoc._batchUpdates || [],
+        }));
+      } else {
+        redoStack.push(createRedoStackEntry({
+          sourceSeq: seq,
+          docId: normalizedCommand.docId,
+          clientId: normalizedCommand.clientId,
+          sheetId: updatedDoc._targetSheetId || otResult.sheetId || entry.sheetId || null,
+          row: otResult.row,
+          col: otResult.col,
+          beforeState: otResult.currentState,
+          afterState: otResult.targetState,
+        }));
+      }
       trimmedRedoStack = trimUndoStack(redoStack);
 
       const nextOpState = {
@@ -195,10 +248,19 @@ async function applyUndo(command = {}) {
       clientId: normalizedCommand.clientId,
       sheetId: updatedDoc && updatedDoc._targetSheetId ? updatedDoc._targetSheetId : (otResult.sheetId || entry.sheetId || null),
       seq,
-      row: otResult.row,
-      col: otResult.col,
-      value: otResult.targetState.value,
-      style: otResult.targetState.style,
+      ...(isBatchEntry(entry)
+        ? { updates: (updatedDoc && updatedDoc._batchUpdates ? updatedDoc._batchUpdates : []).map((update) => ({
+          row: update.row,
+          col: update.col,
+          value: update.newValue,
+          style: update.newStyle,
+        })) }
+        : {
+          row: otResult.row,
+          col: otResult.col,
+          value: otResult.targetState.value,
+          style: otResult.targetState.style,
+        }),
       canUndo: undoStack.length > 0,
       canRedo: true,
     };
@@ -236,28 +298,47 @@ async function applyRedo(command = {}) {
       }
 
       entry = redoStack.pop();
-      otResult = await resolveUndoRedoOperation({
-        docId: normalizedCommand.docId,
-        entry,
-        desiredState: {
-          value: entry.newValue,
-          style: entry.newStyle,
-        },
-        currentDoc,
-        historyStore,
-        connection,
-      });
+      if (isBatchEntry(entry)) {
+        otResult = await resolveUndoRedoBatchOperation({
+          docId: normalizedCommand.docId,
+          entry,
+          currentDoc,
+          historyStore,
+          connection,
+          direction: 'redo',
+        });
 
-      updatedDoc = await docsService.applySetCell({
-        docId: normalizedCommand.docId,
-        sheetId: otResult.sheetId,
-        row: otResult.row,
-        col: otResult.col,
-        value: otResult.targetState.value,
-        style: otResult.targetState.style,
-      }, {
-        connection,
-      });
+        updatedDoc = await docsService.applyBatchSetCell({
+          docId: normalizedCommand.docId,
+          sheetId: otResult.sheetId,
+          updates: otResult.updates,
+        }, {
+          connection,
+        });
+      } else {
+        otResult = await resolveUndoRedoOperation({
+          docId: normalizedCommand.docId,
+          entry,
+          desiredState: {
+            value: entry.newValue,
+            style: entry.newStyle,
+          },
+          currentDoc,
+          historyStore,
+          connection,
+        });
+
+        updatedDoc = await docsService.applySetCell({
+          docId: normalizedCommand.docId,
+          sheetId: otResult.sheetId,
+          row: otResult.row,
+          col: otResult.col,
+          value: otResult.targetState.value,
+          style: otResult.targetState.style,
+        }, {
+          connection,
+        });
+      }
 
       if (!updatedDoc) {
         throw createServiceError(ERROR_CODES.DOCUMENT_NOT_FOUND, `document not found: ${normalizedCommand.docId}`);
@@ -265,19 +346,34 @@ async function applyRedo(command = {}) {
 
       seq = updatedDoc.currentSeq;
 
-      const redoHistoryEntry = {
-        docId: normalizedCommand.docId,
-        clientId: normalizedCommand.clientId,
-        seq,
-        baseSeq: otResult.baseSeq,
-        opType: 'redo',
-        sourceSeq: entry.sourceSeq,
-        targetSheetId: updatedDoc._targetSheetId || otResult.sheetId || entry.sheetId || null,
-        targetRow: otResult.row,
-        targetCol: otResult.col,
-        oldValueJson: { value: otResult.currentState.value, style: otResult.currentState.style },
-        newValueJson: { value: otResult.targetState.value, style: otResult.targetState.style },
-      };
+      const redoHistoryEntry = isBatchEntry(entry)
+        ? {
+          docId: normalizedCommand.docId,
+          clientId: normalizedCommand.clientId,
+          seq,
+          baseSeq: otResult.baseSeq,
+          opType: 'redo',
+          sourceSeq: entry.sourceSeq,
+          targetSheetId: updatedDoc._targetSheetId || otResult.sheetId || entry.sheetId || null,
+          payloadJson: {
+            type: 'batch_set_cell',
+            sheetId: updatedDoc._targetSheetId || otResult.sheetId || entry.sheetId || null,
+            updates: updatedDoc._batchUpdates || [],
+          },
+        }
+        : {
+          docId: normalizedCommand.docId,
+          clientId: normalizedCommand.clientId,
+          seq,
+          baseSeq: otResult.baseSeq,
+          opType: 'redo',
+          sourceSeq: entry.sourceSeq,
+          targetSheetId: updatedDoc._targetSheetId || otResult.sheetId || entry.sheetId || null,
+          targetRow: otResult.row,
+          targetCol: otResult.col,
+          oldValueJson: { value: otResult.currentState.value, style: otResult.currentState.style },
+          newValueJson: { value: otResult.targetState.value, style: otResult.targetState.style },
+        };
 
       if (connection) {
         await historyStore.append(redoHistoryEntry, { connection });
@@ -285,16 +381,28 @@ async function applyRedo(command = {}) {
         await appendHistoryBestEffort(historyStore, redoHistoryEntry, 'redo');
       }
 
-      undoStack.push(createAppliedStackEntry({
-        sourceSeq: seq,
-        docId: normalizedCommand.docId,
-        clientId: normalizedCommand.clientId,
-        sheetId: updatedDoc._targetSheetId || otResult.sheetId || entry.sheetId || null,
-        row: otResult.row,
-        col: otResult.col,
-        beforeState: otResult.currentState,
-        afterState: otResult.targetState,
-      }));
+      if (isBatchEntry(entry)) {
+        undoStack.push(createAppliedBatchStackEntry({
+          sourceSeq: seq,
+          docId: normalizedCommand.docId,
+          clientId: normalizedCommand.clientId,
+          sheetId: updatedDoc._targetSheetId || otResult.sheetId || entry.sheetId || null,
+          baseSeq: otResult.baseSeq,
+          patch: entry.patch || {},
+          updates: updatedDoc._batchUpdates || [],
+        }));
+      } else {
+        undoStack.push(createAppliedStackEntry({
+          sourceSeq: seq,
+          docId: normalizedCommand.docId,
+          clientId: normalizedCommand.clientId,
+          sheetId: updatedDoc._targetSheetId || otResult.sheetId || entry.sheetId || null,
+          row: otResult.row,
+          col: otResult.col,
+          beforeState: otResult.currentState,
+          afterState: otResult.targetState,
+        }));
+      }
       trimmedUndoStack = trimUndoStack(undoStack);
 
       const nextOpState = {
@@ -331,10 +439,19 @@ async function applyRedo(command = {}) {
       clientId: normalizedCommand.clientId,
       sheetId: updatedDoc && updatedDoc._targetSheetId ? updatedDoc._targetSheetId : (otResult.sheetId || entry.sheetId || null),
       seq,
-      row: otResult.row,
-      col: otResult.col,
-      value: otResult.targetState.value,
-      style: otResult.targetState.style,
+      ...(isBatchEntry(entry)
+        ? { updates: (updatedDoc && updatedDoc._batchUpdates ? updatedDoc._batchUpdates : []).map((update) => ({
+          row: update.row,
+          col: update.col,
+          value: update.newValue,
+          style: update.newStyle,
+        })) }
+        : {
+          row: otResult.row,
+          col: otResult.col,
+          value: otResult.targetState.value,
+          style: otResult.targetState.style,
+        }),
       canUndo: true,
       canRedo: redoStack.length > 0,
     };
