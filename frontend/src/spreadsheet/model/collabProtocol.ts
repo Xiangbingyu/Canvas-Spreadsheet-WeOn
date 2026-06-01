@@ -17,6 +17,10 @@ export type ClientMessageType =
   | 'presence'
   | 'undo'
   | 'redo'
+  | 'insert_row'
+  | 'delete_row'
+  | 'insert_col'
+  | 'delete_col'
 
 export type ServerMessageType =
   | 'join_ack'
@@ -26,6 +30,10 @@ export type ServerMessageType =
   | 'presence'
   | 'undo_applied'
   | 'redo_applied'
+  | 'row_inserted'
+  | 'row_deleted'
+  | 'col_inserted'
+  | 'col_deleted'
   | 'error'
 
 // ===== 客户端 → 服务端 =====
@@ -77,6 +85,38 @@ export interface RedoRequest {
   clientId: string
 }
 
+export interface InsertRowRequest {
+  type: 'insert_row'
+  docId: string
+  clientId: string
+  sheetId: string
+  row: number // 1-indexed
+}
+
+export interface DeleteRowRequest {
+  type: 'delete_row'
+  docId: string
+  clientId: string
+  sheetId: string
+  row: number // 1-indexed
+}
+
+export interface InsertColRequest {
+  type: 'insert_col'
+  docId: string
+  clientId: string
+  sheetId: string
+  col: number // 1-indexed
+}
+
+export interface DeleteColRequest {
+  type: 'delete_col'
+  docId: string
+  clientId: string
+  sheetId: string
+  col: number // 1-indexed
+}
+
 export type WsRequest =
   | JoinRequest
   | SetCellRequest
@@ -84,6 +124,10 @@ export type WsRequest =
   | ImportSheetRequest
   | UndoRequest
   | RedoRequest
+  | InsertRowRequest
+  | DeleteRowRequest
+  | InsertColRequest
+  | DeleteColRequest
 
 // ===== 服务端 → 客户端 =====
 
@@ -184,6 +228,66 @@ export interface ErrorMessage {
   data: null
 }
 
+export interface RowInserted {
+  type: 'row_inserted'
+  code: 0
+  message: 'ok'
+  data: {
+    docId: string
+    clientId: string
+    sheetId: string
+    seq: number
+    row: number // 1-indexed
+    canUndo: boolean
+    canRedo: boolean
+  }
+}
+
+export interface RowDeleted {
+  type: 'row_deleted'
+  code: 0
+  message: 'ok'
+  data: {
+    docId: string
+    clientId: string
+    sheetId: string
+    seq: number
+    row: number // 1-indexed
+    canUndo: boolean
+    canRedo: boolean
+  }
+}
+
+export interface ColInserted {
+  type: 'col_inserted'
+  code: 0
+  message: 'ok'
+  data: {
+    docId: string
+    clientId: string
+    sheetId: string
+    seq: number
+    col: number // 1-indexed
+    canUndo: boolean
+    canRedo: boolean
+  }
+}
+
+export interface ColDeleted {
+  type: 'col_deleted'
+  code: 0
+  message: 'ok'
+  data: {
+    docId: string
+    clientId: string
+    sheetId: string
+    seq: number
+    col: number // 1-indexed
+    canUndo: boolean
+    canRedo: boolean
+  }
+}
+
 export type WsResponse =
   | JoinAck
   | CellUpdated
@@ -192,6 +296,10 @@ export type WsResponse =
   | PresenceMessage
   | UndoApplied
   | RedoApplied
+  | RowInserted
+  | RowDeleted
+  | ColInserted
+  | ColDeleted
   | ErrorMessage
 
 // ===== 用户信息（collab 专用） =====

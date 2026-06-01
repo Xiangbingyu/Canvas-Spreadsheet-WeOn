@@ -174,6 +174,43 @@ function createUserOpStateMysqlStore() {
       return result.affectedRows > 0;
     },
 
+    async clearByDocId(docId, { connection = null } = {}) {
+      await purgeExpiredRows({ connection });
+      const executor = connection || { execute };
+      const updatedAt = new Date().toISOString();
+
+      await executor.execute(
+        `UPDATE user_op_state
+        SET undo_stack_json = CAST(? AS JSON),
+            redo_stack_json = CAST(? AS JSON),
+            updated_at = ?
+        WHERE doc_id = ?`,
+        [
+          stringifyJsonValue([], []),
+          stringifyJsonValue([], []),
+          toMysqlDateValue(updatedAt),
+          docId,
+        ]
+      );
+
+      const reader = connection || { query };
+      const [rows] = await reader.query(
+        `SELECT
+          id,
+          doc_id,
+          client_id,
+          undo_stack_json,
+          redo_stack_json,
+          updated_at
+        FROM user_op_state
+        WHERE doc_id = ?
+        ORDER BY updated_at DESC`,
+        [docId]
+      );
+
+      return rows.map((row) => mapRowToUserOpState(row));
+    },
+
     async purgeExpired() {
       await purgeExpiredRows();
       return this.list();

@@ -2,7 +2,8 @@
 //
 // 包装 insertRow/deleteRow/insertCol/deleteCol：
 // - 删除前读取完整行/列数据
-// - 执行操作并记录历史
+// - 先调用 collab 方法发送 WS
+// - 执行本地操作并记录历史
 // - undo/redo 通过同一个 dispatch 回放反向/正向操作
 
 import { useCallback, useEffect, useRef } from 'react'
@@ -21,7 +22,14 @@ export interface UseRowColHistoryResult {
   redo: () => void
 }
 
-export function useRowColHistory(): UseRowColHistoryResult {
+export interface CollabRowColMethods {
+  insertRow: (sheetId: string, row: number) => void
+  deleteRow: (sheetId: string, row: number) => void
+  insertCol: (sheetId: string, col: number) => void
+  deleteCol: (sheetId: string, col: number) => void
+}
+
+export function useRowColHistory(collab?: CollabRowColMethods): UseRowColHistoryResult {
   const dispatch = useDispatch()
   const reduxStore = useStore<RootState>()
   const historyRef = useRef<HistoryStack>(null as unknown as HistoryStack)
@@ -60,21 +68,28 @@ export function useRowColHistory(): UseRowColHistoryResult {
   const executeWithHistory = useCallback(
     (action: 'insert_row' | 'delete_row' | 'insert_col' | 'delete_col', index: number) => {
       console.log('[useRowColHistory] executeWithHistory:', action, 'at index', index)
+      const state = reduxStore.getState()
+      const sheetId = state.workSheet.sheetId
       let op: RowColOperation
 
+      // 先调用 collab 方法发送 WS
       if (action === 'delete_row') {
         const data = readRowData(index)
         op = { type: 'delete_row', index, data }
+        collab?.deleteRow(sheetId, index)
         dispatch(deleteRow({ row: index }))
       } else if (action === 'insert_row') {
         op = { type: 'insert_row', index }
+        collab?.insertRow(sheetId, index)
         dispatch(insertRow({ row: index }))
       } else if (action === 'delete_col') {
         const data = readColData(index)
         op = { type: 'delete_col', index, data }
+        collab?.deleteCol(sheetId, index)
         dispatch(deleteCol({ col: index }))
       } else {
         op = { type: 'insert_col', index }
+        collab?.insertCol(sheetId, index)
         dispatch(insertCol({ col: index }))
       }
 
@@ -87,7 +102,7 @@ export function useRowColHistory(): UseRowColHistoryResult {
         historyRef.current.canRedo
       )
     },
-    [dispatch, readRowData, readColData]
+    [dispatch, readRowData, readColData, reduxStore, collab]
   )
 
   const replay = useCallback(

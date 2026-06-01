@@ -597,6 +597,63 @@ function GrideCanvas(
     scheduleRender(ALL_CANVAS_LAYERS)
   }, [scheduleRender, worksheet.cells, worksheet.styles])
 
+  // 设置自动滚动回调：当选中单元格时，自动滚动视口跟随
+  useEffect(() => {
+    // 获取现有的回调（由 useSpreadsheetInteraction 设置）
+    const originalCallbacks = interactionEngine['callbacks'] || {}
+
+    interactionEngine.setCallbacks({
+      ...originalCallbacks,
+      onAutoScroll: ({ row, col }) => {
+        const viewport = viewportRef.current
+        const rowHeight = worksheet.defaultRowHeight
+        const colWidth = worksheet.defaultColWidth
+        const headerRowHeight = GRID_CHROME.headerRowHeight
+        const headerColWidth = GRID_CHROME.headerColWidth
+
+        // 计算单元格的屏幕坐标
+        const cellTop = (row - 1) * rowHeight
+        const cellLeft = (col - 1) * colWidth
+        const cellBottom = cellTop + rowHeight
+        const cellRight = cellLeft + colWidth
+
+        // 计算视口的数据区域（不包括表头）
+        const viewportTop = viewport.scrollY
+        const viewportLeft = viewport.scrollX
+        const viewportBottom = viewport.scrollY + (scrollUi.dataViewportHeight - headerRowHeight)
+        const viewportRight = viewport.scrollX + (scrollUi.dataViewportWidth - headerColWidth)
+
+        let scrollX = viewport.scrollX
+        let scrollY = viewport.scrollY
+
+        // 垂直滚动：如果单元格超出视口，滚动使其可见
+        if (cellTop < viewportTop) {
+          scrollY = cellTop
+        } else if (cellBottom > viewportBottom) {
+          scrollY = cellBottom - (scrollUi.dataViewportHeight - headerRowHeight)
+        }
+
+        // 水平滚动：如果单元格超出视口，滚动使其可见
+        if (cellLeft < viewportLeft) {
+          scrollX = cellLeft
+        } else if (cellRight > viewportRight) {
+          scrollX = cellRight - (scrollUi.dataViewportWidth - headerColWidth)
+        }
+
+        // 如果需要滚动，调用 applyScroll
+        if (scrollX !== viewport.scrollX || scrollY !== viewport.scrollY) {
+          applyScroll(scrollX, scrollY)
+        }
+      },
+    })
+  }, [
+    interactionEngine,
+    worksheet.defaultRowHeight,
+    worksheet.defaultColWidth,
+    scrollUi,
+    applyScroll,
+  ])
+
   useEffect(() => {
     const overlayOnly: CanvasLayer[] = ['overlay']
     scheduleRender(overlayOnly)

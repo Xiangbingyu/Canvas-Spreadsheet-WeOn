@@ -23,7 +23,7 @@ export function SpreadsheetWorkspace() {
   const docId = useSelector((s: RootState) => s.collab.docId)
   const clientId = useSelector((s: RootState) => s.collab.clientId)
 
-  const { connect, disconnect, setCell, setTitle, importSheet } = useCollab({
+  const { connect, disconnect, setCell, setTitle, importSheet, getClient } = useCollab({
     url: COLLAB_WS_URL,
     docId,
     clientId,
@@ -45,7 +45,7 @@ export function SpreadsheetWorkspace() {
 
   const onCommitCell = useCommitCell(setCell)
   const { commitWithHistory, commitBatchWithHistory, executeRowColWithHistory, undo, redo } =
-    useUnifiedHistory(onCommitCell)
+    useUnifiedHistory(onCommitCell, getClient())
 
   const {
     engine,
