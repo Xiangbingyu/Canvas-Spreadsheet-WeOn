@@ -27,15 +27,25 @@ export function SpreadsheetWorkspace() {
   const docId = useSelector((s: RootState) => s.collab.docId)
   const clientId = useSelector((s: RootState) => s.collab.clientId)
   const activeWorksheet = useSelector((s: RootState) => s.workSheet)
+  const selection = useSelector((s: RootState) => s.selection)
 
-  const { connect, disconnect, setCell, setTitle, importWorkbook, addSheet, getClient } = useCollab(
-    {
-      url: COLLAB_WS_URL,
-      docId,
-      clientId,
-    }
-  )
-
+  const {
+    connect,
+    disconnect,
+    setCell,
+    setTitle,
+    importWorkbook,
+    addSheet,
+    getClient,
+    sendCursor,
+  } = useCollab({
+    url: COLLAB_WS_URL,
+    docId,
+    clientId,
+  })
+  useEffect(() => {
+    sendCursor(selection.row, selection.col)
+  }, [selection.row, selection.col, sendCursor])
   const handleImportWorkbook = useCallback(
     (workbook: WorkbookSnapshotPayload): boolean => {
       const sent = importWorkbook(workbook)

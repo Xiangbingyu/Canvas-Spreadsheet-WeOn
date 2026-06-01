@@ -11,7 +11,6 @@ import { buildDocShareUrl } from '@/spreadsheet/utils/shareLink'
 import type { WorkbookSnapshotPayload } from '@/spreadsheet/store/workbookStore'
 
 type MenubarProps = {
-  userInitial?: string
   /** Excel 导入：乐观更新本地 + WS import_sheet；返回是否已同步到服务端 */
   onImportWorkbook: (workbook: WorkbookSnapshotPayload) => boolean
   /** 提交文档标题（WS set_title）；缺省时标题只读 */
@@ -22,7 +21,7 @@ const menuBtnClass = 'rounded px-2 py-0.5 text-[13px] leading-6 text-[#202124] h
 
 const DEFAULT_DOC_TITLE = '未命名表格'
 
-export function Menubar({ userInitial = 'd', onImportWorkbook, onSetTitle }: MenubarProps) {
+export function Menubar({ onImportWorkbook, onSetTitle }: MenubarProps) {
   const navigate = useNavigate()
   const clientId = useSelector((s: RootState) => s.collab.clientId) || 'system'
   const docId = useSelector((s: RootState) => s.collab.docId)
@@ -143,12 +142,6 @@ export function Menubar({ userInitial = 'd', onImportWorkbook, onSetTitle }: Men
           >
             共享
           </button>
-          <div
-            className="flex h-8 w-8 items-center justify-center rounded-full bg-[#1a73e8] text-sm font-medium text-white"
-            title="当前用户"
-          >
-            {userInitial}
-          </div>
         </div>
       </div>
 

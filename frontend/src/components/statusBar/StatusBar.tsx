@@ -1,5 +1,6 @@
 import { useSelector } from 'react-redux'
 import type { RootState } from '@/spreadsheet/store'
+import { OnlineUsers } from '@/components/CollabStatus/OnlineUsers'
 
 export function StatusBar() {
   const users = useSelector((s: RootState) => s.collab.users)
@@ -10,7 +11,7 @@ export function StatusBar() {
       <span>
         {users.length} 位用户正在编辑{userIds ? ` · ${userIds}` : ''}
       </span>
-      <span className="text-[#80868b]">就绪</span>
+      <OnlineUsers />
     </div>
   )
 }
