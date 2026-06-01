@@ -33,6 +33,9 @@ import {
 import { canvasPerf } from '@/spreadsheet/render/perfMonitor'
 import type { Viewport } from '@/spreadsheet/render'
 import type { RootState } from '@/spreadsheet/store'
+import { setClipboard } from '@/spreadsheet/store'
+import { updateCell } from '@/spreadsheet/store/workSheetStore'
+import { cellsToTSV, parseTSV } from '@/spreadsheet/utils/tsvConverter'
 import type { InteractionEngine } from '@/spreadsheet/interaction/interactionEngine'
 import { ContextMenu } from '@/components/ContextMenu/ContextMenu'
 import { GRID_CHROME } from '@/spreadsheet/utils/coordinates'
@@ -349,7 +352,7 @@ function GrideCanvas(
     visible: boolean
     x: number
     y: number
-    type: 'row' | 'col' | null
+    type: 'row' | 'col' | 'cell' | null
     index: number | null
   }>({
     visible: false,
@@ -521,7 +524,7 @@ function GrideCanvas(
       const x = event.clientX - rect.left
       const y = event.clientY - rect.top
 
-      let type: 'row' | 'col' | null = null
+      let type: 'row' | 'col' | 'cell' | null = null
       let index: number | null = null
 
       // 判断是否点在行号区（左侧表头）
@@ -544,8 +547,13 @@ function GrideCanvas(
           index = null
         }
       }
+      // 判断是否点在单元格区域
+      else if (x >= GRID_CHROME.headerColWidth && y >= GRID_CHROME.headerRowHeight) {
+        type = 'cell'
+        // 单元格右键菜单：保留当前多选区域，不改变选区
+      }
 
-      if (type && index !== null) {
+      if (type && (type === 'cell' || index !== null)) {
         setContextMenu({
           visible: true,
           x: event.clientX,
@@ -558,10 +566,152 @@ function GrideCanvas(
     [worksheet.defaultRowHeight, worksheet.defaultColWidth, worksheet.rowCount, worksheet.colCount]
   )
 
+  // 右键菜单：复制
+  const handleContextMenuCopy = useCallback(() => {
+    const state = reduxStore.getState()
+    const sel = state.selection
+    const ws = state.workSheet
+    const range = sel.range
+    const cells: Record<string, { value: string; style?: (typeof ws.styles)[string] }> = {}
+
+    for (let row = range.start.row; row <= range.end.row; row++) {
+      for (let col = range.start.col; col <= range.end.col; col++) {
+        const key = `${row}:${col}`
+        const cell = ws.cells[key]
+        const style = cell?.styleId ? ws.styles[cell.styleId] : undefined
+        cells[key] = {
+          value: cell?.value ?? '',
+          style,
+        }
+      }
+    }
+
+    // 存到内部剪贴板
+    reduxStore.dispatch(
+      setClipboard({
+        cells,
+        range: {
+          startRow: range.start.row,
+          startCol: range.start.col,
+          endRow: range.end.row,
+          endCol: range.end.col,
+        },
+      })
+    )
+
+    // 写入系统剪贴板
+    const tsv = cellsToTSV(cells, {
+      startRow: range.start.row,
+      startCol: range.start.col,
+      endRow: range.end.row,
+      endCol: range.end.col,
+    })
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(tsv).catch((err: unknown) => {
+        console.warn('[GrideCanvas] Failed to write to system clipboard:', err)
+      })
+    }
+  }, [reduxStore])
+
+  // 右键菜单：粘贴
+  const handleContextMenuPaste = useCallback(() => {
+    const pasteFromClipboard = async () => {
+      const state = reduxStore.getState()
+      const clipboard = state.clipboard
+      const ws = state.workSheet
+      const sel = state.selection
+
+      // 优先使用内部剪贴板（保留样式）
+      if (clipboard.range && Object.keys(clipboard.cells).length > 0) {
+        const pasteStartRow = sel.row
+        const pasteStartCol = sel.col
+        const rowOffset = pasteStartRow - clipboard.range.startRow
+        const colOffset = pasteStartCol - clipboard.range.startCol
+
+        for (const [key, clipCell] of Object.entries(clipboard.cells)) {
+          const [rowStr, colStr] = key.split(':')
+          const origRow = parseInt(rowStr, 10)
+          const origCol = parseInt(colStr, 10)
+          const targetRow = origRow + rowOffset
+          const targetCol = origCol + colOffset
+
+          if (
+            targetRow < 1 ||
+            targetRow > ws.rowCount ||
+            targetCol < 1 ||
+            targetCol > ws.colCount
+          ) {
+            continue
+          }
+
+          reduxStore.dispatch(
+            updateCell({
+              row: targetRow,
+              col: targetCol,
+              value: (clipCell as { value: string; style?: (typeof ws.styles)[string] }).value,
+              style: (clipCell as { value: string; style?: (typeof ws.styles)[string] }).style,
+            })
+          )
+        }
+        return
+      }
+
+      // 内部剪贴板为空，尝试系统剪贴板（跨应用复制粘贴）
+      try {
+        if (!navigator.clipboard || !navigator.clipboard.readText) {
+          throw new Error('System clipboard not available')
+        }
+        const text = await navigator.clipboard.readText()
+        const parsed = parseTSV(text)
+        if (!parsed) {
+          throw new Error('Failed to parse clipboard content')
+        }
+
+        const pasteStartRow = sel.row
+        const pasteStartCol = sel.col
+        const rowOffset = pasteStartRow - parsed.range.startRow
+        const colOffset = pasteStartCol - parsed.range.startCol
+
+        for (const [key, clipCell] of Object.entries(parsed.cells)) {
+          const [rowStr, colStr] = key.split(':')
+          const origRow = parseInt(rowStr, 10)
+          const origCol = parseInt(colStr, 10)
+          const targetRow = origRow + rowOffset
+          const targetCol = origCol + colOffset
+
+          if (
+            targetRow < 1 ||
+            targetRow > ws.rowCount ||
+            targetCol < 1 ||
+            targetCol > ws.colCount
+          ) {
+            continue
+          }
+
+          reduxStore.dispatch(
+            updateCell({
+              row: targetRow,
+              col: targetCol,
+              value: (clipCell as { value: string }).value,
+            })
+          )
+        }
+      } catch (err) {
+        console.warn('[GrideCanvas] System clipboard read failed:', err)
+      }
+    }
+
+    pasteFromClipboard()
+  }, [reduxStore])
+
   useCanvasInteraction({
     interactionCanvasRef: overlayCanvasRef,
     wheelTargetRef: containerRef,
     onPointerDown: (event, canvas) => {
+      // 右键按下时不改变选区，保留多选状态
+      if (event.button === 2) {
+        return
+      }
       canvas.focus()
       interactionEngine.handleCanvasPointerDown({
         currentTarget: canvas,
@@ -722,6 +872,9 @@ function GrideCanvas(
         index={contextMenu.index}
         onClose={() => setContextMenu({ ...contextMenu, visible: false })}
         executeWithHistory={executeRowColWithHistory}
+        onCopy={handleContextMenuCopy}
+        onPaste={handleContextMenuPaste}
+        canPaste={reduxStore.getState().clipboard.range !== undefined}
       />
     </div>
   )

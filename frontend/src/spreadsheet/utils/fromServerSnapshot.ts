@@ -45,16 +45,21 @@ export function fromServerSnapshot(snapshot: ServerSnapshotInput): WorksheetData
 
   for (const cell of Object.values((sheetData as Record<string, unknown>).cells ?? {})) {
     if (cell && typeof cell === 'object' && 'row' in cell && 'col' in cell) {
-      const typedCell = cell as { row: number; col: number; [key: string]: unknown }
-      cells[`${typedCell.row}:${typedCell.col}`] = { ...typedCell }
+      const typedCell = cell as { row: number; col: number; value?: string; styleId?: string }
+      cells[`${typedCell.row}:${typedCell.col}`] = {
+        row: typedCell.row,
+        col: typedCell.col,
+        value: typedCell.value ?? '',
+        styleId: typedCell.styleId,
+      }
     }
   }
 
   let maxRow = ((sheetData as Record<string, unknown>).rowCount as number) ?? 0
   let maxCol = ((sheetData as Record<string, unknown>).colCount as number) ?? 0
   for (const cell of Object.values(cells)) {
-    maxRow = Math.max(maxRow, (cell as Record<string, unknown>).row as number)
-    maxCol = Math.max(maxCol, (cell as Record<string, unknown>).col as number)
+    maxRow = Math.max(maxRow, cell.row)
+    maxCol = Math.max(maxCol, cell.col)
   }
 
   const sheetId =
