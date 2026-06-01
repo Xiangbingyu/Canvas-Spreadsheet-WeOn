@@ -6,7 +6,7 @@
 // - 共享一个 HistoryStack，undo/redo 统一处理
 
 import { useCallback, useEffect, useRef } from 'react'
-import { useDispatch, useStore } from 'react-redux'
+import { useDispatch, useStore, batch } from 'react-redux'
 import {
   HistoryStack,
   type CellOperation,
@@ -19,6 +19,7 @@ import type { RootState } from '@/spreadsheet/store'
 import type { Style } from '@/spreadsheet/model/types'
 import type { Cell } from '@/spreadsheet/model/types'
 import type { CommitCellFn } from '@/hooks/useSpreadsheetInteraction'
+import type { CollabClient } from '@/spreadsheet/collab/CollabClient'
 
 export interface UseUnifiedHistoryResult {
   /** 包装后的提交函数：执行写入并记录历史。替代直接调用 onCommitCell。 */
@@ -38,8 +39,12 @@ export interface UseUnifiedHistoryResult {
 
 /**
  * @param onCommitCell 真实提交（走 WS）。缺省时回放也无处可去，undo/redo 变为 no-op。
+ * @param collabClient 协同客户端，用于发送行列操作到后端。缺省时行列操作只更新本地。
  */
-export function useUnifiedHistory(onCommitCell?: CommitCellFn): UseUnifiedHistoryResult {
+export function useUnifiedHistory(
+  onCommitCell?: CommitCellFn,
+  collabClient?: CollabClient
+): UseUnifiedHistoryResult {
   const dispatch = useDispatch()
   const reduxStore = useStore<RootState>()
   const historyRef = useRef<HistoryStack>(null as unknown as HistoryStack)
@@ -73,6 +78,7 @@ export function useUnifiedHistory(onCommitCell?: CommitCellFn): UseUnifiedHistor
         const key = `${row}:${col}`
         data[key] = ws.cells[key]
       }
+      console.log('[useUnifiedHistory] readRowData for row', row, ':', data)
       return data
     },
     [reduxStore]
@@ -87,6 +93,7 @@ export function useUnifiedHistory(onCommitCell?: CommitCellFn): UseUnifiedHistor
         const key = `${row}:${col}`
         data[key] = ws.cells[key]
       }
+      console.log('[useUnifiedHistory] readColData for col', col, ':', data)
       return data
     },
     [reduxStore]
@@ -112,12 +119,14 @@ export function useUnifiedHistory(onCommitCell?: CommitCellFn): UseUnifiedHistor
   const commitBatchWithHistory = useCallback(
     (updates: Array<{ row: number; col: number; value: string; style?: Style }>) => {
       const operations: CellOperation[] = []
-      for (const { row, col, value, style } of updates) {
-        const before = readSnapshot(row, col)
-        rawCommit(row, col, value, style)
-        const after: CellSnapshot = { value, style: style ?? before.style }
-        operations.push({ row, col, before, after })
-      }
+      batch(() => {
+        for (const { row, col, value, style } of updates) {
+          const before = readSnapshot(row, col)
+          rawCommit(row, col, value, style)
+          const after: CellSnapshot = { value, style: style ?? before.style }
+          operations.push({ row, col, before, after })
+        }
+      })
       if (operations.length > 0) {
         historyRef.current.push({ type: 'batch_cell', operations })
       }
@@ -131,20 +140,39 @@ export function useUnifiedHistory(onCommitCell?: CommitCellFn): UseUnifiedHistor
       console.log('[useUnifiedHistory] executeRowColWithHistory:', action, 'at index', index)
       let op: RowColOperation
 
+      const sheetId = reduxStore.getState().workSheet.sheetId
+
       if (action === 'delete_row') {
         const data = readRowData(index)
         op = { type: 'delete_row', index, data }
-        dispatch(deleteRow({ row: index }))
+        // 优先走 WS 协同链路，否则本地 dispatch
+        if (collabClient) {
+          collabClient.deleteRow(sheetId, index)
+        } else {
+          dispatch(deleteRow({ row: index }))
+        }
       } else if (action === 'insert_row') {
         op = { type: 'insert_row', index }
-        dispatch(insertRow({ row: index }))
+        if (collabClient) {
+          collabClient.insertRow(sheetId, index)
+        } else {
+          dispatch(insertRow({ row: index }))
+        }
       } else if (action === 'delete_col') {
         const data = readColData(index)
         op = { type: 'delete_col', index, data }
-        dispatch(deleteCol({ col: index }))
+        if (collabClient) {
+          collabClient.deleteCol(sheetId, index)
+        } else {
+          dispatch(deleteCol({ col: index }))
+        }
       } else {
         op = { type: 'insert_col', index }
-        dispatch(insertCol({ col: index }))
+        if (collabClient) {
+          collabClient.insertCol(sheetId, index)
+        } else {
+          dispatch(insertCol({ col: index }))
+        }
       }
 
       console.log('[useUnifiedHistory] pushing operation to history:', op)
@@ -156,7 +184,7 @@ export function useUnifiedHistory(onCommitCell?: CommitCellFn): UseUnifiedHistor
         historyRef.current.canRedo
       )
     },
-    [dispatch, readRowData, readColData]
+    [dispatch, readRowData, readColData, collabClient, reduxStore]
   )
 
   const replayCellOp = useCallback(
@@ -193,31 +221,88 @@ export function useUnifiedHistory(onCommitCell?: CommitCellFn): UseUnifiedHistor
       console.log('[useUnifiedHistory] replaying cell undo')
       replayCellOp(cellOp, cellOp.before)
     } else if ('type' in op && op.type === 'batch_cell') {
-      // 批量单元格操作
+      // 批量单元格操作 — 合并多个 dispatch 为一次
       const batchOp = op as BatchCellOperation
       console.log(
         '[useUnifiedHistory] replaying batch cell undo, count:',
         batchOp.operations.length
       )
-      for (const cellOp of batchOp.operations) {
-        replayCellOp(cellOp, cellOp.before)
-      }
+      batch(() => {
+        for (const cellOp of batchOp.operations) {
+          replayCellOp(cellOp, cellOp.before)
+        }
+      })
     } else if ('type' in op) {
       // 行列操作
       const rowColOp = op as RowColOperation
-      console.log('[useUnifiedHistory] executing reverse row/col operation:', rowColOp.type)
+      console.log(
+        '[useUnifiedHistory] executing reverse row/col operation:',
+        rowColOp.type,
+        'data:',
+        rowColOp.data
+      )
       // 反向操作：insert → delete，delete → insert
       if (rowColOp.type === 'insert_row') {
+        console.log('[useUnifiedHistory] undo insert_row → delete_row at index', rowColOp.index)
         replayRowColOp({ type: 'delete_row', index: rowColOp.index })
       } else if (rowColOp.type === 'delete_row') {
+        console.log(
+          '[useUnifiedHistory] undo delete_row → insert_row at index',
+          rowColOp.index,
+          'with data:',
+          rowColOp.data
+        )
         replayRowColOp({ type: 'insert_row', index: rowColOp.index })
+        // 需要恢复被删除行的单元格数据
+        if (rowColOp.data) {
+          console.log(
+            '[useUnifiedHistory] restoring deleted row data:',
+            Object.keys(rowColOp.data).length,
+            'cells'
+          )
+          const ws = reduxStore.getState().workSheet
+          batch(() => {
+            for (const [key, cell] of Object.entries(rowColOp.data ?? {})) {
+              if (cell) {
+                console.log('[useUnifiedHistory] restoring cell', key, ':', cell)
+                const style = cell.styleId ? (ws.styles[cell.styleId] ?? {}) : undefined
+                rawCommit(cell.row, cell.col, cell.value, style)
+              }
+            }
+          })
+        }
       } else if (rowColOp.type === 'insert_col') {
+        console.log('[useUnifiedHistory] undo insert_col → delete_col at index', rowColOp.index)
         replayRowColOp({ type: 'delete_col', index: rowColOp.index })
       } else if (rowColOp.type === 'delete_col') {
+        console.log(
+          '[useUnifiedHistory] undo delete_col → insert_col at index',
+          rowColOp.index,
+          'with data:',
+          rowColOp.data
+        )
         replayRowColOp({ type: 'insert_col', index: rowColOp.index })
+        // 需要恢复被删除列的单元格数据
+        if (rowColOp.data) {
+          console.log(
+            '[useUnifiedHistory] restoring deleted col data:',
+            Object.keys(rowColOp.data).length,
+            'cells'
+          )
+          const ws = reduxStore.getState().workSheet
+          batch(() => {
+            for (const [key, cell] of Object.entries(rowColOp.data ?? {})) {
+              if (cell) {
+                console.log('[useUnifiedHistory] restoring cell', key, ':', cell)
+                const style = cell.styleId ? (ws.styles[cell.styleId] ?? {}) : undefined
+                rawCommit(cell.row, cell.col, cell.value, style)
+              }
+            }
+          })
+        }
       }
     }
-  }, [replayCellOp, replayRowColOp])
+  }, [replayCellOp, replayRowColOp, rawCommit, reduxStore])
 
   const redo = useCallback(() => {
     console.log('[useUnifiedHistory] redo triggered, canRedo:', historyRef.current.canRedo)
@@ -231,15 +316,17 @@ export function useUnifiedHistory(onCommitCell?: CommitCellFn): UseUnifiedHistor
       console.log('[useUnifiedHistory] replaying cell redo')
       replayCellOp(cellOp, cellOp.after)
     } else if ('type' in op && op.type === 'batch_cell') {
-      // 批量单元格操作
+      // 批量单元格操作 — 合并多个 dispatch 为一次
       const batchOp = op as BatchCellOperation
       console.log(
         '[useUnifiedHistory] replaying batch cell redo, count:',
         batchOp.operations.length
       )
-      for (const cellOp of batchOp.operations) {
-        replayCellOp(cellOp, cellOp.after)
-      }
+      batch(() => {
+        for (const cellOp of batchOp.operations) {
+          replayCellOp(cellOp, cellOp.after)
+        }
+      })
     } else if ('type' in op) {
       // 行列操作
       console.log('[useUnifiedHistory] replaying row/col operation:', op.type)

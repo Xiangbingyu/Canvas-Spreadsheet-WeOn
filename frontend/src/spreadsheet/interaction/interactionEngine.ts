@@ -37,6 +37,7 @@ interface EngineCallbacks {
   onCellInputChange?: (args: CellInputChangeEventArgs) => void
   onCellCompositionStart?: (args: CellCompositionEventArgs) => void
   onCellCompositionEnd?: (args: CellCompositionEventArgs) => void
+  onAutoScroll?: (args: { row: number; col: number }) => void
 }
 
 export class InteractionEngine {
@@ -149,6 +150,8 @@ export class InteractionEngine {
   ) {
     this.state.selection = newSelection
     this.callbacks.onSelectionChange?.({ newSelection, reason })
+    // 触发自动滚动回调，让 GrideCanvas 处理滚动
+    this.callbacks.onAutoScroll?.({ row: newSelection.end.row, col: newSelection.end.col })
   }
 
   handleCanvasPointerDown(event: {

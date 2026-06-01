@@ -164,7 +164,7 @@ function TextColorMark({ barColor = '#202124' }: { barColor?: string }) {
   )
 }
 
-const DEFAULT_FONT_SIZE = 10
+const DEFAULT_FONT_SIZE = 13
 
 export function Toolbar({ onCommitCell, onCommitBatch, onUndo, onRedo }: ToolbarProps) {
   const dispatch = useDispatch()
@@ -204,10 +204,10 @@ export function Toolbar({ onCommitCell, onCommitBatch, onUndo, onRedo }: Toolbar
       const { row, col, value, style } = updates[0]
       onCommitCell(row, col, value, style)
       // 立即更新 selectStore，保证 Toolbar 显示的值同步
-      dispatch(setSelectedCell({ row, col, value, style }))
+      dispatch(setSelectedCell({ row, col, value, style, range: selection.range }))
     } else if (onCommitBatch) {
       onCommitBatch(updates)
-      // 批量提交后，更新 selectStore 中 active cell 的样式
+      // 批量提交后，更新 selectStore 中 active cell 的样式，保持原有选区
       const activeCell = updates.find((u) => u.row === selection.row && u.col === selection.col)
       if (activeCell) {
         dispatch(
@@ -216,6 +216,7 @@ export function Toolbar({ onCommitCell, onCommitBatch, onUndo, onRedo }: Toolbar
             col: activeCell.col,
             value: activeCell.value,
             style: activeCell.style,
+            range: selection.range,
           })
         )
       }
@@ -224,7 +225,7 @@ export function Toolbar({ onCommitCell, onCommitBatch, onUndo, onRedo }: Toolbar
       for (const { row, col, value, style } of updates) {
         onCommitCell(row, col, value, style)
       }
-      // 更新 selectStore
+      // 更新 selectStore，保持原有选区
       const activeCell = updates.find((u) => u.row === selection.row && u.col === selection.col)
       if (activeCell) {
         dispatch(
@@ -233,6 +234,7 @@ export function Toolbar({ onCommitCell, onCommitBatch, onUndo, onRedo }: Toolbar
             col: activeCell.col,
             value: activeCell.value,
             style: activeCell.style,
+            range: selection.range,
           })
         )
       }

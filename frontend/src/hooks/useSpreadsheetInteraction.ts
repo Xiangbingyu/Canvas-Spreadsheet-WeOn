@@ -4,6 +4,7 @@ import { InteractionEngine } from '@/spreadsheet/interaction/interactionEngine'
 import { GRID_CHROME } from '@/spreadsheet/utils/coordinates'
 import { updateCell } from '@/spreadsheet/store/workSheetStore'
 import { setSelectedCell } from '@/spreadsheet/store/selectStore'
+import { setClipboard } from '@/spreadsheet/store'
 import type { RootState } from '@/spreadsheet/store'
 import type { Style } from '@/spreadsheet/model/types'
 import type { GrideCanvasHandle } from '@/components/grideCanvas/GrideCanvas'
@@ -161,6 +162,79 @@ export function useSpreadsheetInteraction(options: UseSpreadsheetInteractionOpti
       },
       onKeyboard: ({ event }) => {
         const sel = reduxStore.getState().selection
+
+        // Ctrl+C / Cmd+C：复制
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'c') {
+          const ws = reduxStore.getState().workSheet
+          const range = sel.range
+          const cells: Record<string, { value: string; style?: Style }> = {}
+
+          // 遍历选区范围内的所有单元格
+          for (let row = range.start.row; row <= range.end.row; row++) {
+            for (let col = range.start.col; col <= range.end.col; col++) {
+              const key = `${row}:${col}`
+              const cell = ws.cells[key]
+              const style = cell?.styleId ? ws.styles[cell.styleId] : undefined
+              cells[key] = {
+                value: cell?.value ?? '',
+                style,
+              }
+            }
+          }
+
+          dispatch(
+            setClipboard({
+              cells,
+              range: {
+                startRow: range.start.row,
+                startCol: range.start.col,
+                endRow: range.end.row,
+                endCol: range.end.col,
+              },
+            })
+          )
+          event.preventDefault()
+          return
+        }
+
+        // Ctrl+V / Cmd+V：粘贴
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'v') {
+          const clipboard = reduxStore.getState().clipboard
+          if (!clipboard.range || Object.keys(clipboard.cells).length === 0) {
+            return
+          }
+
+          const ws = reduxStore.getState().workSheet
+          const pasteStartRow = sel.row
+          const pasteStartCol = sel.col
+          const rowOffset = pasteStartRow - clipboard.range.startRow
+          const colOffset = pasteStartCol - clipboard.range.startCol
+
+          // 遍历剪贴板中的所有单元格，粘贴到目标位置
+          for (const [key, clipCell] of Object.entries(clipboard.cells)) {
+            const [rowStr, colStr] = key.split(':')
+            const origRow = parseInt(rowStr, 10)
+            const origCol = parseInt(colStr, 10)
+            const targetRow = origRow + rowOffset
+            const targetCol = origCol + colOffset
+
+            // 边界检查
+            if (
+              targetRow < 1 ||
+              targetRow > ws.rowCount ||
+              targetCol < 1 ||
+              targetCol > ws.colCount
+            ) {
+              continue
+            }
+
+            commitCell(targetRow, targetCol, clipCell.value, clipCell.style)
+          }
+
+          event.preventDefault()
+          return
+        }
+
         if (event.key === 'Enter' || event.key === 'F2') {
           startEdit(sel.row, sel.col)
           event.preventDefault()
