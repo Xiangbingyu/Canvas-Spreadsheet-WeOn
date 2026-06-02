@@ -15,9 +15,12 @@ export interface CollabState {
   clientId: string
   docTitle: string
   users: OnlineUser[]
-  userCursors: Record<string, { row: number; col: number }>
+  userCursors: Record<string, { sheetId: string; row: number; col: number }>
   currentSeq: number
   connectionStatus: 'disconnected' | 'connected' | 'reconnecting'
+  selfName: string
+  selfColor: string
+  lastEditTime: number
 }
 
 const initialState: CollabState = {
@@ -28,6 +31,9 @@ const initialState: CollabState = {
   userCursors: {},
   currentSeq: 0,
   connectionStatus: 'disconnected',
+  selfName: '',
+  selfColor: '',
+  lastEditTime: 0,
 }
 
 const collabSlice = createSlice({
@@ -62,8 +68,12 @@ const collabSlice = createSlice({
     },
 
     /** 更新单个用户的光标位置 */
-    setUserCursor(state, action: PayloadAction<{ clientId: string; row: number; col: number }>) {
+    setUserCursor(
+      state,
+      action: PayloadAction<{ clientId: string; sheetId: string; row: number; col: number }>
+    ) {
       state.userCursors[action.payload.clientId] = {
+        sheetId: action.payload.sheetId,
         row: action.payload.row,
         col: action.payload.col,
       }
@@ -81,6 +91,19 @@ const collabSlice = createSlice({
     ) {
       state.connectionStatus = action.payload
     },
+
+    /** 记录自己的名称和颜色（连接后写入） */
+    setSelf(state, action: PayloadAction<{ name: string; color: string }>) {
+      state.selfName = action.payload.name
+      state.selfColor = action.payload.color
+    },
+
+    /** 更新文档最后编辑时间（远端确认时间戳） */
+    setLastEditTime(state, action: PayloadAction<number>) {
+      if (action.payload > state.lastEditTime) {
+        state.lastEditTime = action.payload
+      }
+    },
   },
 })
 
@@ -92,5 +115,7 @@ export const {
   removeUserCursor,
   setCurrentSeq,
   setConnectionStatus,
+  setSelf,
+  setLastEditTime,
 } = collabSlice.actions
 export const collabReducer = collabSlice.reducer

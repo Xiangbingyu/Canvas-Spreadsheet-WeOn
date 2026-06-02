@@ -6,6 +6,7 @@ async function handleCursor({ message, broadcastToRoom }) {
     docId: message.docId,
     sheetID: message.sheetID,
     clientId: message.clientId,
+    sheetId: message.sheetId,
     row: message.row,
     col: message.col,
   });
