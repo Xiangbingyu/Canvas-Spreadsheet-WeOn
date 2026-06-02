@@ -25,10 +25,12 @@ import {
   getDataViewportSize,
   getSheetSize,
   clampScroll,
+  getCellRect,
   renderContentLayer,
   renderGridLayer,
   renderOverlayLayer,
   type RenderGridOptions,
+  type RenderRect,
 } from '@/spreadsheet/render'
 import { resolveRemoteCursorColor } from '@/spreadsheet/render/layerRenderer'
 import { canvasPerf, sheetUpdatePerf } from '@/spreadsheet/render/perfMonitor'
@@ -40,6 +42,7 @@ import { cellsToTSV, parseTSV } from '@/spreadsheet/utils/tsvConverter'
 import type { InteractionEngine } from '@/spreadsheet/interaction/interactionEngine'
 import { ContextMenu } from '@/components/ContextMenu/ContextMenu'
 import { GRID_CHROME } from '@/spreadsheet/utils/coordinates'
+import type { CellCoord, SelectionRange } from '@/spreadsheet/model/selection'
 
 const MIN_THUMB_SIZE = 24
 
@@ -78,6 +81,10 @@ export type GrideCanvasHandle = {
   scrollTo: (scrollX: number, scrollY: number) => void
   /** 无传入参数，返回当前 Canvas viewport 快照，供交互模块自动滚动后重新命中。 */
   getViewport: () => Viewport
+  /** 传入变更单元格坐标，返回结果为调度 content 层局部重绘；不修改 Redux 数据。 */
+  invalidateCells: (cells: CellCoord[]) => void
+  /** 传入变更选区范围，返回结果为调度 content 层局部重绘；不修改 Redux 数据。 */
+  invalidateRange: (range: SelectionRange) => void
 }
 
 type GridScrollBarProps = {
@@ -94,6 +101,9 @@ type CanvasLayerContexts = {
   content: CanvasRenderingContext2D
   overlay: CanvasRenderingContext2D
 }
+
+const CONTENT_AND_OVERLAY_LAYERS: CanvasLayer[] = ['content', 'overlay']
+const OVERLAY_ONLY_LAYERS: CanvasLayer[] = ['overlay']
 
 /**
  * 作用：计算滚动条滑块尺寸与偏移。
@@ -338,6 +348,17 @@ function GrideCanvas(
   const users = useSelector((state: RootState) => state.collab.users)
   const myClientId = useSelector((state: RootState) => state.collab.clientId)
   const viewportRef = useRef<Viewport>(createViewport())
+  const pendingContentDirtyRectsRef = useRef<RenderRect[]>([])
+  const scrollUiRafRef = useRef<number | null>(null)
+  const previousWorksheetRenderStateRef = useRef<{
+    sheetId: string
+    rowCount: number
+    colCount: number
+    defaultRowHeight: number
+    defaultColWidth: number
+    cells: typeof worksheet.cells
+    styles: typeof worksheet.styles
+  } | null>(null)
 
   const layout: LayeredCanvasLayout = useMemo(
     () => ({
@@ -432,7 +453,14 @@ function GrideCanvas(
         renderGridLayer(contexts.grid, options)
       }
       if (dirtyLayers.has('content')) {
-        renderContentLayer(contexts.content, options)
+        const pendingDirtyRects = pendingContentDirtyRectsRef.current
+        pendingContentDirtyRectsRef.current = []
+        const canUseDirtyRects = !dirtyLayers.has('grid') && pendingDirtyRects.length > 0
+        renderContentLayer(
+          contexts.content,
+          options,
+          canUseDirtyRects ? { dirtyRects: pendingDirtyRects } : undefined
+        )
       }
       if (dirtyLayers.has('overlay')) {
         renderOverlayLayer(contexts.overlay, options)
@@ -449,6 +477,96 @@ function GrideCanvas(
     onRender: renderDirtyLayers,
   })
 
+  const scheduleAllLayersRender = useCallback(() => {
+    pendingContentDirtyRectsRef.current = []
+    scheduleRender(ALL_CANVAS_LAYERS)
+  }, [scheduleRender])
+
+  const scheduleFullContentRender = useCallback(() => {
+    pendingContentDirtyRectsRef.current = []
+    scheduleRender(CONTENT_AND_OVERLAY_LAYERS)
+  }, [scheduleRender])
+
+  const appendContentDirtyRects = useCallback(
+    /**
+     * 作用：登记 content 层局部重绘矩形，并调度 content + overlay；调用方需要已明确变更范围。
+     * 传入参数：dirtyRects 为 Canvas 逻辑像素矩形数组。
+     * 返回结果：无返回值；不修改 Redux，只影响下一帧 Canvas 绘制范围。
+     */
+    (dirtyRects: RenderRect[]) => {
+      if (dirtyRects.length === 0) {
+        return
+      }
+
+      pendingContentDirtyRectsRef.current.push(...dirtyRects)
+      scheduleRender(CONTENT_AND_OVERLAY_LAYERS)
+    },
+    [scheduleRender]
+  )
+
+  const getCellDirtyRect = useCallback(
+    /**
+     * 作用：把 1-based 单元格坐标转换为 contentCanvas 上的局部重绘矩形。
+     * 传入参数：cell 为变更单元格坐标，使用当前 worksheet 行高列宽和 viewport scroll。
+     * 返回结果：返回 Canvas 逻辑像素矩形；越界时返回 null。
+     */
+    (cell: CellCoord): RenderRect | null => {
+      if (
+        cell.row < 1 ||
+        cell.row > worksheet.rowCount ||
+        cell.col < 1 ||
+        cell.col > worksheet.colCount
+      ) {
+        return null
+      }
+
+      return getCellRect(
+        cell.row,
+        cell.col,
+        viewportRef.current.scrollX,
+        viewportRef.current.scrollY,
+        worksheet.defaultRowHeight,
+        worksheet.defaultColWidth
+      )
+    },
+    [worksheet.colCount, worksheet.defaultColWidth, worksheet.defaultRowHeight, worksheet.rowCount]
+  )
+
+  const getRangeDirtyRect = useCallback(
+    /**
+     * 作用：把 1-based 选区范围转换为 contentCanvas 上的局部重绘矩形。
+     * 传入参数：range 为变更区域，通常来自样式批量应用或粘贴区域。
+     * 返回结果：返回覆盖该范围的 Canvas 逻辑像素矩形；越界或空范围返回 null。
+     */
+    (range: SelectionRange): RenderRect | null => {
+      const rowStart = Math.max(1, Math.min(range.start.row, range.end.row))
+      const rowEnd = Math.min(worksheet.rowCount, Math.max(range.start.row, range.end.row))
+      const colStart = Math.max(1, Math.min(range.start.col, range.end.col))
+      const colEnd = Math.min(worksheet.colCount, Math.max(range.start.col, range.end.col))
+
+      if (rowStart > rowEnd || colStart > colEnd) {
+        return null
+      }
+
+      const startRect = getCellRect(
+        rowStart,
+        colStart,
+        viewportRef.current.scrollX,
+        viewportRef.current.scrollY,
+        worksheet.defaultRowHeight,
+        worksheet.defaultColWidth
+      )
+
+      return {
+        x: startRect.x,
+        y: startRect.y,
+        width: (colEnd - colStart + 1) * worksheet.defaultColWidth,
+        height: (rowEnd - rowStart + 1) * worksheet.defaultRowHeight,
+      }
+    },
+    [worksheet.colCount, worksheet.defaultColWidth, worksheet.defaultRowHeight, worksheet.rowCount]
+  )
+
   const publishScrollUi = useCallback(() => {
     const viewport = viewportRef.current
     const sheet = getSheetSize(layout.rowCount, layout.colCount, layout.rowHeight, layout.colWidth)
@@ -463,6 +581,27 @@ function GrideCanvas(
       sheetHeight: sheet.height,
     })
   }, [layout.colCount, layout.colWidth, layout.rowCount, layout.rowHeight])
+
+  const scheduleScrollUiPublish = useCallback(() => {
+    if (scrollUiRafRef.current !== null) {
+      return
+    }
+
+    scrollUiRafRef.current = requestAnimationFrame(() => {
+      scrollUiRafRef.current = null
+      publishScrollUi()
+    })
+  }, [publishScrollUi])
+
+  useEffect(
+    () => () => {
+      if (scrollUiRafRef.current !== null) {
+        cancelAnimationFrame(scrollUiRafRef.current)
+        scrollUiRafRef.current = null
+      }
+    },
+    []
+  )
 
   const applyScroll = useCallback(
     /**
@@ -496,8 +635,8 @@ function GrideCanvas(
       viewport.scrollY = clamped.scrollY
       interactionEngine.setScroll(clamped.scrollX, clamped.scrollY)
       onScrollChange?.(clamped.scrollX, clamped.scrollY)
-      publishScrollUi()
-      scheduleRender(ALL_CANVAS_LAYERS)
+      scheduleScrollUiPublish()
+      scheduleAllLayersRender()
     },
     [
       layout.colCount,
@@ -506,8 +645,8 @@ function GrideCanvas(
       layout.rowHeight,
       interactionEngine,
       onScrollChange,
-      publishScrollUi,
-      scheduleRender,
+      scheduleAllLayersRender,
+      scheduleScrollUiPublish,
     ]
   )
 
@@ -527,8 +666,20 @@ function GrideCanvas(
       getViewport() {
         return { ...viewportRef.current }
       },
+      invalidateCells(cells: CellCoord[]) {
+        const dirtyRects = cells
+          .map((cell) => getCellDirtyRect(cell))
+          .filter((rect): rect is RenderRect => rect !== null)
+        appendContentDirtyRects(dirtyRects)
+      },
+      invalidateRange(range: SelectionRange) {
+        const dirtyRect = getRangeDirtyRect(range)
+        if (dirtyRect) {
+          appendContentDirtyRects([dirtyRect])
+        }
+      },
     }),
-    [applyScroll, overlayCanvasRef]
+    [appendContentDirtyRects, applyScroll, getCellDirtyRect, getRangeDirtyRect, overlayCanvasRef]
   )
 
   const onWheelScroll = useCallback(
@@ -772,13 +923,55 @@ function GrideCanvas(
     interactionEngine.setScroll(viewportRef.current.scrollX, viewportRef.current.scrollY)
     onScrollChange?.(viewportRef.current.scrollX, viewportRef.current.scrollY)
     publishScrollUi()
-    scheduleRender(ALL_CANVAS_LAYERS)
-  }, [interactionEngine, layoutVersion, onScrollChange, publishScrollUi, scheduleRender])
+    scheduleAllLayersRender()
+  }, [interactionEngine, layoutVersion, onScrollChange, publishScrollUi, scheduleAllLayersRender])
 
   useEffect(() => {
+    const previous = previousWorksheetRenderStateRef.current
+    const current = {
+      sheetId: worksheet.sheetId,
+      rowCount: worksheet.rowCount,
+      colCount: worksheet.colCount,
+      defaultRowHeight: worksheet.defaultRowHeight,
+      defaultColWidth: worksheet.defaultColWidth,
+      cells: worksheet.cells,
+      styles: worksheet.styles,
+    }
+
+    previousWorksheetRenderStateRef.current = current
     sheetUpdatePerf.markWorksheetObserved()
-    scheduleRender(ALL_CANVAS_LAYERS)
-  }, [scheduleRender, worksheet.cells, worksheet.sheetId, worksheet.styles])
+
+    if (!previous) {
+      scheduleAllLayersRender()
+      return
+    }
+
+    const structureChanged =
+      previous.sheetId !== current.sheetId ||
+      previous.rowCount !== current.rowCount ||
+      previous.colCount !== current.colCount ||
+      previous.defaultRowHeight !== current.defaultRowHeight ||
+      previous.defaultColWidth !== current.defaultColWidth
+
+    if (structureChanged) {
+      scheduleAllLayersRender()
+      return
+    }
+
+    if (previous.cells !== current.cells || previous.styles !== current.styles) {
+      scheduleFullContentRender()
+    }
+  }, [
+    scheduleAllLayersRender,
+    scheduleFullContentRender,
+    worksheet.cells,
+    worksheet.colCount,
+    worksheet.defaultColWidth,
+    worksheet.defaultRowHeight,
+    worksheet.rowCount,
+    worksheet.sheetId,
+    worksheet.styles,
+  ])
 
   // 设置自动滚动回调：当选中单元格时，自动滚动视口跟随
   useEffect(() => {
@@ -838,8 +1031,7 @@ function GrideCanvas(
   ])
 
   useEffect(() => {
-    const overlayOnly: CanvasLayer[] = ['overlay']
-    scheduleRender(overlayOnly)
+    scheduleRender(OVERLAY_ONLY_LAYERS)
   }, [
     scheduleRender,
     myClientId,
@@ -885,7 +1077,7 @@ function GrideCanvas(
           maxScroll={maxScrollY}
           viewportSize={scrollUi.dataViewportHeight}
           contentSize={scrollUi.sheetHeight}
-          onScroll={(scrollY) => applyScroll(scrollUi.scrollX, scrollY)}
+          onScroll={(scrollY) => applyScroll(viewportRef.current.scrollX, scrollY)}
         />
       </div>
 
@@ -896,7 +1088,7 @@ function GrideCanvas(
           maxScroll={maxScrollX}
           viewportSize={scrollUi.dataViewportWidth}
           contentSize={scrollUi.sheetWidth}
-          onScroll={(scrollX) => applyScroll(scrollX, scrollUi.scrollY)}
+          onScroll={(scrollX) => applyScroll(scrollX, viewportRef.current.scrollY)}
         />
         <div className="h-[14px] w-[14px] shrink-0 border-l border-t border-[#dadce0] bg-[#f1f3f4]" />
       </div>
