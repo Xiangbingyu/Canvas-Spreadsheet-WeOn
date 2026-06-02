@@ -1,4 +1,5 @@
 const storeConfig = require('../config/storeConfig');
+const realtimeConfig = require('../config/realtimeConfig');
 const { createRedisPubSub } = require('../infra/redis/pubsub');
 
 function isNonEmptyString(value) {
@@ -16,7 +17,8 @@ function getBroadcastDriver() {
 }
 
 function shouldEnableRedisBroadcast() {
-  return storeConfig.driver === 'mysql' && getBroadcastDriver() === 'redis';
+  return getBroadcastDriver() === 'redis'
+    && (storeConfig.driver === 'mysql' || realtimeConfig.driver === 'redis');
 }
 
 function createCollabBroadcastService({ broadcastLocallyToRoom }) {

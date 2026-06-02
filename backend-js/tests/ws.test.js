@@ -2489,6 +2489,8 @@ test('restored ws test 65', async () => {
   const srv = await createTestServer();
   const c = await connect(srv.wsUrl);
   try {
+    await joinDoc(c, 'doc_sys_001', 'u1');
+    const base = c.received.length;
     const snapshot = {
       activeSheetId: 'sheet_import_001',
       sheetOrder: ['sheet_import_001'],
@@ -2506,8 +2508,8 @@ test('restored ws test 65', async () => {
       },
     };
     c.send({ type: 'import_sheet', docId: 'doc_sys_001', clientId: 'u1', snapshot });
-    await c.waitFor(1);
-    const msg = c.received[0];
+    await c.waitFor(base + 2);
+    const msg = c.received[base];
     assert.equal(msg.type, 'sheet_imported');
     assert.equal(msg.code, 0);
     assert.equal(msg.message, 'ok');
@@ -2588,6 +2590,8 @@ test('restored ws test 67', async () => {
   const srv = await createTestServer();
   const c = await connect(srv.wsUrl);
   try {
+    await joinDoc(c, 'doc_sys_001', 'user_001');
+    const base = c.received.length;
     const snapshot = {
       id: 'sheet_20260527_001',
       name: '2026年销售数据表',
@@ -2624,9 +2628,9 @@ test('restored ws test 67', async () => {
       clientId: 'user_001',
       snapshot,
     });
-    await c.waitFor(1);
+    await c.waitFor(base + 2);
 
-    const msg = c.received[0];
+    const msg = c.received[base];
     assert.equal(msg.type, 'sheet_imported');
     assert.equal(msg.code, 0);
     assert.equal(msg.message, 'ok');
@@ -2746,14 +2750,16 @@ test('restored ws test 71', async () => {
   const srv = await createTestServer();
   const c = await connect(srv.wsUrl);
   try {
+    await joinDoc(c, 'doc_sys_001', 'u1');
+    const base = c.received.length;
     const snapshot = { id: 'sheet_import_006', name: '空表', defaultRowHeight: 25, defaultColWidth: 100, cells: {}, styles: {}, rowCount: 0, colCount: 0 };
     c.send({ type: 'import_sheet', docId: 'doc_sys_001', clientId: 'u1', snapshot });
-    await c.waitFor(1);
-    const seq1 = c.received[0].data.seq;
+    await c.waitFor(base + 2);
+    const seq1 = c.received[base].data.seq;
 
     c.send({ type: 'import_sheet', docId: 'doc_sys_001', clientId: 'u1', snapshot });
-    await c.waitFor(2);
-    const seq2 = c.received[1].data.seq;
+    await c.waitFor(base + 4);
+    const seq2 = c.received[base + 2].data.seq;
 
     assert.ok(seq2 > seq1);
   } finally {
@@ -2786,6 +2792,8 @@ test('restored ws test 73', async () => {
   const srv = await createTestServer();
   const c = await connect(srv.wsUrl);
   try {
+    await joinDoc(c, 'doc_sys_001', 'u1');
+    const base = c.received.length;
     c.send({
       type: 'import_sheet',
       docId: 'doc_sys_001',
@@ -2803,20 +2811,20 @@ test('restored ws test 73', async () => {
         },
       },
     });
-    await c.waitFor(1);
+    await c.waitFor(base + 2);
 
-    assert.equal(c.received[0].type, 'sheet_imported');
-    assert.equal(c.received[0].code, 0);
-    assert.equal(c.received[0].data.snapshot.activeSheetId, 'sheet_doc_sys_001_001');
-    assert.deepEqual(c.received[0].data.snapshot.sheetOrder, ['sheet_doc_sys_001_001']);
-    assert.equal(c.received[0].data.snapshot.sheets.sheet_doc_sys_001_001.id, 'sheet_doc_sys_001_001');
-    assert.equal(c.received[0].data.snapshot.sheets.sheet_doc_sys_001_001.name, 'Sheet1');
-    assert.equal(c.received[0].data.snapshot.sheets.sheet_doc_sys_001_001.defaultRowHeight, 25);
-    assert.equal(c.received[0].data.snapshot.sheets.sheet_doc_sys_001_001.defaultColWidth, 100);
-    assert.equal(c.received[0].data.snapshot.sheets.sheet_doc_sys_001_001.rowCount, 0);
-    assert.equal(c.received[0].data.snapshot.sheets.sheet_doc_sys_001_001.colCount, 0);
-    assert.deepEqual(c.received[0].data.snapshot.sheets.sheet_doc_sys_001_001.styles, {});
-    assert.deepEqual(c.received[0].data.snapshot.sheets.sheet_doc_sys_001_001.cells['0:0'], { row: 0, col: 0, value: 'A', styleId: null });
+    assert.equal(c.received[base].type, 'sheet_imported');
+    assert.equal(c.received[base].code, 0);
+    assert.equal(c.received[base].data.snapshot.activeSheetId, 'sheet_doc_sys_001_001');
+    assert.deepEqual(c.received[base].data.snapshot.sheetOrder, ['sheet_doc_sys_001_001']);
+    assert.equal(c.received[base].data.snapshot.sheets.sheet_doc_sys_001_001.id, 'sheet_doc_sys_001_001');
+    assert.equal(c.received[base].data.snapshot.sheets.sheet_doc_sys_001_001.name, 'Sheet1');
+    assert.equal(c.received[base].data.snapshot.sheets.sheet_doc_sys_001_001.defaultRowHeight, 25);
+    assert.equal(c.received[base].data.snapshot.sheets.sheet_doc_sys_001_001.defaultColWidth, 100);
+    assert.equal(c.received[base].data.snapshot.sheets.sheet_doc_sys_001_001.rowCount, 0);
+    assert.equal(c.received[base].data.snapshot.sheets.sheet_doc_sys_001_001.colCount, 0);
+    assert.deepEqual(c.received[base].data.snapshot.sheets.sheet_doc_sys_001_001.styles, {});
+    assert.deepEqual(c.received[base].data.snapshot.sheets.sheet_doc_sys_001_001.cells['0:0'], { row: 0, col: 0, value: 'A', styleId: null });
   } finally {
     await c.close();
     await srv.close();
@@ -2884,8 +2892,10 @@ test('restored ws test 78', async () => {
   const srv = await createTestServer();
   const c = await connect(srv.wsUrl);
   try {
+    await joinDoc(c, 'doc_sys_001', 'u_imp_audit');
+    const base = c.received.length;
     c.send({ type: 'import_sheet', docId: 'doc_sys_001', clientId: 'u_imp_audit', snapshot: { id: 'sheet_import_011', name: '空表', defaultRowHeight: 25, defaultColWidth: 100, cells: {}, styles: {}, rowCount: 0, colCount: 0 } });
-    await c.waitFor(1);
+    await c.waitFor(base + 2);
     await new Promise((r) => setImmediate(r));
     const auditLogStore = require('../store/auditLogStore');
     const logs = await auditLogStore.listByEventType('import_sheet');
@@ -2902,11 +2912,13 @@ test('restored ws test 79', async () => {
   const srv = await createTestServer();
   const c = await connect(srv.wsUrl);
   try {
+    await joinDoc(c, 'doc_sys_001', 'u1');
+    const base = c.received.length;
     const snapshot = { id: 'sheet_import_012', name: '空表', defaultRowHeight: 25, defaultColWidth: 100, cells: {}, styles: {}, rowCount: 0, colCount: 0 };
     c.send({ type: 'import_sheet', docId: 'doc_sys_001', clientId: 'u1', snapshot });
-    await c.waitFor(1);
+    await c.waitFor(base + 2);
     c.send({ type: 'import_sheet', docId: 'doc_sys_001', clientId: 'u1', snapshot });
-    await c.waitFor(2);
+    await c.waitFor(base + 4);
     await new Promise((r) => setImmediate(r));
     const auditLogStore = require('../store/auditLogStore');
     const logs = await auditLogStore.listByEventType('import_sheet');

@@ -54,6 +54,10 @@ function createMemoryDocRealtimeStore() {
       return { ok: true, conflict: false, seq: newSeq, streamId: `${newSeq}-0`, event: enriched };
     },
 
+    async getCheckpoint(docId) {
+      return seqByDocId.has(docId) ? seqByDocId.get(docId) : null;
+    },
+
     async readStreamRange(docId, fromSeq, toSeq) {
       const entries = streamByDocId.get(docId) || [];
       return entries.filter((entry) => entry.seq > fromSeq && entry.seq <= toSeq);
@@ -95,10 +99,12 @@ function createRedisDocRealtimeStore() {
 
     async seed(docId, { snapshotJson, currentSeq }) {
       const client = await connection.ensureReady();
+      const seq = Number.isInteger(currentSeq) ? currentSeq : 0;
       const multi = client.multi();
-      multi.set(keys.seqKey(docId), String(Number.isInteger(currentSeq) ? currentSeq : 0));
+      multi.set(keys.seqKey(docId), String(seq));
       multi.set(keys.stateKey(docId), JSON.stringify(snapshotJson));
-      multi.set(keys.checkpointKey(docId), String(Number.isInteger(currentSeq) ? currentSeq : 0));
+      multi.set(keys.checkpointKey(docId), String(seq));
+      multi.del(keys.streamKey(docId));
       await multi.exec();
     },
 
@@ -112,6 +118,13 @@ function createRedisDocRealtimeStore() {
         stateJson: JSON.stringify(snapshotJson),
         eventJson: JSON.stringify(event),
       });
+    },
+
+    async getCheckpoint(docId) {
+      const client = await connection.ensureReady();
+      if (!client) return null;
+      const raw = await client.get(keys.checkpointKey(docId));
+      return raw !== null ? Number.parseInt(raw, 10) : null;
     },
 
     async readStreamRange(docId, fromSeq, toSeq) {

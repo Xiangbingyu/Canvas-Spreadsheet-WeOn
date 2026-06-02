@@ -9,6 +9,9 @@ const docStore = require('../store/docStore');
 const roomUserStore = require('../store/roomUserStore');
 const auditService = require('../audit/auditService');
 const { normalizeDocSnapshot } = require('../domain/entities/doc');
+const realtimeConfig = require('../config/realtimeConfig');
+const docRealtimeStore = require('../store/redis/docRealtimeStore');
+const docRecoveryService = require('./recovery/docRecoveryService');
 
 // ==================== 公共方法 ====================
 
@@ -447,7 +450,28 @@ async function getDocState(docId) {
 
 async function getDocStateForWrite(docId, options = {}) {
   const normalizedDocId = normalizeDocId(docId);
+
+  if (realtimeConfig.driver === 'redis') {
+    let state = await docRealtimeStore.getState(normalizedDocId);
+    if (!state) {
+      await docRecoveryService.seedRealtimeFromMysql(normalizedDocId);
+      state = await docRealtimeStore.getState(normalizedDocId);
+    }
+    if (!state) return null;
+    return {
+      docId: normalizedDocId,
+      currentSeq: state.currentSeq,
+      snapshotJson: state.snapshotJson,
+    };
+  }
+
   return docStore.getDocState(normalizedDocId, options);
+}
+
+// Gate 路径：Lua 原子提交，返回 { seq, snapshotJson, event }。不写 MySQL。
+async function commitRealtimeOp(docId, { expectedBaseSeq, snapshotJson, event }) {
+  const result = await docRealtimeStore.commit(docId, { expectedBaseSeq, snapshotJson, event });
+  return result;
 }
 
 async function applySetCell(command, options = {}) {
@@ -485,6 +509,7 @@ module.exports = {
   listDocsByUser,
   getDocState,
   getDocStateForWrite,
+  commitRealtimeOp,
   getDocMeta,
   applySetCell,
   applyBatchSetCell,
