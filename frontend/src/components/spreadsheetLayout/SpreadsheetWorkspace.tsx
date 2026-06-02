@@ -36,6 +36,7 @@ export function SpreadsheetWorkspace() {
     setTitle,
     importWorkbook,
     addSheet,
+    setBatchCells,
     getClient,
     sendCursor,
   } = useCollab({
@@ -100,7 +101,7 @@ export function SpreadsheetWorkspace() {
   }, [docId, clientId, connect, disconnect])
 
   const onCommitCell = useCommitCell(setCell)
-  const onCommitBatch = useCommitBatch(undefined) // 暂时不传 setBatchCells，等 yjy 实现
+  const onCommitBatch = useCommitBatch(setBatchCells)
   const { commitWithHistory, commitBatchWithHistory, executeRowColWithHistory, undo, redo } =
     useUnifiedHistory(onCommitCell, onCommitBatch, getClient())
 

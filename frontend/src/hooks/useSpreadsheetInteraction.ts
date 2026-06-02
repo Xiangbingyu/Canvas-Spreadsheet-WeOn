@@ -53,10 +53,11 @@ export function useSpreadsheetInteraction(options: UseSpreadsheetInteractionOpti
       if (commit) {
         commit(row, col, value, style)
       } else {
-        dispatch(updateCell({ row, col, value, style }))
+        const sheetId = reduxStore.getState().workSheet.sheetId
+        dispatch(updateCell({ sheetId, row, col, value, style }))
       }
     },
-    [dispatch]
+    [dispatch, reduxStore]
   )
 
   const [editingCell, setEditingCell] = useState<{ row: number; col: number } | null>(null)
@@ -117,10 +118,11 @@ export function useSpreadsheetInteraction(options: UseSpreadsheetInteractionOpti
       if (!target) return
       const value = textareaRef.current?.value ?? ''
 
+      const ws = reduxStore.getState().workSheet
+
       // 检查是否是公式
       let displayValue = value
       if (isFormula(value)) {
-        const ws = reduxStore.getState().workSheet
         const parsed = parseFormula(value)
         const { result, error } = calculateFormula(ws, parsed)
         if (error) {
@@ -132,11 +134,14 @@ export function useSpreadsheetInteraction(options: UseSpreadsheetInteractionOpti
         }
       }
 
+      // 编辑只改文字、不改样式：把当前格已有样式一起带上提交，避免下游把
+      // “缺省 style” 当成清空。读不到样式时为 undefined（保留语义），绝不传 null。
+      const cell = ws.cells[`${target.row}:${target.col}`]
+      const style: Style | undefined = cell?.styleId ? ws.styles[cell.styleId] : undefined
+
       // 走协同链路（或本地兜底）；选中态本地即时更新以保证 UI 响应
-      commitCell(target.row, target.col, displayValue)
-      dispatch(
-        setSelectedCell({ row: target.row, col: target.col, value: displayValue, style: undefined })
-      )
+      commitCell(target.row, target.col, displayValue, style)
+      dispatch(setSelectedCell({ row: target.row, col: target.col, value: displayValue, style }))
       setEditingCell(null)
       editingCellRef.current = null
       if (move) {
