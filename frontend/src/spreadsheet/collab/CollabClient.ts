@@ -107,6 +107,8 @@ export class CollabClient {
   // P2-3: 冲突追踪
   private replayTrackers: ReplayTracker[] = []
   private replayConflictTimer: ReturnType<typeof setTimeout> | null = null
+  // P2-4: 存储空间告警
+  private storageWarned = false
   private retryCount = 0
   private readonly maxRetries = 10
   private readonly baseReconnectInterval: number
@@ -160,6 +162,7 @@ export class CollabClient {
         return
       }
       this.retryCount = 0
+      this.storageWarned = false
       this.callbacks.onConnectionChange('connected')
       this.join()
       this.flushSendQueue()
@@ -593,7 +596,7 @@ export class CollabClient {
         })
       } else if (msg.type === 'batch_set_cell') {
         const targets = (msg.updates as Array<{ row: number; col: number }> | undefined) ?? []
-        OfflineQueue.enqueueBatch({
+        const okBatch = OfflineQueue.enqueueBatch({
           type: 'batch_set_cell',
           docId: this.docId,
           sheetId: (msg.sheetId as string) ?? '',
@@ -602,6 +605,7 @@ export class CollabClient {
           value: 'value' in msg ? (msg.value as string) : undefined,
           style: 'style' in msg ? (msg.style as Record<string, unknown> | null) : undefined,
         })
+        if (!okBatch) this.warnStorageFull()
       }
     }
     this.pendingMessages.clear()
@@ -628,7 +632,7 @@ export class CollabClient {
     if (this.seq > 0) {
       if (msg.type === 'set_cell') {
         const m = msg as Record<string, unknown>
-        OfflineQueue.enqueue({
+        const ok = OfflineQueue.enqueue({
           type: 'set_cell',
           docId: this.docId,
           sheetId: (m.sheetId as string) ?? '',
@@ -639,12 +643,13 @@ export class CollabClient {
           baseSeq: (m.baseSeq as number) ?? this.seq,
           timestamp: Date.now(),
         })
+        if (!ok) this.warnStorageFull()
         return
       }
       if (msg.type === 'batch_set_cell') {
         const m = msg as Record<string, unknown>
         const targets = (m.updates as Array<{ row: number; col: number }> | undefined) ?? []
-        OfflineQueue.enqueueBatch({
+        const ok2 = OfflineQueue.enqueueBatch({
           type: 'batch_set_cell',
           docId: this.docId,
           sheetId: (m.sheetId as string) ?? '',
@@ -653,10 +658,18 @@ export class CollabClient {
           value: 'value' in m ? (m.value as string) : undefined,
           style: 'style' in m ? (m.style as Record<string, unknown> | null) : undefined,
         })
+        if (!ok2) this.warnStorageFull()
         return
       }
     }
     this.sendQueue.push(data)
+  }
+
+  /** P2-4: 离线存储空间不足时提示用户（仅首次） */
+  private warnStorageFull(): void {
+    if (this.storageWarned) return
+    this.storageWarned = true
+    this.callbacks.onError(5001, '离线存储空间不足，请清理浏览器数据')
   }
 
   private flushSendQueue(): void {
