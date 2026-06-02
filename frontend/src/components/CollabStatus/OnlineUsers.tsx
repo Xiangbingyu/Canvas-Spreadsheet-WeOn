@@ -5,13 +5,15 @@ import type { RootState } from '@/spreadsheet/store'
 function statusColor(status: string): string {
   if (status === 'connected') return '#22c55e'
   if (status === 'reconnecting') return '#eab308'
-  return '#ef4444'
+  if (status === 'failed') return '#ef4444'
+  return '#9ca3af'
 }
 
 function statusLabel(status: string): string {
   if (status === 'connected') return '已连接'
   if (status === 'reconnecting') return '重连中'
-  return '已断开'
+  if (status === 'failed') return '连接失败'
+  return '未连接'
 }
 
 function Avatar({ name, color }: { name: string; color: string }) {
@@ -34,7 +36,12 @@ export function OnlineUsers() {
   const selfColor = useSelector((s: RootState) => s.collab.selfColor)
   // clientId 为空 = 尚未 join，不弹横幅避免初始闪烁
   const bannerVisible = clientId !== '' && status !== 'connected'
-  const bannerText = status === 'reconnecting' ? '网络已断开，正在重连…' : '连接已断开'
+  const bannerText =
+    status === 'failed'
+      ? '连接失败，请检查网络后刷新页面'
+      : status === 'reconnecting'
+        ? '网络已断开，正在重连…'
+        : '连接已断开'
 
   // 服务端 presence 列表包含自己，过滤掉避免重复
   const otherUsers = users.filter((u) => u.clientId !== clientId)
@@ -42,7 +49,11 @@ export function OnlineUsers() {
   return (
     <>
       {bannerVisible && (
-        <div className="fixed top-0 left-0 right-0 z-50 bg-yellow-50 text-center text-[13px] leading-8 text-yellow-800 shadow transition-opacity duration-300">
+        <div
+          className={`fixed top-0 left-0 right-0 z-50 text-center text-[13px] leading-8 shadow transition-opacity duration-300 ${
+            status === 'failed' ? 'bg-red-50 text-red-800' : 'bg-yellow-50 text-yellow-800'
+          }`}
+        >
           {bannerText}
         </div>
       )}

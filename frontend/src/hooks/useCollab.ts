@@ -194,6 +194,9 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
         if (status === 'connected') {
           dispatch(setSelf({ name: userName ?? '', color: userColor ?? '#3b82f6' }))
         }
+        if (status === 'failed') {
+          antMessage.error('连接失败，请检查网络后刷新页面重试')
+        }
       },
     }),
     [dispatch, userName, userColor]
