@@ -70,11 +70,12 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
       },
 
       onCellUpdated(data: CellUpdated['data']) {
+        const cell = store.getState().workSheet.cells[`${data.row}:${data.col}`]
         dispatch(
           updateCell({
             row: data.row,
             col: data.col,
-            value: data.value,
+            value: 'value' in (data as Record<string, unknown>) ? data.value : (cell?.value ?? ''),
             sheetId: data.sheetId,
             style: data.style ? (data.style as Style) : undefined,
           })
@@ -112,11 +113,12 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
       },
 
       onUndoApplied(data) {
+        const cell = store.getState().workSheet.cells[`${data.row}:${data.col}`]
         dispatch(
           updateCell({
             row: data.row,
             col: data.col,
-            value: data.value,
+            value: 'value' in (data as Record<string, unknown>) ? data.value : (cell?.value ?? ''),
             sheetId: data.sheetId,
             style: data.style ? (data.style as Style) : undefined,
           })
@@ -125,11 +127,12 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
       },
 
       onRedoApplied(data) {
+        const cell = store.getState().workSheet.cells[`${data.row}:${data.col}`]
         dispatch(
           updateCell({
             row: data.row,
             col: data.col,
-            value: data.value,
+            value: 'value' in (data as Record<string, unknown>) ? data.value : (cell?.value ?? ''),
             sheetId: data.sheetId,
             style: data.style ? (data.style as Style) : undefined,
           })
