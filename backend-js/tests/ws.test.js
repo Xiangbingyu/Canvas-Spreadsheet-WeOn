@@ -2208,6 +2208,110 @@ test('batch_set_cell applies one shared patch with a single seq', async () => {
   }
 });
 
+test('batch_set_cell preserves existing value when only style is provided', async () => {
+  const srv = await createTestServer();
+  const c = await connect(srv.wsUrl);
+  try {
+    const joinAck = await joinDoc(c, 'doc_sys_001', 'u_batch_style_only');
+
+    let base = c.received.length;
+    c.send({
+      type: 'set_cell',
+      docId: 'doc_sys_001',
+      clientId: 'u_batch_style_only',
+      sheetId: DEFAULT_SHEET_ID,
+      row: 8,
+      col: 8,
+      value: 'keep-value',
+      style: null,
+    });
+    await c.waitFor(base + 2);
+    const setupReply = c.received[base];
+
+    base = c.received.length;
+    c.send({
+      type: 'batch_set_cell',
+      docId: 'doc_sys_001',
+      clientId: 'u_batch_style_only',
+      sheetId: DEFAULT_SHEET_ID,
+      baseSeq: setupReply.data.seq || joinAck.data.currentSeq,
+      updates: [{ row: 8, col: 8 }],
+      style: { bold: true, color: '#111111' },
+    });
+    await c.waitFor(base + 2);
+
+    const reply = c.received[base];
+    assert.equal(reply.type, 'batch_cell_updated');
+    assert.deepEqual(reply.data.updates, [{
+      row: 8,
+      col: 8,
+      value: 'keep-value',
+      style: { bold: true, color: '#111111' },
+    }]);
+
+    const { getDocState } = require('../service/docsService');
+    const docState = await getDocState('doc_sys_001');
+    const sheet = docState.snapshot.sheets[DEFAULT_SHEET_ID];
+    assert.equal(sheet.cells['8:8'].value, 'keep-value');
+    assert.deepEqual(sheet.styles[sheet.cells['8:8'].styleId], { bold: true, color: '#111111' });
+  } finally {
+    await c.close();
+    await srv.close();
+  }
+});
+
+test('batch_set_cell preserves existing style when only value is provided', async () => {
+  const srv = await createTestServer();
+  const c = await connect(srv.wsUrl);
+  try {
+    const joinAck = await joinDoc(c, 'doc_sys_001', 'u_batch_value_only');
+
+    let base = c.received.length;
+    c.send({
+      type: 'set_cell',
+      docId: 'doc_sys_001',
+      clientId: 'u_batch_value_only',
+      sheetId: DEFAULT_SHEET_ID,
+      row: 9,
+      col: 9,
+      value: 'before-batch',
+      style: { italic: true, color: '#222222' },
+    });
+    await c.waitFor(base + 2);
+    const setupReply = c.received[base];
+
+    base = c.received.length;
+    c.send({
+      type: 'batch_set_cell',
+      docId: 'doc_sys_001',
+      clientId: 'u_batch_value_only',
+      sheetId: DEFAULT_SHEET_ID,
+      baseSeq: setupReply.data.seq || joinAck.data.currentSeq,
+      updates: [{ row: 9, col: 9 }],
+      value: 'after-batch',
+    });
+    await c.waitFor(base + 2);
+
+    const reply = c.received[base];
+    assert.equal(reply.type, 'batch_cell_updated');
+    assert.deepEqual(reply.data.updates, [{
+      row: 9,
+      col: 9,
+      value: 'after-batch',
+      style: { italic: true, color: '#222222' },
+    }]);
+
+    const { getDocState } = require('../service/docsService');
+    const docState = await getDocState('doc_sys_001');
+    const sheet = docState.snapshot.sheets[DEFAULT_SHEET_ID];
+    assert.equal(sheet.cells['9:9'].value, 'after-batch');
+    assert.deepEqual(sheet.styles[sheet.cells['9:9'].styleId], { italic: true, color: '#222222' });
+  } finally {
+    await c.close();
+    await srv.close();
+  }
+});
+
 test('batch_set_cell transforms each target through structure changes and dedupes collisions', async () => {
   const srv = await createTestServer();
   const c = await connect(srv.wsUrl);

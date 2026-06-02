@@ -61,6 +61,7 @@ export function SpreadsheetWorkspace() {
 
     const legacySendCursor = sendCursor as unknown as LegacySendCursor
     legacySendCursor(selection.row, selection.col)
+
   }, [activeWorksheet.sheetId, selection.row, selection.col, sendCursor])
   const handleImportWorkbook = useCallback(
     (workbook: WorkbookSnapshotPayload): boolean => {

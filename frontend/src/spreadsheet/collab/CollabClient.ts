@@ -14,7 +14,7 @@ import type {
   UserInfo,
   Snapshot,
 } from '../model/collabProtocol'
-import { OfflineQueue, type QueuedOp } from './offlineQueue'
+import { OfflineQueue, type StoredOp } from './offlineQueue'
 
 // ===== 回调接口 =====
 
@@ -210,8 +210,8 @@ export class CollabClient {
     })
   }
 
-  sendCursor(row: number, col: number): void {
-    this.send({ type: 'cursor', docId: this.docId, clientId: this.clientId, row, col })
+  sendCursor(sheetId: string, row: number, col: number): void {
+    this.send({ type: 'cursor', docId: this.docId, clientId: this.clientId, sheetId, row, col })
   }
 
   undo(): void {
@@ -490,21 +490,38 @@ export class CollabClient {
       this.ws.send(data)
       return
     }
-    // 首次握手期 → 内存队列；曾经连上过且是 set_cell → localStorage 持久化
-    if (this.seq > 0 && msg.type === 'set_cell') {
-      const m = msg as Record<string, unknown>
-      OfflineQueue.enqueue({
-        docId: this.docId,
-        sheetId: (m.sheetId as string) ?? '',
-        row: m.row as number,
-        col: m.col as number,
-        value: (m.value as string) ?? '',
-        style: (m.style as Record<string, unknown> | null) ?? null,
-        baseSeq: (m.baseSeq as number) ?? this.seq,
-      })
-    } else {
-      this.sendQueue.push(data)
+    // 首次握手期 → 内存队列；曾经连上过 → localStorage 持久化
+    if (this.seq > 0) {
+      if (msg.type === 'set_cell') {
+        const m = msg as Record<string, unknown>
+        OfflineQueue.enqueue({
+          type: 'set_cell',
+          docId: this.docId,
+          sheetId: (m.sheetId as string) ?? '',
+          row: m.row as number,
+          col: m.col as number,
+          value: (m.value as string) ?? '',
+          style: (m.style as Record<string, unknown> | null) ?? null,
+          baseSeq: (m.baseSeq as number) ?? this.seq,
+        })
+        return
+      }
+      if (msg.type === 'batch_set_cell') {
+        const m = msg as Record<string, unknown>
+        const targets = (m.updates as Array<{ row: number; col: number }> | undefined) ?? []
+        OfflineQueue.enqueueBatch({
+          type: 'batch_set_cell',
+          docId: this.docId,
+          sheetId: (m.sheetId as string) ?? '',
+          baseSeq: (m.baseSeq as number) ?? this.seq,
+          targets,
+          value: 'value' in m ? (m.value as string) : undefined,
+          style: 'style' in m ? (m.style as Record<string, unknown> | null) : undefined,
+        })
+        return
+      }
     }
+    this.sendQueue.push(data)
   }
 
   private flushSendQueue(): void {
@@ -519,27 +536,44 @@ export class CollabClient {
   private replayOfflineQueue(): void {
     const ops = OfflineQueue.dequeueAll()
     if (ops.length === 0) return
-    const remaining: QueuedOp[] = []
+    const remaining: StoredOp[] = []
     for (const op of ops) {
       if (op.docId !== this.docId) {
         remaining.push(op)
         continue
       }
-      this.send({
-        type: 'set_cell',
-        docId: this.docId,
-        clientId: this.clientId,
-        sheetId: op.sheetId,
-        row: op.row,
-        col: op.col,
-        value: op.value,
-        style: op.style,
-        baseSeq: op.baseSeq,
-      })
+      if (op.type === 'set_cell') {
+        this.send({
+          type: 'set_cell',
+          docId: this.docId,
+          clientId: this.clientId,
+          sheetId: op.sheetId,
+          row: op.row,
+          col: op.col,
+          value: op.value,
+          style: op.style,
+          baseSeq: op.baseSeq,
+        })
+      } else if (op.type === 'batch_set_cell') {
+        this.send({
+          type: 'batch_set_cell',
+          docId: this.docId,
+          clientId: this.clientId,
+          sheetId: op.sheetId,
+          baseSeq: op.baseSeq,
+          updates: op.targets.map((t) => ({ row: t.row, col: t.col })),
+          ...(op.value !== undefined ? { value: op.value } : {}),
+          ...(op.style !== undefined ? { style: op.style } : {}),
+        })
+      }
     }
     // 放回其他文档的操作，避免 dequeueAll 误删
     for (const op of remaining) {
-      OfflineQueue.enqueue(op)
+      if (op.type === 'set_cell') {
+        OfflineQueue.enqueue(op)
+      } else {
+        OfflineQueue.enqueueBatch(op)
+      }
     }
   }
 
