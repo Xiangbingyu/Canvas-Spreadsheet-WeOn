@@ -119,6 +119,8 @@ export function StartPage({ userId }: StartPageProps) {
     },
   ]
 
+  const tableScrollY = 'calc(100vh - 280px)'
+
   return (
     <div className="flex min-h-screen items-start justify-center bg-[#f5f7fb] px-6 py-12">
       <div className="w-full max-w-4xl rounded-xl border border-[#e5e7eb] bg-white p-6 shadow-sm">
@@ -137,6 +139,7 @@ export function StartPage({ userId }: StartPageProps) {
             columns={columns}
             dataSource={dataSource}
             pagination={false}
+            scroll={{ y: tableScrollY }}
             locale={{ emptyText: '暂无文档' }}
           />
         </Spin>
