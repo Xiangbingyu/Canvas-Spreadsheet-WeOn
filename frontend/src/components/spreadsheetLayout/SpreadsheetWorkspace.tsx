@@ -12,6 +12,8 @@ import { CellEditOverlay } from '@/components/cellEditor/CellEditOverlay'
 import GrideCanvas from '@/components/grideCanvas/GrideCanvas'
 import { useSpreadsheetInteraction } from '@/hooks/useSpreadsheetInteraction'
 import { useCommitCell, useCommitBatch } from '@/hooks/useCommitCell'
+import type { BatchCommitFn } from '@/hooks/useCommitCell'
+import type { CommitCellFn } from '@/hooks/useSpreadsheetInteraction'
 import { useCollab } from '@/hooks/useCollab'
 import { useUnifiedHistory } from '@/hooks/useUnifiedHistory'
 import type { RootState } from '@/spreadsheet/store'
@@ -55,7 +57,6 @@ export function SpreadsheetWorkspace() {
     sendCursor(activeWorksheet.sheetId, selection.row, selection.col)
     lastSentCursorRef.current = cursorKey
   }, [activeWorksheet.sheetId, connectionStatus, selection.row, selection.col, sendCursor])
-
 
   const handleAddSheet = useCallback(
     (sheetName: string) => {
@@ -111,6 +112,24 @@ export function SpreadsheetWorkspace() {
     formulaBarValue,
   } = useSpreadsheetInteraction({ onCommitCell: commitWithHistory })
 
+  // 提交后通知 Canvas 局部重绘（不写 Redux、不提交数据，仅标记脏区下一帧只重绘这些格）。
+  // FormulaBar / Toolbar 不直接依赖 Canvas，由此处包一层注入 canvasHandleRef。
+  const commitCellAndInvalidate = useCallback<CommitCellFn>(
+    (row, col, value, style) => {
+      commitWithHistory(row, col, value, style)
+      canvasHandleRef.current?.invalidateCells([{ row, col }])
+    },
+    [commitWithHistory, canvasHandleRef]
+  )
+
+  const commitBatchAndInvalidate = useCallback<BatchCommitFn>(
+    (updates) => {
+      commitBatchWithHistory(updates)
+      canvasHandleRef.current?.invalidateCells(updates.map(({ row, col }) => ({ row, col })))
+    },
+    [commitBatchWithHistory, canvasHandleRef]
+  )
+
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-white font-[Roboto,Arial,sans-serif]">
       <DisplayNameModal
@@ -120,12 +139,12 @@ export function SpreadsheetWorkspace() {
       />
       <Menubar onSetTitle={setTitle} />
       <Toolbar
-        onCommitCell={commitWithHistory}
-        onCommitBatch={commitBatchWithHistory}
+        onCommitCell={commitCellAndInvalidate}
+        onCommitBatch={commitBatchAndInvalidate}
         onUndo={undo}
         onRedo={redo}
       />
-      <FormulaBar value={formulaBarValue} onCommitCell={commitWithHistory} />
+      <FormulaBar value={formulaBarValue} onCommitCell={commitCellAndInvalidate} />
 
       <div className="relative min-h-0 flex-1 overflow-hidden">
         <GrideCanvas

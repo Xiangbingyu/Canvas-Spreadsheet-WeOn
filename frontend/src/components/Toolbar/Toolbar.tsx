@@ -121,6 +121,87 @@ function FontSizeInput({
   )
 }
 
+/**
+ * 颜色选择按钮：拖动色盘 / 调 RGB 过程中只更新本地草稿（实时预览图标），
+ * 仅在失焦（关闭色盘）或按 Enter 时才提交一次，避免 onChange 持续触发撑爆撤回栈。
+ */
+function ColorButton({
+  label,
+  ariaLabel,
+  value,
+  disabled = false,
+  onCommit,
+  children,
+}: {
+  label: string
+  ariaLabel: string
+  value: string
+  disabled?: boolean
+  onCommit: (color: string) => void
+  children: (previewColor: string) => ReactNode
+}) {
+  const inputRef = useRef<HTMLInputElement>(null)
+  const [draft, setDraft] = useState(value)
+  const prevValueRef = useRef(value)
+  // 把最新的 value / onCommit 放进 ref，供原生事件回调读取，避免重复绑定监听
+  const valueRef = useRef(value)
+  const onCommitRef = useRef(onCommit)
+  useEffect(() => {
+    valueRef.current = value
+    onCommitRef.current = onCommit
+  }, [value, onCommit])
+
+  // 外部 value 变化时同步草稿（切换选区）
+  useEffect(() => {
+    if (prevValueRef.current !== value) {
+      prevValueRef.current = value
+      setDraft(value)
+    }
+  }, [value])
+
+  // 浏览器对 <input type="color"> 区分两类事件：
+  // - 拖动 / 调色过程：持续触发 `input` 事件 → 只更新草稿做预览
+  // - 选择器关闭确认（点别处或按一次 Enter）：触发一次 `change` 事件 → 提交
+  // 用原生监听分别处理，避免 React onChange 不区分两者、以及自定义 Enter
+  // 处理与原生 Enter 确认冲突（需按两次 Enter）的问题。
+  useEffect(() => {
+    const el = inputRef.current
+    if (!el) return
+    const onInput = (e: Event) => setDraft((e.target as HTMLInputElement).value)
+    const onChange = (e: Event) => {
+      const next = (e.target as HTMLInputElement).value
+      setDraft(next)
+      if (next !== valueRef.current) onCommitRef.current(next)
+    }
+    el.addEventListener('input', onInput)
+    el.addEventListener('change', onChange)
+    return () => {
+      el.removeEventListener('input', onInput)
+      el.removeEventListener('change', onChange)
+    }
+  }, [])
+
+  return (
+    <FormatButton
+      label={label}
+      className="relative w-8"
+      disabled={disabled}
+      onClick={() => inputRef.current?.click()}
+    >
+      {children(draft)}
+      <input
+        ref={inputRef}
+        type="color"
+        value={draft}
+        readOnly
+        disabled={disabled}
+        className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+        aria-label={ariaLabel}
+      />
+    </FormatButton>
+  )
+}
+
 /** 斜体：衬线体 I，与 Google Sheets 一致 */
 function ItalicMark() {
   return (
@@ -176,11 +257,12 @@ export function Toolbar({ onCommitCell, onCommitBatch, onUndo, onRedo }: Toolbar
   const cell = worksheet.cells[`${selection.row}:${selection.col}`]
   const style: Style = cell?.styleId ? (worksheet.styles[cell.styleId] ?? {}) : {}
   const disabled = !onCommitCell
-  const colorInputRef = useRef<HTMLInputElement>(null)
-  const bgColorInputRef = useRef<HTMLInputElement>(null)
 
   // 合并样式补丁并提交（走协同链路）。对 selection.range 内所有单元格应用样式。
-  const commitStyle = (patch: Partial<Style>) => {
+  // 按「样式映射函数」收集选区内有变化的单元格并提交。
+  // - 改样式：mapStyle = (cur) => ({ ...cur, ...patch })
+  // - 清除样式：mapStyle = () => ({})
+  const commitStyleMap = (mapStyle: (cellStyle: Style) => Style) => {
     if (!onCommitCell && !onCommitBatch) return
     const { start, end } = selection.range
     const minRow = Math.min(start.row, end.row)
@@ -195,7 +277,7 @@ export function Toolbar({ onCommitCell, onCommitBatch, onUndo, onRedo }: Toolbar
         const cell = worksheet.cells[`${row}:${col}`]
         const cellStyle: Style = cell?.styleId ? (worksheet.styles[cell.styleId] ?? {}) : {}
         const cellValue = cell?.value ?? ''
-        const next: Style = { ...cellStyle, ...patch }
+        const next: Style = mapStyle(cellStyle)
         // 样式无变化则跳过（同 styleId hash 即视为相同内容）
         if (generateStyleId(next) === generateStyleId(cellStyle)) {
           continue
@@ -250,6 +332,13 @@ export function Toolbar({ onCommitCell, onCommitBatch, onUndo, onRedo }: Toolbar
       }
     }
   }
+
+  // 合并样式补丁并提交（走协同链路）。对 selection.range 内所有单元格应用样式。
+  const commitStyle = (patch: Partial<Style>) =>
+    commitStyleMap((cellStyle) => ({ ...cellStyle, ...patch }))
+
+  // 清除选区内所有单元格的样式（重置为空对象）。
+  const clearStyle = () => commitStyleMap(() => ({}))
 
   const toggle = (key: 'bold' | 'italic' | 'underline') => commitStyle({ [key]: !style[key] })
   const setAlign = (hAlign: NonNullable<Style['hAlign']>) => commitStyle({ hAlign })
@@ -321,40 +410,24 @@ export function Toolbar({ onCommitCell, onCommitBatch, onUndo, onRedo }: Toolbar
       </FormatButton>
       <Divider />
 
-      <FormatButton
+      <ColorButton
         label="字体颜色"
-        className="relative w-8"
+        ariaLabel="选择字体颜色"
+        value={style.color ?? '#202124'}
         disabled={disabled}
-        onClick={() => colorInputRef.current?.click()}
+        onCommit={(color) => commitStyle({ color })}
       >
-        <TextColorMark barColor={style.color ?? '#202124'} />
-        <input
-          ref={colorInputRef}
-          type="color"
-          value={style.color ?? '#202124'}
-          disabled={disabled}
-          onChange={(e) => commitStyle({ color: e.target.value })}
-          className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
-          aria-label="选择字体颜色"
-        />
-      </FormatButton>
-      <FormatButton
+        {(previewColor) => <TextColorMark barColor={previewColor} />}
+      </ColorButton>
+      <ColorButton
         label="背景色"
-        className="relative w-8"
+        ariaLabel="选择背景色"
+        value={style.bgColor ?? '#ffffff'}
         disabled={disabled}
-        onClick={() => bgColorInputRef.current?.click()}
+        onCommit={(bgColor) => commitStyle({ bgColor })}
       >
-        <FillColorMark barColor={style.bgColor ?? '#ffffff'} />
-        <input
-          ref={bgColorInputRef}
-          type="color"
-          value={style.bgColor ?? '#ffffff'}
-          disabled={disabled}
-          onChange={(e) => commitStyle({ bgColor: e.target.value })}
-          className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
-          aria-label="选择背景色"
-        />
-      </FormatButton>
+        {(previewColor) => <FillColorMark barColor={previewColor} />}
+      </ColorButton>
       <Divider />
 
       <IconButton
@@ -381,6 +454,11 @@ export function Toolbar({ onCommitCell, onCommitBatch, onUndo, onRedo }: Toolbar
       >
         <AlignRightIcon />
       </IconButton>
+      <Divider />
+
+      <IconButton label="清除样式" disabled={disabled} onClick={clearStyle}>
+        <ClearFormatIcon />
+      </IconButton>
     </div>
   )
 }
@@ -389,6 +467,15 @@ function UndoIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
       <path d="M12.5 8c-2.65 0-5.05 1.16-6.7 3.02L3 8v9h9l-2.62-2.62c1.08-1.06 2.55-1.62 4.12-1.62 3.31 0 6 2.69 6 6s-2.69 6-6 6H8v2h4.5c4.14 0 7.5-3.36 7.5-7.5S16.64 8 12.5 8z" />
+    </svg>
+  )
+}
+
+/** 清除样式：仿 Google Sheets 的「清除格式」图标（带斜线的 T） */
+function ClearFormatIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+      <path d="M3.27 5 2 6.27l6.97 6.97L6.5 19h3l1.57-3.66L16.73 21 18 19.73 3.55 5.27 3.27 5zM6 5v.18L8.82 8h2.4l-.72 1.68 2.1 2.1L14.21 8H20V5H6z" />
     </svg>
   )
 }
