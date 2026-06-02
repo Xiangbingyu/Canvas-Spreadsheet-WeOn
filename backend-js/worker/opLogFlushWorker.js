@@ -2,21 +2,30 @@ const streamConfig = require('../config/streamConfig');
 const docStore = require('../store/docStore');
 const historyStore = require('../store/historyStore');
 const docOpStreamStore = require('../store/redis/docOpStreamStore');
+const docFlushProgressStore = require('../store/redis/docFlushProgressStore');
+const { applyReplayEvent, isHistoryDuplicateError } = require('./replayUtils');
 
 async function applyDocStoreOp(docId, event) {
-  const cmd = { ...event, docId, seq: event.seq };
-  switch (event.opType) {
-    case 'set_cell': return docStore.applySetCell(cmd);
-    case 'batch_set_cell': return docStore.applyBatchSetCell(cmd);
-    case 'set_title': return docStore.applySetTitle(cmd);
-    case 'add_sheet': return docStore.applyAddSheet(cmd);
-    case 'import_sheet': return docStore.applyImportSheet(cmd);
-    case 'insert_row':
-    case 'delete_row':
-    case 'insert_col':
-    case 'delete_col': return docStore.applySheetStructureChange(cmd);
-    default: break;
+  return applyReplayEvent(docStore, docId, event);
+}
+
+async function ensureDocStateApplied(docId, event) {
+  const currentDoc = await docStore.getDocState(docId);
+  if (!currentDoc) {
+    throw new Error(`document not found while flushing stream event: ${docId}`);
   }
+
+  if (currentDoc.currentSeq >= event.seq) {
+    return;
+  }
+
+  if (currentDoc.currentSeq !== event.seq - 1) {
+    throw new Error(
+      `document seq mismatch while replaying ${docId}: expected ${event.seq - 1}, got ${currentDoc.currentSeq}`
+    );
+  }
+
+  await applyDocStoreOp(docId, event);
 }
 
 function createOpLogFlushWorker() {
@@ -25,27 +34,37 @@ function createOpLogFlushWorker() {
 
   async function processEvent(docId, id, event) {
     try {
-      await historyStore.append({
-        docId,
-        clientId: event.clientId,
-        seq: event.seq,
-        baseSeq: event.baseSeq,
-        opType: event.opType,
-        targetSheetId: event.targetSheetId,
-        targetRow: event.targetRow,
-        targetCol: event.targetCol,
-        oldValueJson: event.oldValueJson,
-        newValueJson: event.newValueJson,
-      });
-      await applyDocStoreOp(docId, event);
+      try {
+        await historyStore.append({
+          docId,
+          clientId: event.clientId,
+          seq: event.seq,
+          baseSeq: event.baseSeq,
+          opType: event.opType,
+          targetSheetId: event.targetSheetId,
+          targetRow: event.targetRow,
+          targetCol: event.targetCol,
+          oldValueJson: event.oldValueJson,
+          newValueJson: event.newValueJson,
+        payloadJson: event.payloadJson,
+        sourceSeq: event.sourceSeq,
+        });
+      } catch (err) {
+        if (isHistoryDuplicateError(err)) {
+          await ensureDocStateApplied(docId, event);
+          await docFlushProgressStore.setFlushedSeq(docId, event.seq);
+          await docOpStreamStore.ack(docId, id);
+          return;
+        } else {
+          throw err;
+        }
+      }
+
+      await ensureDocStateApplied(docId, event);
+      await docFlushProgressStore.setFlushedSeq(docId, event.seq);
       await docOpStreamStore.ack(docId, id);
     } catch (err) {
-      const msg = String(err && (err.code || err.message));
-      if (msg.includes('DUPLICATE')) {
-        await docOpStreamStore.ack(docId, id);
-      } else {
-        console.error(`opLogFlushWorker ${docId} seq=${event.seq}:`, err);
-      }
+      console.error(`opLogFlushWorker ${docId} seq=${event.seq}:`, err);
     }
   }
 
@@ -89,4 +108,8 @@ function createOpLogFlushWorker() {
   };
 }
 
-module.exports = { createOpLogFlushWorker };
+module.exports = {
+  createOpLogFlushWorker,
+  applyDocStoreOp,
+  ensureDocStateApplied,
+};

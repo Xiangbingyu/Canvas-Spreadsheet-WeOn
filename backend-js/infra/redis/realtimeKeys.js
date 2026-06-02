@@ -17,6 +17,9 @@ function createRealtimeKeys(keyPrefix = realtimeConfig.keyPrefix) {
     stateKey(docId) {
       return `${docPrefix(prefix, docId)}:state`;
     },
+    updatedAtKey(docId) {
+      return `${docPrefix(prefix, docId)}:updated-at`;
+    },
     streamKey(docId) {
       return `${docPrefix(prefix, docId)}:stream`;
     },
@@ -25,6 +28,9 @@ function createRealtimeKeys(keyPrefix = realtimeConfig.keyPrefix) {
     },
     checkpointKey(docId) {
       return `${docPrefix(prefix, docId)}:checkpoint`;
+    },
+    flushedSeqKey(docId) {
+      return `${docPrefix(prefix, docId)}:flushed-seq`;
     },
     userOpKey(docId, clientId) {
       return `${docPrefix(prefix, docId)}:user-op:${clientId}`;

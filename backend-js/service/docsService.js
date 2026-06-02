@@ -120,6 +120,42 @@ function uniqueNonEmptyStrings(values = []) {
   );
 }
 
+function isRealtimeReadThroughEnabled() {
+  return realtimeConfig.driver === 'redis';
+}
+
+async function applyRealtimeOverlay(docRecord) {
+  if (!docRecord || !isRealtimeReadThroughEnabled()) {
+    return docRecord;
+  }
+
+  let state = await docRealtimeStore.getState(docRecord.docId);
+  if (!state) {
+    await docRecoveryService.seedRealtimeFromMysql(docRecord.docId);
+    state = await docRealtimeStore.getState(docRecord.docId);
+  }
+
+  if (!state) {
+    return docRecord;
+  }
+
+  const nextRecord = {
+    ...docRecord,
+    currentSeq: state.currentSeq,
+    snapshotJson: state.snapshotJson,
+    updatedAt: state.updatedAt || docRecord.updatedAt,
+  };
+
+  const snapshotTitle = state.snapshotJson && typeof state.snapshotJson.title === 'string'
+    ? state.snapshotJson.title.trim()
+    : '';
+  if (snapshotTitle) {
+    nextRecord.title = snapshotTitle;
+  }
+
+  return nextRecord;
+}
+
 async function primeDocCaches(docRecord) {
   if (!docRecord) {
     return;
@@ -142,13 +178,13 @@ async function getValidRememberedCreateDocResponse(record) {
 
 async function getDocMeta(docId) {
   const normalizedDocId = normalizeDocId(docId);
-  const cachedMeta = await docMetaCache.get(normalizedDocId);
+  const cachedMeta = isRealtimeReadThroughEnabled() ? null : await docMetaCache.get(normalizedDocId);
 
   if (cachedMeta) {
     return cachedMeta;
   }
 
-  const storedDoc = await docStore.getDocState(normalizedDocId);
+  const storedDoc = await applyRealtimeOverlay(await docStore.getDocState(normalizedDocId));
 
   if (!storedDoc) {
     return null;
@@ -336,13 +372,16 @@ function normalizeListDocsInput(input = {}) {
 // 4. 返回分页结果
 async function listDocsByUser(input = {}) {
   const normalizedInput = normalizeListDocsInput(input);
-  const cachedList = await userDocsListCache.get(normalizedInput);
+  const cachedList = isRealtimeReadThroughEnabled() ? null : await userDocsListCache.get(normalizedInput);
 
   if (cachedList) {
     return cachedList;
   }
 
-  const allDocs = await docStore.list();
+  const storedDocs = await docStore.list();
+  const allDocs = isRealtimeReadThroughEnabled()
+    ? await Promise.all(storedDocs.map((doc) => applyRealtimeOverlay(doc)))
+    : storedDocs;
   const createdDocs = [];
   const participatedDocs = [];
 
@@ -375,7 +414,9 @@ async function listDocsByUser(input = {}) {
       normalizedInput.page,
       normalizedInput.pageSize
     );
-    await userDocsListCache.set(normalizedInput, paginatedResult);
+    if (!isRealtimeReadThroughEnabled()) {
+      await userDocsListCache.set(normalizedInput, paginatedResult);
+    }
     return paginatedResult;
   }
 
@@ -389,7 +430,9 @@ async function listDocsByUser(input = {}) {
       normalizedInput.page,
       normalizedInput.pageSize
     );
-    await userDocsListCache.set(normalizedInput, paginatedResult);
+    if (!isRealtimeReadThroughEnabled()) {
+      await userDocsListCache.set(normalizedInput, paginatedResult);
+    }
     return paginatedResult;
   }
 
@@ -410,7 +453,9 @@ async function listDocsByUser(input = {}) {
     normalizedInput.page,
     normalizedInput.pageSize
   );
-  await userDocsListCache.set(normalizedInput, paginatedResult);
+  if (!isRealtimeReadThroughEnabled()) {
+    await userDocsListCache.set(normalizedInput, paginatedResult);
+  }
   return paginatedResult;
 }
 
@@ -431,13 +476,13 @@ function normalizeDocId(docId) {
 // 3. store 命中后同时回填 snapshot/meta 缓存
 async function getDocState(docId) {
   const normalizedDocId = normalizeDocId(docId);
-  const cachedDoc = await docSnapshotCache.get(normalizedDocId);
+  const cachedDoc = isRealtimeReadThroughEnabled() ? null : await docSnapshotCache.get(normalizedDocId);
 
   if (cachedDoc) {
     return cachedDoc;
   }
 
-  const storedDoc = await docStore.getDocState(normalizedDocId);
+  const storedDoc = await applyRealtimeOverlay(await docStore.getDocState(normalizedDocId));
 
   if (!storedDoc) {
     throw createServiceError(ERROR_CODES.DOCUMENT_NOT_FOUND, `document not found: ${normalizedDocId}`);
@@ -470,7 +515,12 @@ async function getDocStateForWrite(docId, options = {}) {
 
 // Gate 路径：Lua 原子提交，返回 { seq, snapshotJson, event }。不写 MySQL。
 async function commitRealtimeOp(docId, { expectedBaseSeq, snapshotJson, event }) {
-  const result = await docRealtimeStore.commit(docId, { expectedBaseSeq, snapshotJson, event });
+  const result = await docRealtimeStore.commit(docId, {
+    expectedBaseSeq,
+    snapshotJson,
+    event,
+    updatedAt: new Date().toISOString(),
+  });
   return result;
 }
 

@@ -7,6 +7,10 @@ const { createWsSuccess, createWsError } = require('../utils/response');
 const roomService = require('../service/roomService');
 const { createCollabBroadcastService } = require('../service/collabBroadcastService');
 const auditService = require('../audit/auditService');
+const { startWorkers, stopWorkers } = require('../worker');
+const docRealtimeStore = require('../store/redis/docRealtimeStore');
+const docOpStreamStore = require('../store/redis/docOpStreamStore');
+const docFlushProgressStore = require('../store/redis/docFlushProgressStore');
 
 let nextConnId = 0;
 
@@ -32,8 +36,14 @@ function createWebSocketServer(server) {
   const collabBroadcastService = createCollabBroadcastService({
     broadcastLocallyToRoom,
   });
-  const readyPromise = collabBroadcastService.start().catch((error) => {
-    console.error('collab broadcast service start failed:', error);
+  let ownsWorkers = false;
+  const readyPromise = Promise.all([
+    collabBroadcastService.start(),
+    startWorkers().then((result) => {
+      ownsWorkers = Boolean(result && result.started && result.reason === 'ok');
+    }),
+  ]).catch((error) => {
+    console.error('websocket runtime start failed:', error);
   });
   let resourceClosePromise = null;
   let isShuttingDown = false;
@@ -46,6 +56,18 @@ function createWebSocketServer(server) {
         }),
         roomService.closeRuntimeState().catch((error) => {
           console.error('room runtime close failed:', error);
+        }),
+        (ownsWorkers ? stopWorkers() : Promise.resolve()).catch((error) => {
+          console.error('worker stop failed:', error);
+        }),
+        (typeof docRealtimeStore.close === 'function' ? docRealtimeStore.close() : Promise.resolve()).catch((error) => {
+          console.error('doc realtime store close failed:', error);
+        }),
+        (typeof docOpStreamStore.close === 'function' ? docOpStreamStore.close() : Promise.resolve()).catch((error) => {
+          console.error('doc op stream store close failed:', error);
+        }),
+        (typeof docFlushProgressStore.close === 'function' ? docFlushProgressStore.close() : Promise.resolve()).catch((error) => {
+          console.error('doc flush progress store close failed:', error);
         }),
       ]);
     }

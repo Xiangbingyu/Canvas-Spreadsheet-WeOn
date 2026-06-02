@@ -12,6 +12,7 @@ function createMemoryDocRealtimeStore() {
   const stateByDocId = new Map();
   const seqByDocId = new Map();
   const streamByDocId = new Map();
+  const updatedAtByDocId = new Map();
 
   return {
     type: 'memory',
@@ -24,19 +25,21 @@ function createMemoryDocRealtimeStore() {
         docId,
         currentSeq: seqByDocId.get(docId),
         snapshotJson: stateByDocId.get(docId) || null,
+        updatedAt: updatedAtByDocId.get(docId) || null,
       };
     },
 
-    async seed(docId, { snapshotJson, currentSeq }) {
+    async seed(docId, { snapshotJson, currentSeq, updatedAt = new Date().toISOString() }) {
       stateByDocId.set(docId, snapshotJson);
       seqByDocId.set(docId, Number.isInteger(currentSeq) ? currentSeq : 0);
+      updatedAtByDocId.set(docId, updatedAt);
       if (!streamByDocId.has(docId)) {
         streamByDocId.set(docId, []);
       }
     },
 
     // 原子提交：基于已 rebase 后的最终 state 分配 seq、写 state、追加 stream。
-    async commit(docId, { expectedBaseSeq = null, snapshotJson, event }) {
+    async commit(docId, { expectedBaseSeq = null, snapshotJson, event, updatedAt = new Date().toISOString() }) {
       const cur = seqByDocId.get(docId) || 0;
       if (expectedBaseSeq !== null && Number.isInteger(expectedBaseSeq) && expectedBaseSeq > cur) {
         return { ok: false, conflict: true, currentSeq: cur };
@@ -45,6 +48,7 @@ function createMemoryDocRealtimeStore() {
       const newSeq = cur + 1;
       seqByDocId.set(docId, newSeq);
       stateByDocId.set(docId, snapshotJson);
+      updatedAtByDocId.set(docId, updatedAt);
 
       const entries = streamByDocId.get(docId) || [];
       const enriched = { ...event, seq: newSeq };
@@ -67,6 +71,7 @@ function createMemoryDocRealtimeStore() {
       stateByDocId.clear();
       seqByDocId.clear();
       streamByDocId.clear();
+      updatedAtByDocId.clear();
     },
   };
 }
@@ -83,9 +88,10 @@ function createRedisDocRealtimeStore() {
       if (!client) {
         return null;
       }
-      const [seqRaw, stateRaw] = await Promise.all([
+      const [seqRaw, stateRaw, updatedAtRaw] = await Promise.all([
         client.get(keys.seqKey(docId)),
         client.get(keys.stateKey(docId)),
+        client.get(keys.updatedAtKey(docId)),
       ]);
       if (seqRaw === null && stateRaw === null) {
         return null;
@@ -94,29 +100,34 @@ function createRedisDocRealtimeStore() {
         docId,
         currentSeq: Number.parseInt(seqRaw || '0', 10),
         snapshotJson: stateRaw ? JSON.parse(stateRaw) : null,
+        updatedAt: updatedAtRaw,
       };
     },
 
-    async seed(docId, { snapshotJson, currentSeq }) {
+    async seed(docId, { snapshotJson, currentSeq, updatedAt = new Date().toISOString() }) {
       const client = await connection.ensureReady();
       const seq = Number.isInteger(currentSeq) ? currentSeq : 0;
       const multi = client.multi();
       multi.set(keys.seqKey(docId), String(seq));
       multi.set(keys.stateKey(docId), JSON.stringify(snapshotJson));
+      multi.set(keys.updatedAtKey(docId), updatedAt);
       multi.set(keys.checkpointKey(docId), String(seq));
+      multi.set(keys.flushedSeqKey(docId), String(seq));
       multi.del(keys.streamKey(docId));
       await multi.exec();
     },
 
-    async commit(docId, { expectedBaseSeq = null, snapshotJson, event }) {
+    async commit(docId, { expectedBaseSeq = null, snapshotJson, event, updatedAt = new Date().toISOString() }) {
       const client = await connection.ensureReady();
       return evalCommit(client, {
         seqKey: keys.seqKey(docId),
         stateKey: keys.stateKey(docId),
         streamKey: keys.streamKey(docId),
+        updatedAtKey: keys.updatedAtKey(docId),
         expectedBaseSeq,
         stateJson: JSON.stringify(snapshotJson),
         eventJson: JSON.stringify(event),
+        updatedAt,
       });
     },
 

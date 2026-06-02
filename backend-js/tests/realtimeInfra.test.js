@@ -11,9 +11,11 @@ test('realtimeKeys: 构造统一前缀的 key', () => {
   const keys = createRealtimeKeys('collab:rt');
   assert.equal(keys.seqKey('doc_001'), 'collab:rt:doc:doc_001:seq');
   assert.equal(keys.stateKey('doc_001'), 'collab:rt:doc:doc_001:state');
+  assert.equal(keys.updatedAtKey('doc_001'), 'collab:rt:doc:doc_001:updated-at');
   assert.equal(keys.streamKey('doc_001'), 'collab:rt:doc:doc_001:stream');
   assert.equal(keys.barrierKey('doc_001'), 'collab:rt:doc:doc_001:barrier');
   assert.equal(keys.checkpointKey('doc_001'), 'collab:rt:doc:doc_001:checkpoint');
+  assert.equal(keys.flushedSeqKey('doc_001'), 'collab:rt:doc:doc_001:flushed-seq');
   assert.equal(keys.userOpKey('doc_001', 'user_001'), 'collab:rt:doc:doc_001:user-op:user_001');
 });
 
@@ -25,17 +27,17 @@ test('realtimeKeys: 自定义前缀生效', () => {
 test('evalCommit: 成功返回新 seq 与 streamId', async () => {
   const fakeClient = {
     async eval() {
-      return [13, '13-0'];
+      return [13, '1748851200000-0'];
     },
   };
   const result = await evalCommit(fakeClient, {
-    seqKey: 's', stateKey: 't', streamKey: 'x',
-    expectedBaseSeq: 12, stateJson: '{}', eventJson: '{}',
+    seqKey: 's', stateKey: 't', streamKey: 'x', updatedAtKey: 'u',
+    expectedBaseSeq: 12, stateJson: '{}', eventJson: '{}', updatedAt: '2026-06-02T00:00:00.000Z',
   });
   assert.equal(result.ok, true);
   assert.equal(result.conflict, false);
   assert.equal(result.seq, 13);
-  assert.equal(result.streamId, '13-0');
+  assert.equal(result.streamId, '1748851200000-0');
 });
 
 test('evalCommit: baseSeq 超前返回冲突', async () => {
@@ -45,8 +47,8 @@ test('evalCommit: baseSeq 超前返回冲突', async () => {
     },
   };
   const result = await evalCommit(fakeClient, {
-    seqKey: 's', stateKey: 't', streamKey: 'x',
-    expectedBaseSeq: 99, stateJson: '{}', eventJson: '{}',
+    seqKey: 's', stateKey: 't', streamKey: 'x', updatedAtKey: 'u',
+    expectedBaseSeq: 99, stateJson: '{}', eventJson: '{}', updatedAt: '2026-06-02T00:00:00.000Z',
   });
   assert.equal(result.ok, false);
   assert.equal(result.conflict, true);
@@ -62,12 +64,13 @@ test('evalCommit: expectedBaseSeq=null 传空串跳过校验', async () => {
     },
   };
   await evalCommit(fakeClient, {
-    seqKey: 's', stateKey: 't', streamKey: 'x',
-    expectedBaseSeq: null, stateJson: '{"a":1}', eventJson: '{"b":2}',
+    seqKey: 's', stateKey: 't', streamKey: 'x', updatedAtKey: 'u',
+    expectedBaseSeq: null, stateJson: '{"a":1}', eventJson: '{"b":2}', updatedAt: '2026-06-02T00:00:00.000Z',
   });
   assert.equal(capturedArgs[0], '');
   assert.equal(capturedArgs[1], '{"a":1}');
   assert.equal(capturedArgs[2], '{"b":2}');
+  assert.equal(capturedArgs[3], '2026-06-02T00:00:00.000Z');
 });
 
 test('memory docRealtimeStore: seed 后可读回 state 与 seq', async () => {
@@ -78,6 +81,7 @@ test('memory docRealtimeStore: seed 后可读回 state 与 seq', async () => {
   const state = await store.getState('doc_x');
   assert.equal(state.currentSeq, 7);
   assert.deepEqual(state.snapshotJson, { sheets: {} });
+  assert.ok(typeof state.updatedAt === 'string' && state.updatedAt.length > 0);
 });
 
 test('memory docRealtimeStore: commit 分配递增 seq 并追加 stream', async () => {
@@ -91,7 +95,7 @@ test('memory docRealtimeStore: commit 分配递增 seq 并追加 stream', async 
   });
   assert.equal(first.ok, true);
   assert.equal(first.seq, 1);
-  assert.equal(first.streamId, '1-0');
+  assert.ok(typeof first.streamId === 'string' && first.streamId.length > 0);
 
   const second = await store.commit('doc_y', {
     expectedBaseSeq: 1,

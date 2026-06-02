@@ -39,11 +39,17 @@ async function ack(client, { streamKey, group, ids }) {
 }
 
 // 读取 (fromSeq, toSeq] 区间事件，供 rebase 读近段历史。
-// seq 与 stream id 对齐（XADD 用 `{seq}-0`），故用 exclusive start `({fromSeq}-0` 之后。
+// 由于 stream id 不再与业务 seq 对齐，范围过滤改为读取保留窗口并按 event.seq 过滤。
 async function rangeBySeq(client, { streamKey, fromSeq, toSeq }) {
-  const start = `(${fromSeq}-0`;
-  const end = `${toSeq}-0`;
-  return client.xRange(streamKey, start, end);
+  const rows = await client.xRange(streamKey, '-', '+');
+  return (rows || []).filter((row) => {
+    try {
+      const event = JSON.parse(row.message.event);
+      return Number.isInteger(event.seq) && event.seq > fromSeq && event.seq <= toSeq;
+    } catch (_error) {
+      return false;
+    }
+  });
 }
 
 // 保留 checkpoint 之后 + 至少最近 retainCount 条（近似裁剪，MINID 更精确时由调用方算 id）。

@@ -3,8 +3,8 @@
 // Lua 只负责"基于已 rebase 后的最终 state 做原子落地 + 分配 seq"。
 // 详见 docs/Gate分阶段实施计划.md §1.3。Phase 0 仅提供脚本与封装，不接入写链路。
 
-// KEYS[1]=seqKey KEYS[2]=stateKey KEYS[3]=streamKey
-// ARGV[1]=expectedBaseSeq（''=跳过校验） ARGV[2]=newStateJson ARGV[3]=eventJson
+// KEYS[1]=seqKey KEYS[2]=stateKey KEYS[3]=streamKey KEYS[4]=updatedAtKey
+// ARGV[1]=expectedBaseSeq（''=跳过校验） ARGV[2]=newStateJson ARGV[3]=eventJson ARGV[4]=updatedAt
 // 返回：{ newSeq, streamId } 成功；{ -1, currentSeq } 表示 baseSeq 超前（冲突）。
 const COMMIT_SCRIPT = `
   local cur = tonumber(redis.call('GET', KEYS[1]) or '0')
@@ -18,7 +18,10 @@ const COMMIT_SCRIPT = `
   local newSeq = cur + 1
   redis.call('SET', KEYS[1], newSeq)
   redis.call('SET', KEYS[2], ARGV[2])
-  local streamId = redis.call('XADD', KEYS[3], newSeq .. '-0', 'event', ARGV[3])
+  redis.call('SET', KEYS[4], ARGV[4])
+  local event = cjson.decode(ARGV[3])
+  event['seq'] = newSeq
+  local streamId = redis.call('XADD', KEYS[3], '*', 'event', cjson.encode(event))
   return { newSeq, streamId }
 `;
 
@@ -26,13 +29,14 @@ const COMMIT_CONFLICT = -1;
 
 // evalCommit：在已就绪的 redis client 上执行原子提交。
 // client 由调用方（Phase 1 的 docRealtimeStore）注入并保证已连接。
-async function evalCommit(client, { seqKey, stateKey, streamKey, expectedBaseSeq, stateJson, eventJson }) {
+async function evalCommit(client, { seqKey, stateKey, streamKey, updatedAtKey, expectedBaseSeq, stateJson, eventJson, updatedAt }) {
   const result = await client.eval(COMMIT_SCRIPT, {
-    keys: [seqKey, stateKey, streamKey],
+    keys: [seqKey, stateKey, streamKey, updatedAtKey],
     arguments: [
       expectedBaseSeq === null || expectedBaseSeq === undefined ? '' : String(expectedBaseSeq),
       stateJson,
       eventJson,
+      updatedAt,
     ],
   });
 

@@ -78,6 +78,9 @@ async function applyStructureChange(command = {}, opType) {
       const result = await commitStructureChange(normalizedCommand);
       seq = result.seq;
       targetSheetId = result.targetSheetId;
+      const opState = await userOpStateStore.getState(normalizedCommand.docId, normalizedCommand.clientId);
+      canUndo = Boolean(opState && Array.isArray(opState.undoStackJson) && opState.undoStackJson.length > 0);
+      canRedo = Boolean(opState && Array.isArray(opState.redoStackJson) && opState.redoStackJson.length > 0);
     } else {
       let updatedDoc = null;
 

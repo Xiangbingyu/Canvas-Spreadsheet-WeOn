@@ -81,6 +81,7 @@ async function resolveUndoRedoOperation({
   desiredState,
   currentDoc,
   historyStore,
+  historySource = null,
   connection = null,
 }) {
   const referenceSeq = Number(entry && entry.sourceSeq);
@@ -118,12 +119,25 @@ async function resolveUndoRedoOperation({
     };
   }
 
-  const historyEntries = await historyStore.listByDocIdSeqRange(
-    docId,
-    referenceSeq,
-    currentDoc.currentSeq,
-    { connection }
-  );
+  if (historySource && typeof historySource.getCheckpoint === 'function') {
+    const checkpoint = await historySource.getCheckpoint(docId);
+    if (checkpoint !== null && referenceSeq < checkpoint) {
+      throw createServiceError(ERROR_CODES.CONFLICT, 'undo/redo sourceSeq is too old, please refresh', {
+        docId,
+        sourceSeq: referenceSeq,
+        checkpoint,
+      });
+    }
+  }
+
+  const historyEntries = historySource
+    ? await historySource.readStreamRange(docId, referenceSeq, currentDoc.currentSeq)
+    : await historyStore.listByDocIdSeqRange(
+      docId,
+      referenceSeq,
+      currentDoc.currentSeq,
+      { connection }
+    );
   const barrierEntry = historyEntries.find((historyEntry) => shouldTreatAsOtBarrier(historyEntry));
 
   if (barrierEntry) {
@@ -246,6 +260,7 @@ async function resolveUndoRedoBatchOperation({
   entry,
   currentDoc,
   historyStore,
+  historySource = null,
   connection = null,
   direction = 'undo',
 }) {
@@ -283,12 +298,25 @@ async function resolveUndoRedoBatchOperation({
     };
   }
 
-  const historyEntries = await historyStore.listByDocIdSeqRange(
-    docId,
-    referenceSeq,
-    currentDoc.currentSeq,
-    { connection }
-  );
+  if (historySource && typeof historySource.getCheckpoint === 'function') {
+    const checkpoint = await historySource.getCheckpoint(docId);
+    if (checkpoint !== null && referenceSeq < checkpoint) {
+      throw createServiceError(ERROR_CODES.CONFLICT, 'undo/redo sourceSeq is too old, please refresh', {
+        docId,
+        sourceSeq: referenceSeq,
+        checkpoint,
+      });
+    }
+  }
+
+  const historyEntries = historySource
+    ? await historySource.readStreamRange(docId, referenceSeq, currentDoc.currentSeq)
+    : await historyStore.listByDocIdSeqRange(
+      docId,
+      referenceSeq,
+      currentDoc.currentSeq,
+      { connection }
+    );
   const barrierEntry = historyEntries.find((historyEntry) => shouldTreatAsOtBarrier(historyEntry));
 
   if (barrierEntry) {
