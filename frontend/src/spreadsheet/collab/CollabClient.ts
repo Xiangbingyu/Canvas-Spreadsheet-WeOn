@@ -49,6 +49,29 @@ export interface CollabCallbacks {
   onError: (code: number, message: string) => void
   /** 连接状态变化 */
   onConnectionChange: (status: 'connected' | 'disconnected' | 'reconnecting') => void
+  /** P2-3: 离线重连后检测到冲突 */
+  onConflict?: (conflicts: ConflictInfo[]) => void
+}
+
+/** P2-3: 单个冲突信息 */
+export interface ConflictInfo {
+  row: number
+  col: number
+  myValue: string
+  myTimestamp: number
+  remoteValue: string
+  styleConflicts: Array<{ key: string; myValue: unknown; remoteValue: unknown }>
+  mergedStyle: Record<string, unknown> | null
+}
+
+interface ReplayTracker {
+  row: number
+  col: number
+  myValue: string
+  myTimestamp: number
+  eventId: string
+  /** 记录该 op 被分配的第一个 seq，用于检测间隙 */
+  resolvedSeq?: number
 }
 
 // ===== CollabClient =====
@@ -81,6 +104,9 @@ export class CollabClient {
 
   // P2-2: pending 确认 + 重连增强
   private pendingMessages = new Map<string, Record<string, unknown>>()
+  // P2-3: 冲突追踪
+  private replayTrackers: ReplayTracker[] = []
+  private replayConflictTimer: ReturnType<typeof setTimeout> | null = null
   private retryCount = 0
   private readonly maxRetries = 10
   private readonly baseReconnectInterval: number
@@ -179,6 +205,11 @@ export class CollabClient {
     this.clearReconnectDebounce()
     this.pendingOps.clear()
     this.pendingMessages.clear()
+    this.replayTrackers = []
+    if (this.replayConflictTimer) {
+      clearTimeout(this.replayConflictTimer)
+      this.replayConflictTimer = null
+    }
     this.seenSeqs.clear()
     this.sendQueue = []
     if (this.ws) {
@@ -371,9 +402,11 @@ export class CollabClient {
       case 'cell_updated':
         this.applyOrdered(msg.data.seq, () => {
           this.callbacks.onCellUpdated(msg.data)
-          // P2-2: 服务端回显 eventId 时清除 pending
           const raw = msg.data as Record<string, unknown>
+          // P2-2: 服务端回显 eventId 时清除 pending
           if (typeof raw.eventId === 'string') this.pendingMessages.delete(raw.eventId)
+          // P2-3: 追踪离线回放的回执
+          this.trackReplayAck(msg.data)
         })
         break
 
@@ -556,6 +589,7 @@ export class CollabClient {
           value: (msg.value as string) ?? '',
           style: (msg.style as Record<string, unknown> | null) ?? null,
           baseSeq: (msg.baseSeq as number) ?? this.seq,
+          timestamp: Date.now(),
         })
       } else if (msg.type === 'batch_set_cell') {
         const targets = (msg.updates as Array<{ row: number; col: number }> | undefined) ?? []
@@ -603,6 +637,7 @@ export class CollabClient {
           value: (m.value as string) ?? '',
           style: (m.style as Record<string, unknown> | null) ?? null,
           baseSeq: (m.baseSeq as number) ?? this.seq,
+          timestamp: Date.now(),
         })
         return
       }
@@ -636,6 +671,14 @@ export class CollabClient {
   private replayOfflineQueue(): void {
     const ops = OfflineQueue.dequeueAll()
     if (ops.length === 0) return
+
+    // P2-3: 清理旧的追踪和定时器
+    this.replayTrackers = []
+    if (this.replayConflictTimer) {
+      clearTimeout(this.replayConflictTimer)
+      this.replayConflictTimer = null
+    }
+
     const remaining: StoredOp[] = []
     for (const op of ops) {
       if (op.docId !== this.docId) {
@@ -643,6 +686,14 @@ export class CollabClient {
         continue
       }
       if (op.type === 'set_cell') {
+        const eventId = crypto.randomUUID()
+        this.replayTrackers.push({
+          row: op.row,
+          col: op.col,
+          myValue: op.value,
+          myTimestamp: op.timestamp || Date.now(),
+          eventId,
+        })
         this.send({
           type: 'set_cell',
           docId: this.docId,
@@ -653,6 +704,7 @@ export class CollabClient {
           value: op.value,
           style: op.style,
           baseSeq: op.baseSeq,
+          eventId,
         })
       } else if (op.type === 'batch_set_cell') {
         this.send({
@@ -667,6 +719,14 @@ export class CollabClient {
         })
       }
     }
+
+    // P2-3: 5 秒后仍未收齐回执 → 按已收到的判断冲突
+    if (this.replayTrackers.length > 0) {
+      this.replayConflictTimer = setTimeout(() => {
+        this.resolveConflicts()
+      }, 5000)
+    }
+
     // 放回其他文档的操作，避免 dequeueAll 误删
     for (const op of remaining) {
       if (op.type === 'set_cell') {
@@ -674,6 +734,56 @@ export class CollabClient {
       } else {
         OfflineQueue.enqueueBatch(op)
       }
+    }
+  }
+
+  /** P2-3: cell_updated 回执时记录 replayed op 的 seq */
+  private trackReplayAck(data: CellUpdated['data']): void {
+    const raw = data as Record<string, unknown>
+    const eventId = raw.eventId as string | undefined
+    if (!eventId) return
+    const tracker = this.replayTrackers.find((t) => t.eventId === eventId)
+    if (!tracker) return
+    tracker.resolvedSeq = data.seq
+    // 全部收齐 → 立即判断
+    if (this.replayTrackers.every((t) => t.resolvedSeq !== undefined)) {
+      if (this.replayConflictTimer) {
+        clearTimeout(this.replayConflictTimer)
+        this.replayConflictTimer = null
+      }
+      this.resolveConflicts()
+    }
+  }
+
+  /** P2-3: 收集冲突并回调 */
+  private resolveConflicts(): void {
+    if (this.replayTrackers.length === 0) return
+    const conflicts: ConflictInfo[] = []
+    // 按 seq 排序，检测间隙
+    const sorted = [...this.replayTrackers]
+      .filter((t) => t.resolvedSeq !== undefined)
+      .sort((a, b) => (a.resolvedSeq ?? 0) - (b.resolvedSeq ?? 0))
+
+    for (let i = 1; i < sorted.length; i++) {
+      const prev = sorted[i - 1]
+      const curr = sorted[i]
+      // seq 间距 > 1 → 中间有操作插入 → 当前格可能冲突
+      if ((curr.resolvedSeq ?? 0) - (prev.resolvedSeq ?? 0) > 1) {
+        conflicts.push({
+          row: curr.row,
+          col: curr.col,
+          myValue: curr.myValue,
+          myTimestamp: curr.myTimestamp,
+          remoteValue: '', // 服务端未回传别人的值，弹窗显示"未知"
+          styleConflicts: [],
+          mergedStyle: null,
+        })
+      }
+    }
+
+    this.replayTrackers = []
+    if (conflicts.length > 0) {
+      this.callbacks.onConflict?.(conflicts)
     }
   }
 

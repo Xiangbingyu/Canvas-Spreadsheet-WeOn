@@ -10,6 +10,7 @@ export interface QueuedOp {
   value: string
   style: Record<string, unknown> | null
   baseSeq: number
+  timestamp: number
 }
 
 export interface QueuedBatchOp {

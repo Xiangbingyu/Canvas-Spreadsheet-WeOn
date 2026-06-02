@@ -11,6 +11,7 @@ import GrideCanvas from '@/components/grideCanvas/GrideCanvas'
 import { useSpreadsheetInteraction } from '@/hooks/useSpreadsheetInteraction'
 import { useCommitCell, useCommitBatch } from '@/hooks/useCommitCell'
 import { useCollab } from '@/hooks/useCollab'
+import { ConflictDialog } from '@/components/CollabStatus/ConflictDialog'
 import { useUnifiedHistory } from '@/hooks/useUnifiedHistory'
 import type { RootState } from '@/spreadsheet/store'
 import { addSheet as addSheetAction, setWorksheet, store } from '@/spreadsheet/store'
@@ -43,6 +44,8 @@ export function SpreadsheetWorkspace() {
     setBatchCells,
     getClient,
     sendCursor,
+    conflicts,
+    resolveConflicts,
   } = useCollab({
     url: COLLAB_WS_URL,
     docId,
@@ -61,7 +64,6 @@ export function SpreadsheetWorkspace() {
 
     const legacySendCursor = sendCursor as unknown as LegacySendCursor
     legacySendCursor(selection.row, selection.col)
-
   }, [activeWorksheet.sheetId, selection.row, selection.col, sendCursor])
   const handleImportWorkbook = useCallback(
     (workbook: WorkbookSnapshotPayload): boolean => {
@@ -171,6 +173,13 @@ export function SpreadsheetWorkspace() {
 
       <StatusBar />
       <SheetTabs onAddSheet={handleAddSheet} />
+      {conflicts && (
+        <ConflictDialog
+          conflicts={conflicts}
+          onClose={() => resolveConflicts([])}
+          onResolve={resolveConflicts}
+        />
+      )}
     </div>
   )
 }
