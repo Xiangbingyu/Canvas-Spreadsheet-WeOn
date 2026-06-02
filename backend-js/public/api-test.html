@@ -327,7 +327,7 @@
         </div>
         <div class="hero-card">
           <div class="hero-label">HTTP endpoints</div>
-          <div class="hero-value">5 callable routes</div>
+          <div class="hero-value">6 callable routes</div>
         </div>
         <div class="hero-card">
           <div class="hero-label">WebSocket message types</div>
@@ -434,6 +434,42 @@
     const httpBase = window.location.origin;
     const wsBase = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}`;
 
+    function buildLargeCreateDocPayload() {
+      const cells = {};
+      const largeValuePrefix = 'large-cell-value-'.padEnd(256, 'x');
+
+      for (let row = 0; row < 10000; row += 1) {
+        cells[`${row}:0`] = {
+          row,
+          col: 0,
+          value: `${largeValuePrefix}${row}`,
+          styleId: null,
+        };
+      }
+
+      return {
+        title: 'Large API test doc',
+        createdBy: 'user_large_api',
+        eventId: `evt_api_test_large_${Date.now()}`,
+        snapshot: {
+          activeSheetId: 'sheet_large_001',
+          sheetOrder: ['sheet_large_001'],
+          sheets: {
+            sheet_large_001: {
+              id: 'sheet_large_001',
+              name: 'LargeImport',
+              defaultRowHeight: 25,
+              defaultColWidth: 120,
+              rowCount: 10000,
+              colCount: 1,
+              styles: {},
+              cells,
+            },
+          },
+        },
+      };
+    }
+
     const httpEndpoints = [
       {
         title: 'Root Health Envelope',
@@ -518,6 +554,29 @@
           };
         },
       },
+      {
+        title: 'Create Large Document',
+        method: 'POST',
+        path: '/docs',
+        contentType: 'application/json',
+        description: 'Creates a document with a 10000-row workbook snapshot so you can test request body limits, Redis-first create, and async MySQL flush.',
+        fields: [
+          { key: 'title', label: 'title', value: 'Large API test doc' },
+          { key: 'createdBy', label: 'createdBy', value: 'user_large_api' },
+          { key: 'eventId', label: 'eventId', value: 'evt_api_test_large_manual' },
+        ],
+        examplePayload: JSON.stringify(buildLargeCreateDocPayload(), null, 2),
+        buildRequest(_, payloadText) {
+          return {
+            url: '/docs',
+            options: {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: payloadText,
+            },
+          };
+        },
+      },
     ];
 
     const wsMessages = [
@@ -545,11 +604,12 @@
       {
         title: 'Cursor Relay',
         type: 'cursor',
-        description: 'Broadcast the current selected cell to everyone in the same room. This is a lightweight relay with no seq/history/audit.',
+        description: 'Broadcast the current selected cell to everyone in the same room. sheetId is forwarded as-is. This is a lightweight relay with no seq/history/audit.',
         template: {
           type: 'cursor',
           docId: 'doc_sys_001',
           clientId: 'user_001',
+          sheetId: 'sheet_20260527_001',
           row: 5,
           col: 3,
         },

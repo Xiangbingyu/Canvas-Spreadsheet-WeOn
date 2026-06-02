@@ -2,6 +2,7 @@ const {
   createDoc,
   normalizeDocSnapshot,
   createEmptySheetSnapshot,
+  createEmptyDocSnapshot,
   buildNextSheetId,
   buildDefaultSheetName,
 } = require('../../domain/entities/doc');
@@ -139,6 +140,22 @@ function mapRowToDoc(row) {
   });
 }
 
+function mapRowToDocMeta(row) {
+  if (!row) {
+    return null;
+  }
+
+  return {
+    id: row.id,
+    docId: row.doc_id,
+    title: row.title,
+    currentSeq: Number(row.current_seq),
+    createdBy: row.created_by,
+    createdAt: toResponseDateTime(row.created_at),
+    updatedAt: toResponseDateTime(row.updated_at),
+  };
+}
+
 function createTemporaryDocId() {
   return `doc_tmp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -200,14 +217,66 @@ function createDocMysqlStore() {
     return rows.map((row) => mapRowToDoc(row));
   }
 
+  async function findMetaById(id, { connection = null } = {}) {
+    const executor = connection || { execute };
+    const [rows] = await executor.execute(
+      `SELECT
+        id,
+        doc_id,
+        title,
+        current_seq,
+        created_by,
+        created_at,
+        updated_at
+      FROM doc
+      WHERE id = ?`,
+      [id]
+    );
+
+    return mapRowToDocMeta(rows[0] || null);
+  }
+
   async function createDocRow(rowInput = {}, options = {}) {
     await ensureReady();
 
     return runWithOptionalTransaction(async (connection) => {
-      const temporaryDocId = rowInput.docId || createTemporaryDocId();
+      if (rowInput.docId) {
+        const createdDoc = createDoc(rowInput);
+
+        const [insertResult] = await connection.execute(
+          `INSERT INTO doc (
+            doc_id,
+            title,
+            snapshot_json,
+            current_seq,
+            created_by,
+            created_at,
+            updated_at
+          ) VALUES (?, ?, CAST(? AS JSON), ?, ?, ?, ?)`,
+          [
+            createdDoc.docId,
+            createdDoc.title,
+            stringifyJsonValue(createdDoc.snapshotJson, {}),
+            createdDoc.currentSeq,
+            createdDoc.createdBy,
+            toMysqlDateValue(createdDoc.createdAt),
+            toMysqlDateValue(createdDoc.updatedAt),
+          ]
+        );
+
+        const persistedMeta = await findMetaById(insertResult.insertId, { connection });
+
+        return {
+          ...createdDoc,
+          ...persistedMeta,
+        };
+      }
+
+      const temporaryDocId = createTemporaryDocId();
       const provisionalDoc = createDoc({
         ...rowInput,
         docId: temporaryDocId,
+        snapshotJson: createEmptyDocSnapshot(temporaryDocId),
       });
 
       const [insertResult] = await connection.execute(
@@ -231,31 +300,32 @@ function createDocMysqlStore() {
         ]
       );
 
-      const finalDoc = rowInput.docId
-        ? provisionalDoc
-        : createDoc({
-          ...rowInput,
-          id: insertResult.insertId,
-          docId: buildFinalDocId(insertResult.insertId),
-          createdAt: provisionalDoc.createdAt,
-          updatedAt: provisionalDoc.updatedAt,
-        });
+      const finalDoc = createDoc({
+        ...rowInput,
+        id: insertResult.insertId,
+        docId: buildFinalDocId(insertResult.insertId),
+        createdAt: provisionalDoc.createdAt,
+        updatedAt: provisionalDoc.updatedAt,
+      });
 
-      if (!rowInput.docId) {
-        await connection.execute(
-          `UPDATE doc
-          SET doc_id = ?, snapshot_json = CAST(? AS JSON), updated_at = ?
-          WHERE id = ?`,
-          [
-            finalDoc.docId,
-            stringifyJsonValue(finalDoc.snapshotJson, {}),
-            toMysqlDateValue(finalDoc.updatedAt),
-            insertResult.insertId,
-          ]
-        );
-      }
+      await connection.execute(
+        `UPDATE doc
+        SET doc_id = ?, snapshot_json = CAST(? AS JSON), updated_at = ?
+        WHERE id = ?`,
+        [
+          finalDoc.docId,
+          stringifyJsonValue(finalDoc.snapshotJson, {}),
+          toMysqlDateValue(finalDoc.updatedAt),
+          insertResult.insertId,
+        ]
+      );
 
-      return findByDocId(finalDoc.docId, { connection });
+      const persistedMeta = await findMetaById(insertResult.insertId, { connection });
+
+      return {
+        ...finalDoc,
+        ...persistedMeta,
+      };
     }, options);
   }
 
@@ -287,6 +357,18 @@ function createDocMysqlStore() {
 
     async list() {
       return list();
+    },
+
+    async getMaxDocNumericId() {
+      await ensureReady();
+      const [rows] = await query(
+        `SELECT MAX(CAST(SUBSTRING(doc_id, 5) AS UNSIGNED)) AS max_doc_numeric_id
+        FROM doc
+        WHERE doc_id REGEXP '^doc_[0-9]+$'`
+      );
+
+      const value = Number(rows[0] && rows[0].max_doc_numeric_id);
+      return Number.isFinite(value) ? value : 0;
     },
 
     async updateByDocId(docId, patch = {}, options = {}) {
@@ -428,12 +510,18 @@ function createDocMysqlStore() {
           const oldValue = previousCell.value ?? '';
           const oldStyleId = typeof previousCell.styleId === 'string' ? previousCell.styleId : null;
           const oldStyle = oldStyleId ? JSON.parse(JSON.stringify(targetSheet.styles[oldStyleId] || null)) : null;
-          const nextStyleIdValue = findOrCreateStyleId(targetSheet, update.style);
+          const hasValuePatch = update.value !== undefined;
+          const hasStylePatch = update.style !== undefined;
+          const nextValue = hasValuePatch ? update.value : oldValue;
+          const nextStyle = hasStylePatch ? update.style : oldStyle;
+          const nextStyleIdValue = hasStylePatch
+            ? findOrCreateStyleId(targetSheet, nextStyle)
+            : oldStyleId;
 
           targetSheet.cells[cellKey] = {
             row: update.row,
             col: update.col,
-            value: update.value ?? '',
+            value: nextValue,
             styleId: nextStyleIdValue,
           };
 
@@ -450,8 +538,8 @@ function createDocMysqlStore() {
             col: update.col,
             oldValue,
             oldStyle,
-            newValue: update.value ?? '',
-            newStyle: update.style ?? null,
+            newValue: nextValue,
+            newStyle: nextStyle,
           });
         }
 

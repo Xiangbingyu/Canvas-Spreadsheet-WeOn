@@ -3,6 +3,8 @@ const docStore = require('../store/docStore');
 const historyStore = require('../store/historyStore');
 const docOpStreamStore = require('../store/redis/docOpStreamStore');
 const docFlushProgressStore = require('../store/redis/docFlushProgressStore');
+const docRealtimeStore = require('../store/redis/docRealtimeStore');
+const docPendingCreateStore = require('../store/redis/docPendingCreateStore');
 const { applyReplayEvent, isHistoryDuplicateError } = require('./replayUtils');
 
 async function applyDocStoreOp(docId, event) {
@@ -31,6 +33,51 @@ async function ensureDocStateApplied(docId, event) {
 function createOpLogFlushWorker() {
   let running = false;
   let loopPromise = null;
+
+  async function flushPendingCreate(docId) {
+    const existingDoc = await docStore.getDocState(docId);
+    if (existingDoc) {
+      await docPendingCreateStore.removePendingDoc(docId);
+      return;
+    }
+
+    const [pendingMeta, realtimeState] = await Promise.all([
+      docPendingCreateStore.getPendingDocMeta(docId),
+      docRealtimeStore.getState(docId),
+    ]);
+
+    if (!pendingMeta || !realtimeState) {
+      return;
+    }
+
+    await docStore.createDoc({
+      docId: pendingMeta.docId,
+      title: pendingMeta.title,
+      createdBy: pendingMeta.createdBy,
+      snapshotJson: realtimeState.snapshotJson,
+      currentSeq: realtimeState.currentSeq,
+      createdAt: pendingMeta.createdAt,
+      updatedAt: pendingMeta.updatedAt,
+    });
+
+    await docPendingCreateStore.removePendingDoc(docId);
+  }
+
+  async function processPendingCreates() {
+    const pendingDocIds = await docPendingCreateStore.listPendingDocIds();
+
+    for (const docId of pendingDocIds) {
+      if (!running) {
+        break;
+      }
+
+      try {
+        await flushPendingCreate(docId);
+      } catch (error) {
+        console.error(`opLogFlushWorker pending create ${docId}:`, error);
+      }
+    }
+  }
 
   async function processEvent(docId, id, event) {
     try {
@@ -80,6 +127,7 @@ function createOpLogFlushWorker() {
   async function loop() {
     while (running) {
       try {
+        await processPendingCreates();
         const docs = await docStore.list();
         for (const doc of docs) {
           if (!running) break;

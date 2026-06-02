@@ -54,8 +54,8 @@ async function executeImportSheet(normalizedCommand) {
     let resultSnapshot = null;
 
     if (realtimeConfig.driver === 'redis') {
-      // commitImportSheet verifies doc exists first, then we check join
-      const currentDoc = await docsService.getDocState(normalizedCommand.docId);
+      // Redis Gate 路径只依赖 realtime write state；若缺失则由 getDocStateForWrite 负责初始化。
+      const currentDoc = await docsService.getDocStateForWrite(normalizedCommand.docId);
       if (!currentDoc) {
         throw createServiceError(ERROR_CODES.DOCUMENT_NOT_FOUND, `document not found: ${normalizedCommand.docId}`);
       }

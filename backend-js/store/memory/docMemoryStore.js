@@ -195,6 +195,21 @@ function createDocMemoryStore() {
       return cloneRecords(Array.from(rowsById.values()));
     },
 
+    async getMaxDocNumericId() {
+      let maxDocNumericId = 0;
+
+      for (const row of rowsById.values()) {
+        const match = /^doc_(\d+)$/.exec(typeof row.docId === 'string' ? row.docId : '');
+        if (!match) {
+          continue;
+        }
+
+        maxDocNumericId = Math.max(maxDocNumericId, Number.parseInt(match[1], 10));
+      }
+
+      return maxDocNumericId;
+    },
+
     async updateByDocId(docId, patch = {}) {
       return updateByDocId(docId, patch);
     },
@@ -290,12 +305,18 @@ function createDocMemoryStore() {
         const oldValue = previousCell.value ?? '';
         const oldStyleId = typeof previousCell.styleId === 'string' ? previousCell.styleId : null;
         const oldStyle = oldStyleId ? deepClone(targetSheet.styles[oldStyleId] || null) : null;
-        const nextStyleIdValue = findOrCreateStyleId(targetSheet, update.style);
+        const hasValuePatch = update.value !== undefined;
+        const hasStylePatch = update.style !== undefined;
+        const nextValue = hasValuePatch ? update.value : oldValue;
+        const nextStyle = hasStylePatch ? update.style : oldStyle;
+        const nextStyleIdValue = hasStylePatch
+          ? findOrCreateStyleId(targetSheet, nextStyle)
+          : oldStyleId;
 
         targetSheet.cells[cellKey] = {
           row: update.row,
           col: update.col,
-          value: update.value ?? '',
+          value: nextValue,
           styleId: nextStyleIdValue,
         };
 
@@ -312,8 +333,8 @@ function createDocMemoryStore() {
           col: update.col,
           oldValue,
           oldStyle,
-          newValue: update.value ?? '',
-          newStyle: update.style ?? null,
+          newValue: nextValue,
+          newStyle: nextStyle,
         });
       }
 

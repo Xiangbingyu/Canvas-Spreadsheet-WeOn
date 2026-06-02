@@ -1,4 +1,5 @@
 const auditLogStore = require('../store/auditLogStore');
+const realtimeConfig = require('../config/realtimeConfig');
 
 function normalizeAuditEvent(event = {}) {
   const {
@@ -23,7 +24,24 @@ function normalizeAuditEvent(event = {}) {
 }
 
 async function recordAuditEvent(event) {
-  const record = await auditLogStore.append(normalizeAuditEvent(event));
+  const normalizedEvent = normalizeAuditEvent(event);
+
+  if (realtimeConfig.driver === 'redis') {
+    setImmediate(async () => {
+      try {
+        await auditLogStore.append(normalizedEvent);
+      } catch (error) {
+        console.error('async audit append failed:', error);
+      }
+    });
+
+    return {
+      status: 'queued',
+      event: normalizedEvent,
+    };
+  }
+
+  const record = await auditLogStore.append(normalizedEvent);
 
   return {
     status: 'persisted',

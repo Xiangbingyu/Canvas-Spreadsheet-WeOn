@@ -36,6 +36,8 @@ async function closeProjectResources() {
   const roomServiceModulePath = path.join(projectRoot, 'service', 'roomService.js');
   const idempotencyServiceModulePath = path.join(projectRoot, 'idempotency', 'idempotencyService.js');
   const lockModulePath = path.join(projectRoot, 'infra', 'redis', 'lock.js');
+  const docRealtimeStoreModulePath = path.join(projectRoot, 'store', 'redis', 'docRealtimeStore.js');
+  const docPendingCreateStoreModulePath = path.join(projectRoot, 'store', 'redis', 'docPendingCreateStore.js');
 
   if (require.cache[cacheModulePath]) {
     await require(cacheModulePath).close();
@@ -51,6 +53,14 @@ async function closeProjectResources() {
 
   if (require.cache[lockModulePath]) {
     await require(lockModulePath).close();
+  }
+
+  if (require.cache[docRealtimeStoreModulePath]) {
+    await require(docRealtimeStoreModulePath).close();
+  }
+
+  if (require.cache[docPendingCreateStoreModulePath]) {
+    await require(docPendingCreateStoreModulePath).close();
   }
 }
 
@@ -129,6 +139,37 @@ function assertWorkbookSnapshotMatchesDocFormat(snapshot, expected) {
   assert.equal(snapshot.activeSheetId, expected.activeSheetId);
   assert.deepEqual(snapshot.sheetOrder, expected.sheetOrder);
   assert.deepEqual(snapshot.sheets, expected.sheets);
+}
+
+function createLargeImportedSnapshot() {
+  const cells = {};
+  const largeValue = 'x'.repeat(800);
+
+  for (let row = 0; row < 1600; row += 1) {
+    cells[`${row}:0`] = {
+      row,
+      col: 0,
+      value: `${largeValue}${row}`,
+      styleId: null,
+    };
+  }
+
+  return {
+    activeSheetId: 'sheet_large_001',
+    sheetOrder: ['sheet_large_001'],
+    sheets: {
+      sheet_large_001: {
+        id: 'sheet_large_001',
+        name: 'BigSheet',
+        defaultRowHeight: 25,
+        defaultColWidth: 100,
+        rowCount: 1600,
+        colCount: 1,
+        styles: {},
+        cells,
+      },
+    },
+  };
 }
 
 // ==================== POST /docs：创建文档并校验初始状态与审计日志 ====================
@@ -275,6 +316,35 @@ test('POST /docs creates a document from imported workbook snapshot', async () =
     assert.deepEqual(
       response.json.data.snapshot,
       normalizeDocSnapshot(importedSnapshot, { docId: response.json.data.docId })
+    );
+  } finally {
+    await server.close();
+  }
+});
+
+test('POST /docs accepts a snapshot payload larger than the legacy 1mb default', async () => {
+  const server = await createTestServer();
+
+  try {
+    const importedSnapshot = createLargeImportedSnapshot();
+    const requestBody = {
+      title: 'large-imported-workbook',
+      createdBy: 'user_large_001',
+      eventId: 'evt_create_doc_large_001',
+      snapshot: importedSnapshot,
+    };
+
+    assert.ok(Buffer.byteLength(JSON.stringify(requestBody)) > 1024 * 1024);
+
+    const response = await postJson(server.baseUrl, '/docs', requestBody);
+
+    assert.equal(response.status, 201);
+    assert.equal(response.json.code, 0);
+    assert.equal(response.json.data.title, 'large-imported-workbook');
+    assert.equal(response.json.data.createdBy, 'user_large_001');
+    assert.equal(
+      response.json.data.snapshot.sheets.sheet_large_001.cells['1599:0'].value,
+      `${'x'.repeat(800)}1599`
     );
   } finally {
     await server.close();

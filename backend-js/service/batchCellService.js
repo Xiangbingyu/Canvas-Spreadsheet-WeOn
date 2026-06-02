@@ -142,7 +142,14 @@ async function applyBatchSetCell(command = {}) {
       targetSheetId = result.targetSheetId;
       effectiveCommand = result.effectiveCommand;
       rebaseResult = result.rebaseResult;
-      finalUpdates = result.batchUpdates.map(u => ({ row: u.row, col: u.col, value: u.newValue, style: u.newStyle }));
+      finalUpdates = result.batchUpdates.map((update) => ({
+        row: update.row,
+        col: update.col,
+        value: update.newValue,
+        style: update.newStyle,
+        oldValue: update.oldValue,
+        oldStyle: update.oldStyle,
+      }));
 
       const opState = await userOpStateStore.getState(normalizedCommand.docId, normalizedCommand.clientId);
       const undoStack = opState ? [...opState.undoStackJson] : [];
@@ -205,6 +212,14 @@ async function applyBatchSetCell(command = {}) {
         const historyUpdates = (updatedDoc._batchUpdates || []).map((update) => ({
           row: update.row, col: update.col, oldValue: update.oldValue, oldStyle: update.oldStyle,
           newValue: update.newValue, newStyle: update.newStyle,
+        }));
+        finalUpdates = historyUpdates.map((update) => ({
+          row: update.row,
+          col: update.col,
+          value: update.newValue,
+          style: update.newStyle,
+          oldValue: update.oldValue,
+          oldStyle: update.oldStyle,
         }));
 
         await historyStore.append({

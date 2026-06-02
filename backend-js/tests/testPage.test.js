@@ -7,9 +7,19 @@ const projectRoot = path.resolve(__dirname, '..');
 
 async function closeProjectResources() {
   const cacheModulePath = path.join(projectRoot, 'cache', 'index.js');
+  const docRealtimeStoreModulePath = path.join(projectRoot, 'store', 'redis', 'docRealtimeStore.js');
+  const docPendingCreateStoreModulePath = path.join(projectRoot, 'store', 'redis', 'docPendingCreateStore.js');
 
   if (require.cache[cacheModulePath]) {
     await require(cacheModulePath).close();
+  }
+
+  if (require.cache[docRealtimeStoreModulePath]) {
+    await require(docRealtimeStoreModulePath).close();
+  }
+
+  if (require.cache[docPendingCreateStoreModulePath]) {
+    await require(docPendingCreateStoreModulePath).close();
   }
 }
 

@@ -8,10 +8,13 @@ const { isNonEmptyString, isPositiveInteger } = require('../protocol/validators'
 const docStore = require('../store/docStore');
 const roomUserStore = require('../store/roomUserStore');
 const auditService = require('../audit/auditService');
-const { normalizeDocSnapshot } = require('../domain/entities/doc');
+const { createDoc: createDocRecord, normalizeDocSnapshot } = require('../domain/entities/doc');
 const realtimeConfig = require('../config/realtimeConfig');
 const docRealtimeStore = require('../store/redis/docRealtimeStore');
+const docPendingCreateStore = require('../store/redis/docPendingCreateStore');
 const docRecoveryService = require('./recovery/docRecoveryService');
+
+let realtimeDocIdCounterInitPromise = null;
 
 // ==================== 公共方法 ====================
 
@@ -75,7 +78,9 @@ function normalizeCreateDocInput(input = {}) {
 }
 
 // 把 store 层记录转换为 HTTP 返回使用的文档视图。
-function toDocView(docRecord) {
+function toDocView(docRecord, options = {}) {
+  const { snapshotAlreadyNormalized = false } = options;
+
   return {
     docId: docRecord.docId,
     title: docRecord.title,
@@ -83,7 +88,9 @@ function toDocView(docRecord) {
     createdBy: docRecord.createdBy,
     createdAt: docRecord.createdAt,
     updatedAt: docRecord.updatedAt,
-    snapshot: normalizeDocSnapshot(docRecord.snapshotJson, { docId: docRecord.docId }),
+    snapshot: snapshotAlreadyNormalized
+      ? docRecord.snapshotJson
+      : normalizeDocSnapshot(docRecord.snapshotJson, { docId: docRecord.docId }),
   };
 }
 
@@ -124,6 +131,67 @@ function isRealtimeReadThroughEnabled() {
   return realtimeConfig.driver === 'redis';
 }
 
+function parseNumericDocId(docId) {
+  const match = /^doc_(\d+)$/.exec(typeof docId === 'string' ? docId.trim() : '');
+  return match ? Number.parseInt(match[1], 10) : null;
+}
+
+async function ensureRealtimeDocIdCounterInitialized() {
+  if (!isRealtimeReadThroughEnabled()) {
+    return;
+  }
+
+  if (!realtimeDocIdCounterInitPromise) {
+    realtimeDocIdCounterInitPromise = (async () => {
+      let maxPersistedDocNumber = 0;
+
+      if (typeof docStore.getMaxDocNumericId === 'function') {
+        maxPersistedDocNumber = await docStore.getMaxDocNumericId();
+      } else {
+        const docs = await docStore.list();
+        for (const doc of docs) {
+          const numericDocId = parseNumericDocId(doc.docId);
+          if (Number.isInteger(numericDocId)) {
+            maxPersistedDocNumber = Math.max(maxPersistedDocNumber, numericDocId);
+          }
+        }
+      }
+
+      await docPendingCreateStore.initializeCounter(maxPersistedDocNumber);
+    })().catch((error) => {
+      realtimeDocIdCounterInitPromise = null;
+      throw error;
+    });
+  }
+
+  await realtimeDocIdCounterInitPromise;
+}
+
+async function getPendingRealtimeDocRecord(docId) {
+  if (!isRealtimeReadThroughEnabled()) {
+    return null;
+  }
+
+  const [pendingMeta, state] = await Promise.all([
+    docPendingCreateStore.getPendingDocMeta(docId),
+    docRealtimeStore.getState(docId),
+  ]);
+
+  if (!pendingMeta || !state) {
+    return null;
+  }
+
+  return {
+    docId: pendingMeta.docId,
+    title: pendingMeta.title,
+    currentSeq: state.currentSeq,
+    createdBy: pendingMeta.createdBy,
+    createdAt: pendingMeta.createdAt,
+    updatedAt: state.updatedAt || pendingMeta.updatedAt,
+    snapshotJson: state.snapshotJson,
+  };
+}
+
 async function applyRealtimeOverlay(docRecord) {
   if (!docRecord || !isRealtimeReadThroughEnabled()) {
     return docRecord;
@@ -156,13 +224,13 @@ async function applyRealtimeOverlay(docRecord) {
   return nextRecord;
 }
 
-async function primeDocCaches(docRecord) {
+async function primeDocCaches(docRecord, options = {}) {
   if (!docRecord) {
     return;
   }
 
   await Promise.all([
-    docSnapshotCache.set(docRecord.docId, toDocView(docRecord)),
+    docSnapshotCache.set(docRecord.docId, toDocView(docRecord, options)),
     docMetaCache.set(docRecord.docId, toDocMeta(docRecord)),
   ]);
 }
@@ -172,7 +240,8 @@ async function getValidRememberedCreateDocResponse(record) {
     return null;
   }
 
-  const existingDoc = await docStore.getDocState(record.response.docId);
+  const existingDoc = await docStore.getDocState(record.response.docId)
+    || await getPendingRealtimeDocRecord(record.response.docId);
   return existingDoc ? record.response : null;
 }
 
@@ -187,7 +256,8 @@ async function getDocMeta(docId) {
   const storedDoc = await applyRealtimeOverlay(await docStore.getDocState(normalizedDocId));
 
   if (!storedDoc) {
-    return null;
+    const pendingDoc = await getPendingRealtimeDocRecord(normalizedDocId);
+    return pendingDoc ? toDocMeta(pendingDoc) : null;
   }
 
   await primeDocCaches(storedDoc);
@@ -223,6 +293,12 @@ async function invalidateDocCaches(docId, options = {}) {
     docSnapshotCache.invalidate(docId),
     docMetaCache.invalidate(docId),
   ]);
+
+  // Redis Gate 路径下，文档列表读取本身已绕过缓存并做 realtime overlay，
+  // 因此这里无需再为 related user 回查 MySQL 元信息。
+  if (isRealtimeReadThroughEnabled() && !Array.isArray(relatedUserIds)) {
+    return;
+  }
 
   const resolvedUserIds = Array.isArray(relatedUserIds)
     ? relatedUserIds
@@ -296,14 +372,43 @@ async function createDoc(input = {}) {
   }
 
   try {
-    const createdDoc = await docStore.createDoc({
-      title: normalizedInput.title,
-      createdBy: normalizedInput.createdBy,
-      snapshotJson: normalizedInput.snapshot,
-    });
-    const docView = toDocView(createdDoc);
+    let createdDoc;
 
-    await primeDocCaches(createdDoc);
+    if (isRealtimeReadThroughEnabled()) {
+      await ensureRealtimeDocIdCounterInitialized();
+
+      const docId = await docPendingCreateStore.allocateNextDocId();
+      createdDoc = createDocRecord({
+        docId,
+        title: normalizedInput.title,
+        createdBy: normalizedInput.createdBy,
+        snapshotJson: normalizedInput.snapshot,
+      });
+
+      await docRealtimeStore.seed(docId, {
+        snapshotJson: createdDoc.snapshotJson,
+        currentSeq: createdDoc.currentSeq,
+        updatedAt: createdDoc.updatedAt,
+      });
+      await docPendingCreateStore.savePendingDoc({
+        docId: createdDoc.docId,
+        title: createdDoc.title,
+        currentSeq: createdDoc.currentSeq,
+        createdBy: createdDoc.createdBy,
+        createdAt: createdDoc.createdAt,
+        updatedAt: createdDoc.updatedAt,
+      });
+    } else {
+      createdDoc = await docStore.createDoc({
+        title: normalizedInput.title,
+        createdBy: normalizedInput.createdBy,
+        snapshotJson: normalizedInput.snapshot,
+      });
+    }
+
+    const docView = toDocView(createdDoc, { snapshotAlreadyNormalized: true });
+
+    await primeDocCaches(createdDoc, { snapshotAlreadyNormalized: true });
     await invalidateUserDocsListCaches([createdDoc.createdBy]);
 
     await auditService.recordAuditEvent({
@@ -382,6 +487,9 @@ async function listDocsByUser(input = {}) {
   const allDocs = isRealtimeReadThroughEnabled()
     ? await Promise.all(storedDocs.map((doc) => applyRealtimeOverlay(doc)))
     : storedDocs;
+  const pendingCreatedDocs = isRealtimeReadThroughEnabled() && (normalizedInput.scope === 'created' || normalizedInput.scope === 'all')
+    ? await docPendingCreateStore.listByCreatedBy(normalizedInput.userId)
+    : [];
   const createdDocs = [];
   const participatedDocs = [];
 
@@ -390,6 +498,10 @@ async function listDocsByUser(input = {}) {
       if (doc.createdBy === normalizedInput.userId) {
         createdDocs.push(toDocListItem(doc, 'created'));
       }
+    }
+
+    for (const doc of pendingCreatedDocs) {
+      createdDocs.push(toDocListItem(doc, 'created'));
     }
   }
 
@@ -485,7 +597,13 @@ async function getDocState(docId) {
   const storedDoc = await applyRealtimeOverlay(await docStore.getDocState(normalizedDocId));
 
   if (!storedDoc) {
-    throw createServiceError(ERROR_CODES.DOCUMENT_NOT_FOUND, `document not found: ${normalizedDocId}`);
+    const pendingDoc = await getPendingRealtimeDocRecord(normalizedDocId);
+
+    if (!pendingDoc) {
+      throw createServiceError(ERROR_CODES.DOCUMENT_NOT_FOUND, `document not found: ${normalizedDocId}`);
+    }
+
+    return toDocView(pendingDoc, { snapshotAlreadyNormalized: true });
   }
 
   const docView = toDocView(storedDoc);

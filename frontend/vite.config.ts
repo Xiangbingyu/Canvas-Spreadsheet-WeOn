@@ -16,9 +16,9 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/health': { target: 'http://localhost:3000' },
-      '/docs': { target: 'http://localhost:3000' },
-      '/ws': { target: 'ws://localhost:3000', ws: true },
+      '/health': { target: 'http://120.48.16.108:3000' },
+      '/docs': { target: 'http://120.48.16.108:3000' },
+      '/ws': { target: 'ws://120.48.16.108:3000', ws: true },
     },
   },
 })

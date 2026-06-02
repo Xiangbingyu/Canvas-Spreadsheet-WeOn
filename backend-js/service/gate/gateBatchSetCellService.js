@@ -62,9 +62,17 @@ async function commitBatchSetCell(normalizedCommand) {
     const oldValue = prevCell.value ?? '';
     const oldStyleId = typeof prevCell.styleId === 'string' ? prevCell.styleId : null;
     const oldStyle = oldStyleId && nextSheet.styles ? (nextSheet.styles[oldStyleId] || null) : null;
-    const newValue = update.value ?? (effectiveCommand.value ?? '');
-    const newStyle = update.style !== undefined ? update.style : (effectiveCommand.style !== undefined ? effectiveCommand.style : null);
-    const nextStyleId = findOrCreateStyleId(nextSheet, newStyle);
+    const hasValuePatch = update.value !== undefined || effectiveCommand.value !== undefined;
+    const hasStylePatch = update.style !== undefined || effectiveCommand.style !== undefined;
+    const newValue = update.value !== undefined
+      ? update.value
+      : (effectiveCommand.value !== undefined ? effectiveCommand.value : oldValue);
+    const newStyle = update.style !== undefined
+      ? update.style
+      : (effectiveCommand.style !== undefined ? effectiveCommand.style : oldStyle);
+    const nextStyleId = hasStylePatch
+      ? findOrCreateStyleId(nextSheet, newStyle)
+      : oldStyleId;
 
     nextSheet.cells[cellKey] = { row: update.row, col: update.col, value: newValue, styleId: nextStyleId };
     if (update.row > nextSheet.rowCount) nextSheet.rowCount = update.row;

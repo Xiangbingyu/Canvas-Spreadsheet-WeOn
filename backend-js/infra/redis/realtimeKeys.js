@@ -32,6 +32,18 @@ function createRealtimeKeys(keyPrefix = realtimeConfig.keyPrefix) {
     flushedSeqKey(docId) {
       return `${docPrefix(prefix, docId)}:flushed-seq`;
     },
+    pendingCreateSetKey() {
+      return `${prefix}:doc:pending-create`;
+    },
+    pendingMetaKey(docId) {
+      return `${docPrefix(prefix, docId)}:pending-meta`;
+    },
+    createdDocsByUserKey(userId) {
+      return `${prefix}:docs:created-by:${userId}`;
+    },
+    docIdCounterKey() {
+      return `${prefix}:doc:id-counter`;
+    },
     userOpKey(docId, clientId) {
       return `${docPrefix(prefix, docId)}:user-op:${clientId}`;
     },

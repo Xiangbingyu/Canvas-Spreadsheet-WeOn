@@ -41,6 +41,8 @@ async function closeProjectResources() {
   const roomServiceModulePath = path.join(projectRoot, 'service', 'roomService.js');
   const idempotencyServiceModulePath = path.join(projectRoot, 'idempotency', 'idempotencyService.js');
   const lockModulePath = path.join(projectRoot, 'infra', 'redis', 'lock.js');
+  const docRealtimeStoreModulePath = path.join(projectRoot, 'store', 'redis', 'docRealtimeStore.js');
+  const docPendingCreateStoreModulePath = path.join(projectRoot, 'store', 'redis', 'docPendingCreateStore.js');
 
   if (require.cache[cacheModulePath]) {
     await require(cacheModulePath).close();
@@ -56,6 +58,14 @@ async function closeProjectResources() {
 
   if (require.cache[lockModulePath]) {
     await require(lockModulePath).close();
+  }
+
+  if (require.cache[docRealtimeStoreModulePath]) {
+    await require(docRealtimeStoreModulePath).close();
+  }
+
+  if (require.cache[docPendingCreateStoreModulePath]) {
+    await require(docPendingCreateStoreModulePath).close();
   }
 }
 

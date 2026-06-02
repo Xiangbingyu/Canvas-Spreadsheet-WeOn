@@ -10,6 +10,7 @@ const { spawn } = require('node:child_process');
 const WebSocket = require('ws');
 const { resetMysqlDatabase } = require('../scripts/dbReset');
 const { createRedisConnection } = require('../infra/redis/client');
+const { createRealtimeKeys } = require('../infra/redis/realtimeKeys');
 
 const projectRoot = path.resolve(__dirname, '..');
 const serverEntry = path.join(projectRoot, 'server.js');
@@ -119,10 +120,13 @@ async function startServerInstance({ port, serverId }) {
         SERVER_ID: serverId,
         STORE_DRIVER: 'mysql',
         RUNTIME_STATE_DRIVER: 'redis',
+        REALTIME_STATE_DRIVER: 'redis',
         COLLAB_BROADCAST_DRIVER: 'redis',
         CACHE_DRIVER: 'redis',
         IDEMPOTENCY_DRIVER: 'redis',
         DOC_LOCK_DRIVER: 'redis',
+        OP_STREAM_DRIVER: 'redis',
+        PERSIST_WORKER_ENABLED: 'true',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     }
@@ -228,6 +232,21 @@ async function joinRoom(client, docId, clientId) {
   return client.waitFor((message) => message.type === 'join_ack' && message.data.clientId === clientId);
 }
 
+async function waitForCondition(predicate, timeoutMs = 5000, intervalMs = 50) {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const result = await predicate();
+    if (result) {
+      return result;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+
+  throw new Error(`waitForCondition timeout after ${timeoutMs}ms`);
+}
+
 test.beforeEach(async () => {
   await resetMysqlDatabase({
     closePoolAfterReset: false,
@@ -320,12 +339,14 @@ test('redis idempotency returns the same create-doc result across instances for 
     assert.equal(secondResponse.status, 201);
     assert.deepEqual(secondResponse.json, firstResponse.json);
 
-    const listResponse = await getJson(
-      serverA.baseUrl,
-      '/docs?userId=redis-idempotent-user&scope=created&page=1&pageSize=20'
-    );
-    assert.equal(listResponse.status, 200);
-    assert.equal(listResponse.json.data.total, 1);
+    await waitForCondition(async () => {
+      const listResponse = await getJson(
+        serverA.baseUrl,
+        '/docs?userId=redis-idempotent-user&scope=created&page=1&pageSize=20'
+      );
+
+      return listResponse.status === 200 && listResponse.json.data.total === 1;
+    }, 5000);
   } finally {
     await serverA.stop();
     await serverB.stop();
@@ -360,6 +381,54 @@ test('redis cache invalidates created-doc list across instances after POST /docs
   } finally {
     await serverA.stop();
     await serverB.stop();
+  }
+});
+
+test('POST /docs creates redis realtime state first and then flushes to mysql asynchronously', async () => {
+  const port = await getFreePort();
+  const server = await startServerInstance({ port, serverId: 'redis-create-doc-path' });
+  const keys = createRealtimeKeys();
+  const redis = createRedisConnection('redis-create-doc-path-check');
+
+  try {
+    await redis.connect();
+
+    const createResponse = await postJson(server.baseUrl, '/docs', {
+      title: 'redis-first-create-doc',
+      createdBy: 'redis-create-user',
+      eventId: 'evt_redis_create_doc_path_001',
+    });
+
+    assert.equal(createResponse.status, 201);
+    const { docId } = createResponse.json.data;
+
+    const pendingMetaRaw = await redis.get(keys.pendingMetaKey(docId));
+    const stateRaw = await redis.get(keys.stateKey(docId));
+    assert.ok(stateRaw, 'doc realtime state should exist in redis right after POST /docs');
+    assert.ok(pendingMetaRaw, 'pending create metadata should exist before mysql flush finishes');
+
+    const getResponse = await getJson(server.baseUrl, `/docs/${docId}`);
+    assert.equal(getResponse.status, 200);
+    assert.equal(getResponse.json.data.docId, docId);
+    assert.equal(getResponse.json.data.title, 'redis-first-create-doc');
+
+    await waitForCondition(async () => {
+      const docResponse = await getJson(
+        server.baseUrl,
+        '/docs?userId=redis-create-user&scope=created&page=1&pageSize=20'
+      );
+
+      const listHasDoc = docResponse.status === 200
+        && docResponse.json.data.list.some((doc) => doc.docId === docId);
+      const pendingMeta = await redis.get(keys.pendingMetaKey(docId));
+
+      return listHasDoc && pendingMeta === null;
+    }, 5000);
+  } finally {
+    if (redis.isOpen) {
+      await redis.quit().catch(() => redis.disconnect());
+    }
+    await server.stop();
   }
 });
 

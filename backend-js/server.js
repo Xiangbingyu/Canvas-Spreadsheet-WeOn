@@ -1,4 +1,4 @@
-﻿const http = require('http');
+const http = require('http');
 
 const app = require('./app');
 const appConfig = require('./config/appConfig');
@@ -8,6 +8,9 @@ const { startWorkers, stopWorkers } = require('./worker');
 const server = http.createServer(app);
 
 createWebSocketServer(server);
+
+server.requestTimeout = appConfig.httpRequestTimeoutMs;
+server.headersTimeout = Math.max(appConfig.httpRequestTimeoutMs + 5000, 65000);
 
 server.listen(appConfig.port, async () => {
   console.log(`Server listening on port ${appConfig.port}`);
