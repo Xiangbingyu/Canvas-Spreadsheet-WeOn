@@ -1044,6 +1044,7 @@ test('cursor broadcasts cursor_update to room without audit log', async () => {
 
     sender.send({
       type: 'cursor',
+      sheetID: 'sheet_01',
       docId: 'doc_sys_001',
       clientId: 'cursor_sender',
       row: 5,
@@ -1059,6 +1060,7 @@ test('cursor broadcasts cursor_update to room without audit log', async () => {
       message: 'ok',
       data: {
         docId: 'doc_sys_001',
+        sheetID: 'sheet_01',
         clientId: 'cursor_sender',
         row: 5,
         col: 3,

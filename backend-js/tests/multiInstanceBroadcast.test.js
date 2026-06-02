@@ -467,6 +467,7 @@ test('cursor updates broadcast across instances', async () => {
 
     clientA.send({
       type: 'cursor',
+      sheetID: 'sheet_01',
       docId: 'doc_sys_001',
       clientId: 'cursor-a',
       row: 8,
@@ -479,6 +480,7 @@ test('cursor updates broadcast across instances', async () => {
       message: 'ok',
       data: {
         docId: 'doc_sys_001',
+        sheetID: 'sheet_01',
         clientId: 'cursor-a',
         row: 8,
         col: 2,
@@ -488,6 +490,7 @@ test('cursor updates broadcast across instances', async () => {
     const senderCursor = await clientA.waitFor((message) => (
       message.type === 'cursor_update'
       && message.data.docId === 'doc_sys_001'
+      && message.data.sheetID === 'sheet_01'
       && message.data.clientId === 'cursor-a'
       && message.data.row === 8
       && message.data.col === 2
@@ -495,6 +498,7 @@ test('cursor updates broadcast across instances', async () => {
     const otherCursor = await clientB.waitFor((message) => (
       message.type === 'cursor_update'
       && message.data.docId === 'doc_sys_001'
+      && message.data.sheetID === 'sheet_01'
       && message.data.clientId === 'cursor-a'
       && message.data.row === 8
       && message.data.col === 2

@@ -4,6 +4,7 @@ const { WS_MESSAGE_TYPES } = require('../../protocol/messageTypes');
 async function handleCursor({ message, broadcastToRoom }) {
   const payload = createWsSuccess(WS_MESSAGE_TYPES.CURSOR_UPDATE, {
     docId: message.docId,
+    sheetID: message.sheetID,
     clientId: message.clientId,
     row: message.row,
     col: message.col,
