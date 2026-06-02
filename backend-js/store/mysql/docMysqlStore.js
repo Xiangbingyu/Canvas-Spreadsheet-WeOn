@@ -204,6 +204,7 @@ function createDocMysqlStore() {
     await ensureReady();
 
     return runWithOptionalTransaction(async (connection) => {
+      const hasProvidedSnapshot = rowInput.snapshotJson !== undefined;
       const temporaryDocId = rowInput.docId || createTemporaryDocId();
       const provisionalDoc = createDoc({
         ...rowInput,
@@ -231,31 +232,49 @@ function createDocMysqlStore() {
         ]
       );
 
-      const finalDoc = rowInput.docId
-        ? provisionalDoc
-        : createDoc({
-          ...rowInput,
-          id: insertResult.insertId,
-          docId: buildFinalDocId(insertResult.insertId),
-          createdAt: provisionalDoc.createdAt,
-          updatedAt: provisionalDoc.updatedAt,
-        });
+      const finalDocId = rowInput.docId || buildFinalDocId(insertResult.insertId);
+      const finalSnapshotJson = rowInput.docId
+        ? provisionalDoc.snapshotJson
+        : (
+          hasProvidedSnapshot
+            ? provisionalDoc.snapshotJson
+            : normalizeDocSnapshot(null, { docId: finalDocId })
+        );
+      const finalDoc = {
+        ...provisionalDoc,
+        id: insertResult.insertId,
+        docId: finalDocId,
+        snapshotJson: finalSnapshotJson,
+      };
 
       if (!rowInput.docId) {
-        await connection.execute(
-          `UPDATE doc
-          SET doc_id = ?, snapshot_json = CAST(? AS JSON), updated_at = ?
-          WHERE id = ?`,
-          [
-            finalDoc.docId,
-            stringifyJsonValue(finalDoc.snapshotJson, {}),
-            toMysqlDateValue(finalDoc.updatedAt),
-            insertResult.insertId,
-          ]
-        );
+        if (hasProvidedSnapshot) {
+          await connection.execute(
+            `UPDATE doc
+            SET doc_id = ?, updated_at = ?
+            WHERE id = ?`,
+            [
+              finalDoc.docId,
+              toMysqlDateValue(finalDoc.updatedAt),
+              insertResult.insertId,
+            ]
+          );
+        } else {
+          await connection.execute(
+            `UPDATE doc
+            SET doc_id = ?, snapshot_json = CAST(? AS JSON), updated_at = ?
+            WHERE id = ?`,
+            [
+              finalDoc.docId,
+              stringifyJsonValue(finalDoc.snapshotJson, {}),
+              toMysqlDateValue(finalDoc.updatedAt),
+              insertResult.insertId,
+            ]
+          );
+        }
       }
 
-      return findByDocId(finalDoc.docId, { connection });
+      return finalDoc;
     }, options);
   }
 

@@ -131,6 +131,39 @@ function assertWorkbookSnapshotMatchesDocFormat(snapshot, expected) {
   assert.deepEqual(snapshot.sheets, expected.sheets);
 }
 
+function createLargeImportedSnapshot({ cellCount = 12000, cellValueSize = 96 } = {}) {
+  const cells = {};
+  const valuePrefix = 'x'.repeat(cellValueSize);
+
+  for (let index = 0; index < cellCount; index += 1) {
+    const row = Math.floor(index / 20);
+    const col = index % 20;
+    cells[`${row}:${col}`] = {
+      row,
+      col,
+      value: `${valuePrefix}_${index}`,
+      styleId: null,
+    };
+  }
+
+  return {
+    activeSheetId: 'sheet_large_001',
+    sheetOrder: ['sheet_large_001'],
+    sheets: {
+      sheet_large_001: {
+        id: 'sheet_large_001',
+        name: '大文档',
+        defaultRowHeight: 25,
+        defaultColWidth: 100,
+        rowCount: Math.ceil(cellCount / 20),
+        colCount: 20,
+        styles: {},
+        cells,
+      },
+    },
+  };
+}
+
 // ==================== POST /docs：创建文档并校验初始状态与审计日志 ====================
 test('POST /docs creates a new online sheet with initial snapshot', async () => {
   const server = await createTestServer();
@@ -276,6 +309,37 @@ test('POST /docs creates a document from imported workbook snapshot', async () =
       response.json.data.snapshot,
       normalizeDocSnapshot(importedSnapshot, { docId: response.json.data.docId })
     );
+  } finally {
+    await server.close();
+  }
+});
+
+test('POST /docs accepts imported workbook snapshots larger than 1MB by default', async () => {
+  const server = await createTestServer();
+
+  try {
+    const importedSnapshot = createLargeImportedSnapshot();
+    const payloadSize = Buffer.byteLength(JSON.stringify({
+      title: '大快照导入',
+      createdBy: 'user_large_snapshot',
+      eventId: 'evt_create_doc_large_snapshot',
+      snapshot: importedSnapshot,
+    }));
+
+    assert.ok(payloadSize > 1024 * 1024);
+
+    const response = await postJson(server.baseUrl, '/docs', {
+      title: '大快照导入',
+      createdBy: 'user_large_snapshot',
+      eventId: 'evt_create_doc_large_snapshot',
+      snapshot: importedSnapshot,
+    });
+
+    assert.equal(response.status, 201);
+    assert.equal(response.json.code, 0);
+    assert.equal(response.json.data.title, '大快照导入');
+    assert.equal(response.json.data.createdBy, 'user_large_snapshot');
+    assert.equal(response.json.data.snapshot.sheets.sheet_large_001.rowCount, importedSnapshot.sheets.sheet_large_001.rowCount);
   } finally {
     await server.close();
   }
