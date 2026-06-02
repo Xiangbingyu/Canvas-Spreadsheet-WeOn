@@ -15,7 +15,7 @@ export interface CollabState {
   clientId: string
   docTitle: string
   users: OnlineUser[]
-  userCursors: Record<string, { row: number; col: number }>
+  userCursors: Record<string, { sheetId: string; row: number; col: number }>
   currentSeq: number
   connectionStatus: 'disconnected' | 'connected' | 'reconnecting'
 }
@@ -62,8 +62,12 @@ const collabSlice = createSlice({
     },
 
     /** 更新单个用户的光标位置 */
-    setUserCursor(state, action: PayloadAction<{ clientId: string; row: number; col: number }>) {
+    setUserCursor(
+      state,
+      action: PayloadAction<{ clientId: string; sheetId: string; row: number; col: number }>
+    ) {
       state.userCursors[action.payload.clientId] = {
+        sheetId: action.payload.sheetId,
         row: action.payload.row,
         col: action.payload.col,
       }

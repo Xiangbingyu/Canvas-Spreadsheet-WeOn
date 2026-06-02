@@ -5,6 +5,7 @@ async function handleCursor({ message, broadcastToRoom }) {
   const payload = createWsSuccess(WS_MESSAGE_TYPES.CURSOR_UPDATE, {
     docId: message.docId,
     clientId: message.clientId,
+    sheetId: message.sheetId,
     row: message.row,
     col: message.col,
   });

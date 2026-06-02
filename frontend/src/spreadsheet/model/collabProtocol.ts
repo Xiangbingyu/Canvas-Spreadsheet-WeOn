@@ -76,6 +76,7 @@ export interface CursorRequest {
   type: 'cursor'
   docId: string
   clientId: string
+  sheetId: string
   row: number
   col: number
 }
@@ -220,6 +221,7 @@ export interface CursorUpdate {
   data: {
     docId: string
     clientId: string
+    sheetId: string
     row: number
     col: number
   }
