@@ -24,11 +24,12 @@ export interface HealthData {
 //   }
 
 /** POST /docs — 创建文档 */
-//请求体
 export interface CreateDocParams {
   title?: string
   createdBy?: string | null
   eventId?: string | null
+  /** 可选 workbook 快照；传入则基于该快照创建文档 */
+  snapshot?: WorkbookSnapshot
 }
 // {
 //     "title": "季度报表",

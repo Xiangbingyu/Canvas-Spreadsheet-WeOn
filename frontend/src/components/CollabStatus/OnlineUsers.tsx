@@ -1,15 +1,17 @@
 import { useSelector } from 'react-redux'
 import type { RootState } from '@/spreadsheet/store'
 
-function statusColor(status: string): string {
+function statusColor(status: string, awaitingDisplayName: boolean): string {
   if (status === 'connected') return '#22c55e'
   if (status === 'reconnecting') return '#eab308'
+  if (awaitingDisplayName) return '#9aa0a6'
   return '#ef4444'
 }
 
-function statusLabel(status: string): string {
+function statusLabel(status: string, awaitingDisplayName: boolean): string {
   if (status === 'connected') return '已连接'
   if (status === 'reconnecting') return '重连中'
+  if (awaitingDisplayName) return '请先填写名称'
   return '已断开'
 }
 
@@ -25,7 +27,12 @@ function Avatar({ name, color }: { name: string; color: string }) {
   )
 }
 
-export function OnlineUsers() {
+type OnlineUsersProps = {
+  /** 文档已就绪但未填 Menubar 显示名称 */
+  awaitingDisplayName?: boolean
+}
+
+export function OnlineUsers({ awaitingDisplayName = false }: OnlineUsersProps) {
   const clientId = useSelector((s: RootState) => s.collab.clientId)
   const users = useSelector((s: RootState) => s.collab.users)
   const status = useSelector((s: RootState) => s.collab.connectionStatus)
@@ -33,7 +40,12 @@ export function OnlineUsers() {
   const selfColor = useSelector((s: RootState) => s.collab.selfColor)
   // clientId 为空 = 尚未 join，不弹横幅避免初始闪烁
   const bannerVisible = clientId !== '' && status !== 'connected'
-  const bannerText = status === 'reconnecting' ? '网络已断开，正在重连…' : '连接已断开'
+  const bannerText =
+    status === 'reconnecting'
+      ? '网络已断开，正在重连…'
+      : awaitingDisplayName
+        ? '请先填写你的显示名称'
+        : '连接已断开'
 
   // 服务端 presence 列表包含自己，过滤掉避免重复
   const otherUsers = users.filter((u) => u.clientId !== clientId)
@@ -48,15 +60,21 @@ export function OnlineUsers() {
       <div className="flex items-center gap-2">
         <span
           className="inline-block h-2 w-2 rounded-full"
-          style={{ backgroundColor: statusColor(status) }}
-          title={statusLabel(status)}
+          style={{ backgroundColor: statusColor(status, awaitingDisplayName) }}
+          title={statusLabel(status, awaitingDisplayName)}
         />
-        {selfName && <Avatar name={`${selfName} (我)`} color={selfColor || '#3b82f6'} />}
-        {otherUsers.map((user) => (
-          <Avatar key={user.clientId} name={user.name} color={user.color} />
-        ))}
-        {!selfName && otherUsers.length === 0 && (
-          <span className="text-[11px] text-[#80868b]">仅自己</span>
+        {awaitingDisplayName && status !== 'connected' ? (
+          <span className="text-[11px] text-[#80868b]">请先填写名称</span>
+        ) : (
+          <>
+            {selfName && <Avatar name={`${selfName} (我)`} color={selfColor || '#3b82f6'} />}
+            {otherUsers.map((user) => (
+              <Avatar key={user.clientId} name={user.name} color={user.color} />
+            ))}
+            {!selfName && otherUsers.length === 0 && (
+              <span className="text-[11px] text-[#80868b]">仅自己</span>
+            )}
+          </>
         )}
       </div>
     </>

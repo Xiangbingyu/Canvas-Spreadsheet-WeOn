@@ -238,7 +238,7 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
       client.setTitle(trimmed, client.currentSeq)
     },
     /**
-     * Excel 多表导入（乐观更新）
+     * Excel 多表导入（乐观更新 + WS import_sheet）
      * 1. 先写本地 Redux → UI 立即生效
      * 2. 再发 WS import_sheet → 服务端持久化并广播
      * @returns 是否已发送到协同（false 表示仅本地更新）
