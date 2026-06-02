@@ -29,6 +29,7 @@ export type RemoteCursorRenderData = {
   row: number
   col: number
   color: string
+  name?: string
 }
 
 /** 多用户光标调色板：按 clientId 稳定映射，避免全员默认 #3b82f6 时颜色相同 */
@@ -110,6 +111,12 @@ const COLORS = {
 const TEXT_PADDING = 4
 const HEADER_FONT = '500 11px Roboto, Arial, sans-serif'
 const ROW_HEADER_FONT = '11px Roboto, Arial, sans-serif'
+const REMOTE_CURSOR_LABEL_FONT_SIZE = 11
+const REMOTE_CURSOR_LABEL_FONT = `${REMOTE_CURSOR_LABEL_FONT_SIZE}px Roboto, Arial, sans-serif`
+const REMOTE_CURSOR_LABEL_MAX_CHARS = 6
+const REMOTE_CURSOR_LABEL_PADDING_X = 4
+const REMOTE_CURSOR_LABEL_PADDING_Y = 2
+const REMOTE_CURSOR_LABEL_RADIUS = 4
 
 /**
  * 作用：判断可见区域是否包含实际行列。
@@ -285,6 +292,89 @@ function strokeCellBorder(
 }
 
 /**
+ * 作用：绘制圆角矩形路径，用于远端协作者姓名标签背景。
+ * 传入参数：ctx 为 overlay 上下文，x/y/width/height/radius 为逻辑像素；返回结果：只创建路径，不直接填充或描边。
+ */
+function roundedRectPath(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number
+): void {
+  const safeRadius = Math.min(radius, width / 2, height / 2)
+
+  ctx.beginPath()
+  ctx.moveTo(x + safeRadius, y)
+  ctx.lineTo(x + width - safeRadius, y)
+  ctx.quadraticCurveTo(x + width, y, x + width, y + safeRadius)
+  ctx.lineTo(x + width, y + height - safeRadius)
+  ctx.quadraticCurveTo(x + width, y + height, x + width - safeRadius, y + height)
+  ctx.lineTo(x + safeRadius, y + height)
+  ctx.quadraticCurveTo(x, y + height, x, y + height - safeRadius)
+  ctx.lineTo(x, y + safeRadius)
+  ctx.quadraticCurveTo(x, y, x + safeRadius, y)
+  ctx.closePath()
+}
+
+/**
+ * 作用：截断远端协作者姓名，避免标签过长遮挡过多表格区域。
+ * 传入参数：name 为在线用户名称；返回结果：超过 6 个字符时返回前 6 个字符加省略号，否则返回原名称。
+ */
+function getRemoteCursorLabel(name: string | undefined): string {
+  const trimmed = name?.trim() ?? ''
+  if (!trimmed) {
+    return ''
+  }
+  if (trimmed.length <= REMOTE_CURSOR_LABEL_MAX_CHARS) {
+    return trimmed
+  }
+  return `${trimmed.slice(0, REMOTE_CURSOR_LABEL_MAX_CHARS)}…`
+}
+
+/**
+ * 作用：在远端光标所在单元格右下角绘制协作者姓名标签。
+ * 传入参数：ctx 为 overlay 上下文，rect 为光标单元格矩形，cursor 提供用户颜色和名称，viewport 用于限制标签不越出数据区。
+ * 返回结果：无返回值；只绘制标签，不读写 Redux，不修改协同数据。
+ */
+function drawRemoteCursorLabel(
+  ctx: CanvasRenderingContext2D,
+  rect: RenderRect,
+  cursor: RemoteCursorRenderData,
+  viewport: Viewport
+): void {
+  const label = getRemoteCursorLabel(cursor.name)
+  if (!label) {
+    return
+  }
+
+  const dataRect = getDataAreaRect(viewport)
+  ctx.save()
+  ctx.font = REMOTE_CURSOR_LABEL_FONT
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'alphabetic'
+
+  const labelWidth = Math.ceil(ctx.measureText(label).width) + REMOTE_CURSOR_LABEL_PADDING_X * 2
+  const labelHeight = REMOTE_CURSOR_LABEL_FONT_SIZE + REMOTE_CURSOR_LABEL_PADDING_Y * 2
+  const maxX = dataRect.x + dataRect.width - labelWidth
+  const labelX = Math.max(dataRect.x, Math.min(rect.x + rect.width - labelWidth, maxX))
+  const labelY = rect.y + rect.height
+
+  roundedRectPath(ctx, labelX, labelY, labelWidth, labelHeight, REMOTE_CURSOR_LABEL_RADIUS)
+  ctx.fillStyle = cursor.color
+  ctx.fill()
+
+  ctx.fillStyle = '#ffffff'
+  ctx.fillText(
+    label,
+    labelX + REMOTE_CURSOR_LABEL_PADDING_X,
+    labelY + REMOTE_CURSOR_LABEL_PADDING_Y + REMOTE_CURSOR_LABEL_FONT_SIZE - 1
+  )
+  ctx.restore()
+}
+
+/**
  * 作用：绘制 Google Sheet 风格的圆形填充柄。
  * 传入参数：ctx 为 overlay 上下文，selectionRect 为当前选区矩形，viewport 用于判断填充柄是否可见。
  * 返回结果：无返回值，只在 overlay 层绘制填充点。
@@ -358,6 +448,7 @@ function drawRemoteCursors(draw: DrawContext): void {
     ctx.restore()
 
     strokeCellBorder(ctx, rect.x, rect.y, rect.width, rect.height, cursor.color, 2)
+    drawRemoteCursorLabel(ctx, rect, cursor, viewport)
   }
   ctx.restore()
 }

@@ -399,6 +399,9 @@ function GrideCanvas(
           clientId,
           row: cursor.row,
           col: cursor.col,
+          name:
+            state.collab.users.find((user) => user.clientId === clientId)?.name ||
+            clientId.slice(-6),
           color: resolveRemoteCursorColor(clientId, state.collab.users),
         })),
     }

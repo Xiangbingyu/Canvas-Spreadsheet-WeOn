@@ -22,13 +22,11 @@ const COLLAB_WS_URL =
   import.meta.env.VITE_WS_URL ||
   `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`
 
-type LegacySendCursor = (row: number, col: number) => void
-type SheetScopedSendCursor = (sheetId: string, row: number, col: number) => void
-
 export function SpreadsheetWorkspace() {
   const dispatch = useDispatch()
   const docId = useSelector((s: RootState) => s.collab.docId)
   const clientId = useSelector((s: RootState) => s.collab.clientId)
+  const connectionStatus = useSelector((s: RootState) => s.collab.connectionStatus)
   const activeWorksheet = useSelector((s: RootState) => s.workSheet)
   const selection = useSelector((s: RootState) => s.selection)
   const lastSentCursorRef = useRef('')
@@ -48,21 +46,22 @@ export function SpreadsheetWorkspace() {
     docId,
     clientId,
   })
-  useEffect(() => {
-    const cursorKey = `${activeWorksheet.sheetId}:${selection.row}:${selection.col}`
-    if (!activeWorksheet.sheetId || lastSentCursorRef.current === cursorKey) return
-    lastSentCursorRef.current = cursorKey
 
-    if (sendCursor.length >= 3) {
-      const sheetScopedSendCursor = sendCursor as unknown as SheetScopedSendCursor
-      sheetScopedSendCursor(activeWorksheet.sheetId, selection.row, selection.col)
+  useEffect(() => {
+    if (connectionStatus !== 'connected') {
+      lastSentCursorRef.current = ''
       return
     }
 
-    const legacySendCursor = sendCursor as unknown as LegacySendCursor
-    legacySendCursor(selection.row, selection.col)
+    const cursorKey = `${activeWorksheet.sheetId}:${selection.row}:${selection.col}`
+    if (!activeWorksheet.sheetId || lastSentCursorRef.current === cursorKey) {
+      return
+    }
 
-  }, [activeWorksheet.sheetId, selection.row, selection.col, sendCursor])
+    sendCursor(activeWorksheet.sheetId, selection.row, selection.col)
+    lastSentCursorRef.current = cursorKey
+  }, [activeWorksheet.sheetId, connectionStatus, selection.row, selection.col, sendCursor])
+
   const handleImportWorkbook = useCallback(
     (workbook: WorkbookSnapshotPayload): boolean => {
       const sent = importWorkbook(workbook)

@@ -1,5 +1,4 @@
 import { useSelector } from 'react-redux'
-import { useSelector } from 'react-redux'
 import type { RootState } from '@/spreadsheet/store'
 
 function statusColor(status: string): string {
