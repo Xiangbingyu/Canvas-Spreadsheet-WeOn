@@ -181,7 +181,7 @@ export function Toolbar({ onCommitCell, onCommitBatch, onUndo, onRedo }: Toolbar
 
   // 合并样式补丁并提交（走协同链路）。对 selection.range 内所有单元格应用样式。
   const commitStyle = (patch: Partial<Style>) => {
-    if (!onCommitCell) return
+    if (!onCommitCell && !onCommitBatch) return
     const { start, end } = selection.range
     const minRow = Math.min(start.row, end.row)
     const maxRow = Math.max(start.row, end.row)
@@ -210,7 +210,9 @@ export function Toolbar({ onCommitCell, onCommitBatch, onUndo, onRedo }: Toolbar
     // 如果只有一个单元格，直接用 onCommitCell；否则用批量提交
     if (updates.length === 1) {
       const { row, col, value, style } = updates[0]
-      onCommitCell(row, col, value, style)
+      if (onCommitCell) {
+        onCommitCell(row, col, value, style)
+      }
       // 立即更新 selectStore，保证 Toolbar 显示的值同步
       dispatch(setSelectedCell({ row, col, value, style, range: selection.range }))
     } else if (onCommitBatch) {
@@ -228,7 +230,7 @@ export function Toolbar({ onCommitCell, onCommitBatch, onUndo, onRedo }: Toolbar
           })
         )
       }
-    } else {
+    } else if (onCommitCell) {
       // 降级：没有批量提交函数时，逐个提交（会产生多个历史记录）
       for (const { row, col, value, style } of updates) {
         onCommitCell(row, col, value, style)

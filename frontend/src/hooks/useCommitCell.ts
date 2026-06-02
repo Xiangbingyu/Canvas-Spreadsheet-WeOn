@@ -15,12 +15,9 @@ type SetCellFn = (
 ) => void
 
 type BatchSetCellFn = (
-  updates: Array<{
-    row: number
-    col: number
-    value: string
-    style?: Record<string, unknown> | null
-  }>
+  sheetId: string,
+  targets: Array<{ row: number; col: number }>,
+  patch: { value?: string; style?: Record<string, unknown> | null }
 ) => void
 
 export type BatchCommitFn = (
@@ -32,14 +29,18 @@ export type BatchCommitFn = (
  */
 export function useCommitCell(setCell?: SetCellFn): CommitCellFn {
   const dispatch = useDispatch()
+  const store = useStore<RootState>()
 
   return useMemo<CommitCellFn>(
     () =>
       setCell
         ? (row, col, value, style) =>
             setCell(row, col, value, style as unknown as Record<string, unknown> | undefined)
-        : (row, col, value, style) => dispatch(updateCell({ row, col, value, style })),
-    [setCell, dispatch]
+        : (row, col, value, style) => {
+            const sheetId = store.getState().workSheet.sheetId
+            dispatch(updateCell({ sheetId, row, col, value, style }))
+          },
+    [setCell, dispatch, store]
   )
 }
 
@@ -54,15 +55,18 @@ export function useCommitBatch(setBatchCells?: BatchSetCellFn): BatchCommitFn {
   return useMemo<BatchCommitFn>(
     () =>
       setBatchCells
-        ? (updates) =>
-            setBatchCells(
-              updates.map((u) => ({
-                row: u.row,
-                col: u.col,
-                value: u.value,
-                style: u.style as unknown as Record<string, unknown> | null,
-              }))
-            )
+        ? (updates) => {
+            if (updates.length === 0) return
+            const sheetId = store.getState().workSheet.sheetId
+            const targets = updates.map((u) => ({ row: u.row, col: u.col }))
+            // 整批共享同一 patch：style 与 value 都来自 updates[0]。
+            // 调用方（含 undo/redo 回放）须保证整批 value/style 一致，否则应拆成多组分别提交。
+            const patch: { value?: string; style?: Record<string, unknown> | null } = {
+              value: updates[0].value,
+              style: (updates[0].style ?? null) as unknown as Record<string, unknown> | null,
+            }
+            setBatchCells(sheetId, targets, patch)
+          }
         : (updates) => {
             const sheetId = store.getState().workSheet.sheetId
             dispatch(updateRange({ sheetId, updates }))

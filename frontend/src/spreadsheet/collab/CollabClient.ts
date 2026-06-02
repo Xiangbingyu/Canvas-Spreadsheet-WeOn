@@ -271,15 +271,16 @@ export class CollabClient {
     })
   }
 
+  /**
+   * 批量改单元格：一批坐标 + 一个统一 patch（见接口文档2 batch_set_cell）。
+   * updates 只带坐标；value/style 在顶层，整批共享。
+   * 只传 style 表示只改样式、保留各格原值；只传 value 表示只改值。
+   */
   setBatchCells(
     sheetId: string,
     baseSeq: number,
-    updates: Array<{
-      row: number
-      col: number
-      value: string
-      style: Record<string, unknown> | null
-    }>
+    targets: Array<{ row: number; col: number }>,
+    patch: { value?: string; style?: Record<string, unknown> | null }
   ): void {
     this.send({
       type: 'batch_set_cell',
@@ -287,7 +288,9 @@ export class CollabClient {
       clientId: this.clientId,
       sheetId,
       baseSeq,
-      updates,
+      updates: targets.map((t) => ({ row: t.row, col: t.col })),
+      ...(patch.value !== undefined ? { value: patch.value } : {}),
+      ...(patch.style !== undefined ? { style: patch.style } : {}),
     })
   }
 
