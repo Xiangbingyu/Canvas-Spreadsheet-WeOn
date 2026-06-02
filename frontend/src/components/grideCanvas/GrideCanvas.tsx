@@ -52,6 +52,12 @@ type ScrollUi = {
   sheetHeight: number
 }
 
+type RemoteCursorWithOptionalSheet = {
+  row: number
+  col: number
+  sheetId?: string
+}
+
 export type GrideCanvasProps = {
   interactionEngine: InteractionEngine
   /** 滚动变化时上报，父组件用于定位 textarea */
@@ -385,7 +391,10 @@ function GrideCanvas(
         } satisfies RenderGridOptions['selection']),
       activeCell: { row: state.selection.row, col: state.selection.col },
       remoteCursors: Object.entries(state.collab.userCursors)
-        .filter(([clientId]) => clientId !== state.collab.clientId)
+        .filter(([clientId, cursor]) => {
+          const cursorSheetId = (cursor as RemoteCursorWithOptionalSheet).sheetId
+          return clientId !== state.collab.clientId && cursorSheetId === state.workSheet.sheetId
+        })
         .map(([clientId, cursor]) => ({
           clientId,
           row: cursor.row,
@@ -766,7 +775,7 @@ function GrideCanvas(
   useEffect(() => {
     sheetUpdatePerf.markWorksheetObserved()
     scheduleRender(ALL_CANVAS_LAYERS)
-  }, [scheduleRender, worksheet.cells, worksheet.styles])
+  }, [scheduleRender, worksheet.cells, worksheet.sheetId, worksheet.styles])
 
   // 设置自动滚动回调：当选中单元格时，自动滚动视口跟随
   useEffect(() => {
@@ -839,6 +848,7 @@ function GrideCanvas(
     selection.range.start.row,
     userCursors,
     users,
+    worksheet.sheetId,
   ])
 
   const maxScrollX = Math.max(0, scrollUi.sheetWidth - scrollUi.dataViewportWidth)
