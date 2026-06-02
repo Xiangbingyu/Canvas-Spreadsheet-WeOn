@@ -9,10 +9,11 @@ import { ImportExcelModal } from './ImportExcelModal'
 import type { RootState } from '@/spreadsheet/store'
 import { buildDocShareUrl } from '@/spreadsheet/utils/shareLink'
 import type { WorkbookSnapshotPayload } from '@/spreadsheet/store/workbookStore'
+import { deriveDocTitleFromFileName } from '@/spreadsheet/utils/deriveDocTitleFromFileName'
+import { toServerWorkbookSnapshotFromPayload } from '@/spreadsheet/utils/fromServerSnapshot'
+import type { ImportExcelMeta } from './ImportExcelModal'
 
 type MenubarProps = {
-  /** Excel 导入：乐观更新本地 + WS import_sheet；返回是否已同步到服务端 */
-  onImportWorkbook: (workbook: WorkbookSnapshotPayload) => boolean
   /** 提交文档标题（WS set_title）；缺省时标题只读 */
   onSetTitle?: (title: string) => void
 }
@@ -21,7 +22,7 @@ const menuBtnClass = 'rounded px-2 py-0.5 text-[13px] leading-6 text-[#202124] h
 
 const DEFAULT_DOC_TITLE = '未命名表格'
 
-export function Menubar({ onImportWorkbook, onSetTitle }: MenubarProps) {
+export function Menubar({ onSetTitle }: MenubarProps) {
   const navigate = useNavigate()
   const clientId = useSelector((s: RootState) => s.collab.clientId) || 'system'
   const docId = useSelector((s: RootState) => s.collab.docId)
@@ -33,6 +34,7 @@ export function Menubar({ onImportWorkbook, onSetTitle }: MenubarProps) {
   const [exportOpen, setExportOpen] = useState(false)
   const [createModalOpen, setCreateModalOpen] = useState(false)
   const [creating, setCreating] = useState(false)
+  const [importingDoc, setImportingDoc] = useState(false)
   const editable = !!onSetTitle
   const displayTitle = focused ? draft : docTitle
 
@@ -60,6 +62,28 @@ export function Menubar({ onImportWorkbook, onSetTitle }: MenubarProps) {
       message.success('复制链接成功')
     } catch {
       message.error('复制失败，请手动复制地址栏链接')
+    }
+  }
+
+  async function handleImportExcel(workbook: WorkbookSnapshotPayload, meta: ImportExcelMeta) {
+    setImportingDoc(true)
+    try {
+      const title = deriveDocTitleFromFileName(meta.fileName)
+      const doc = await API.createDoc({
+        title,
+        createdBy: clientId,
+        snapshot: toServerWorkbookSnapshotFromPayload(workbook),
+        eventId: `evt_import_${crypto.randomUUID()}`,
+      })
+      setImportOpen(false)
+      navigate(`/doc/${encodeURIComponent(doc.docId)}`)
+    } catch (error) {
+      const text =
+        error instanceof ApiError ? `${error.message} (code ${error.code})` : '导入并创建文档失败'
+      message.error(text)
+      throw error
+    } finally {
+      setImportingDoc(false)
     }
   }
 
@@ -125,7 +149,12 @@ export function Menubar({ onImportWorkbook, onSetTitle }: MenubarProps) {
             >
               新建空白表格
             </button>
-            <button type="button" className={menuBtnClass} onClick={() => setImportOpen(true)}>
+            <button
+              type="button"
+              className={menuBtnClass}
+              disabled={creating || importingDoc}
+              onClick={() => setImportOpen(true)}
+            >
               导入 Excel
             </button>
             <button type="button" className={menuBtnClass} onClick={() => setExportOpen(true)}>
@@ -148,7 +177,7 @@ export function Menubar({ onImportWorkbook, onSetTitle }: MenubarProps) {
       <ImportExcelModal
         open={importOpen}
         onClose={() => setImportOpen(false)}
-        onImport={onImportWorkbook}
+        onImport={handleImportExcel}
       />
       <CreateBlankSheetModal
         open={createModalOpen}

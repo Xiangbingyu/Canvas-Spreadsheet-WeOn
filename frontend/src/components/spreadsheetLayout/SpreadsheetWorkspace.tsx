@@ -14,7 +14,6 @@ import { useCollab } from '@/hooks/useCollab'
 import { useUnifiedHistory } from '@/hooks/useUnifiedHistory'
 import type { RootState } from '@/spreadsheet/store'
 import { addSheet as addSheetAction, setWorksheet, store } from '@/spreadsheet/store'
-import type { WorkbookSnapshotPayload } from '@/spreadsheet/store/workbookStore'
 import { setSelectedCell } from '@/spreadsheet/store/selectStore'
 
 /** WS：优先 VITE_WS_URL；未配置时走 Vite 代理 /ws → 本机后端 */
@@ -33,21 +32,12 @@ export function SpreadsheetWorkspace() {
   const selection = useSelector((s: RootState) => s.selection)
   const lastSentCursorRef = useRef('')
 
-  const {
-    connect,
-    disconnect,
-    setCell,
-    setTitle,
-    importWorkbook,
-    addSheet,
-    setBatchCells,
-    getClient,
-    sendCursor,
-  } = useCollab({
-    url: COLLAB_WS_URL,
-    docId,
-    clientId,
-  })
+  const { connect, disconnect, setCell, setTitle, addSheet, setBatchCells, getClient, sendCursor } =
+    useCollab({
+      url: COLLAB_WS_URL,
+      docId,
+      clientId,
+    })
   useEffect(() => {
     const cursorKey = `${activeWorksheet.sheetId}:${selection.row}:${selection.col}`
     if (!activeWorksheet.sheetId || lastSentCursorRef.current === cursorKey) return
@@ -61,27 +51,7 @@ export function SpreadsheetWorkspace() {
 
     const legacySendCursor = sendCursor as unknown as LegacySendCursor
     legacySendCursor(selection.row, selection.col)
-
   }, [activeWorksheet.sheetId, selection.row, selection.col, sendCursor])
-  const handleImportWorkbook = useCallback(
-    (workbook: WorkbookSnapshotPayload): boolean => {
-      const sent = importWorkbook(workbook)
-      const activeSheet = workbook.sheets[workbook.activeSheetId]
-      if (activeSheet) {
-        dispatch(
-          setSelectedCell({
-            row: 1,
-            col: 1,
-            value: activeSheet.cells['1:1']?.value ?? '',
-            style: {},
-          })
-        )
-      }
-      return sent
-    },
-    [importWorkbook, dispatch]
-  )
-
   const handleAddSheet = useCallback(
     (sheetName: string) => {
       dispatch(addSheetAction({ savedSheet: activeWorksheet, sheetName }))
@@ -138,7 +108,7 @@ export function SpreadsheetWorkspace() {
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-white font-[Roboto,Arial,sans-serif]">
-      <Menubar onImportWorkbook={handleImportWorkbook} onSetTitle={setTitle} />
+      <Menubar onSetTitle={setTitle} />
       <Toolbar
         onCommitCell={commitWithHistory}
         onCommitBatch={commitBatchWithHistory}
