@@ -23,9 +23,6 @@ const COLLAB_WS_URL =
   import.meta.env.VITE_WS_URL ||
   `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`
 
-type LegacySendCursor = (row: number, col: number) => void
-type SheetScopedSendCursor = (sheetId: string, row: number, col: number) => void
-
 export function SpreadsheetWorkspace() {
   const dispatch = useDispatch()
   const navigate = useNavigate()
@@ -33,10 +30,10 @@ export function SpreadsheetWorkspace() {
   const docId = useSelector((s: RootState) => s.collab.docId)
   const nameModalOpen = !!docId && !userName.trim()
   const clientId = useSelector((s: RootState) => s.collab.clientId)
+  const connectionStatus = useSelector((s: RootState) => s.collab.connectionStatus)
   const activeWorksheet = useSelector((s: RootState) => s.workSheet)
   const selection = useSelector((s: RootState) => s.selection)
   const lastSentCursorRef = useRef('')
-
   const { connect, disconnect, setCell, setTitle, addSheet, setBatchCells, getClient, sendCursor } =
     useCollab({
       url: COLLAB_WS_URL,
@@ -45,19 +42,21 @@ export function SpreadsheetWorkspace() {
       userName: userName.trim(),
     })
   useEffect(() => {
-    const cursorKey = `${activeWorksheet.sheetId}:${selection.row}:${selection.col}`
-    if (!activeWorksheet.sheetId || lastSentCursorRef.current === cursorKey) return
-    lastSentCursorRef.current = cursorKey
-
-    if (sendCursor.length >= 3) {
-      const sheetScopedSendCursor = sendCursor as unknown as SheetScopedSendCursor
-      sheetScopedSendCursor(activeWorksheet.sheetId, selection.row, selection.col)
+    if (connectionStatus !== 'connected') {
+      lastSentCursorRef.current = ''
       return
     }
 
-    const legacySendCursor = sendCursor as unknown as LegacySendCursor
-    legacySendCursor(selection.row, selection.col)
-  }, [activeWorksheet.sheetId, selection.row, selection.col, sendCursor])
+    const cursorKey = `${activeWorksheet.sheetId}:${selection.row}:${selection.col}`
+    if (!activeWorksheet.sheetId || lastSentCursorRef.current === cursorKey) {
+      return
+    }
+
+    sendCursor(activeWorksheet.sheetId, selection.row, selection.col)
+    lastSentCursorRef.current = cursorKey
+  }, [activeWorksheet.sheetId, connectionStatus, selection.row, selection.col, sendCursor])
+
+
   const handleAddSheet = useCallback(
     (sheetName: string) => {
       dispatch(addSheetAction({ savedSheet: activeWorksheet, sheetName }))
