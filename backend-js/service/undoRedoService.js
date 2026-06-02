@@ -49,7 +49,25 @@ function trimUndoStack(entries) {
 }
 
 function isBatchEntry(entry) {
-  return entry && entry.opType === 'batch_set_cell' && Array.isArray(entry.updates);
+  return entry && (entry.opType === 'batch_set_cell' || entry.opType === 'set_range_values') && Array.isArray(entry.updates);
+}
+
+function isRangeEntry(entry) {
+  return entry && entry.opType === 'set_range_values';
+}
+
+function collectReferencedStyles(updates = [], styles = {}) {
+  const referenced = {};
+
+  for (const update of updates) {
+    for (const styleId of [update.oldStyleId, update.newStyleId]) {
+      if (typeof styleId === 'string' && styles[styleId] !== undefined) {
+        referenced[styleId] = JSON.parse(JSON.stringify(styles[styleId]));
+      }
+    }
+  }
+
+  return referenced;
 }
 
 async function appendHistoryBestEffort(historyStore, entry, label) {
@@ -117,13 +135,24 @@ async function applyUndo(command = {}) {
           direction: 'undo',
         });
 
-        updatedDoc = await docsService.applyBatchSetCell({
-          docId: normalizedCommand.docId,
-          sheetId: otResult.sheetId,
-          updates: otResult.updates,
-        }, {
-          connection,
-        });
+        if (isRangeEntry(entry)) {
+          updatedDoc = await docsService.applyRangeValues({
+            docId: normalizedCommand.docId,
+            sheetId: otResult.sheetId,
+            styles: entry.styles || {},
+            cells: otResult.updates.map((u) => {
+              const cell = { row: u.row, col: u.col, value: u.value };
+              if (u.oldStyleId !== undefined) cell.styleId = u.oldStyleId;
+              return cell;
+            }),
+          }, { connection });
+        } else {
+          updatedDoc = await docsService.applyBatchSetCell({
+            docId: normalizedCommand.docId,
+            sheetId: otResult.sheetId,
+            updates: otResult.updates,
+          }, { connection });
+        }
       } else {
         otResult = await resolveUndoRedoOperation({
           docId: normalizedCommand.docId,
@@ -155,6 +184,9 @@ async function applyUndo(command = {}) {
 
       seq = updatedDoc.currentSeq;
 
+      const batchUpdatesForHistory = isRangeEntry(entry)
+        ? (updatedDoc._rangeUpdates || [])
+        : (updatedDoc._batchUpdates || []);
       const undoHistoryEntry = isBatchEntry(entry)
         ? {
           docId: normalizedCommand.docId,
@@ -165,9 +197,9 @@ async function applyUndo(command = {}) {
           sourceSeq: entry.sourceSeq,
           targetSheetId: updatedDoc._targetSheetId || otResult.sheetId || entry.sheetId || null,
           payloadJson: {
-            type: 'batch_set_cell',
+            type: entry.opType,
             sheetId: updatedDoc._targetSheetId || otResult.sheetId || entry.sheetId || null,
-            updates: updatedDoc._batchUpdates || [],
+            updates: batchUpdatesForHistory,
           },
         }
         : {
@@ -191,15 +223,35 @@ async function applyUndo(command = {}) {
       }
 
       if (isBatchEntry(entry)) {
-        redoStack.push(createRedoBatchStackEntry({
-          sourceSeq: seq,
-          docId: normalizedCommand.docId,
-          clientId: normalizedCommand.clientId,
-          sheetId: updatedDoc._targetSheetId || otResult.sheetId || entry.sheetId || null,
-          baseSeq: otResult.baseSeq,
-          patch: entry.patch || {},
-          updates: updatedDoc._batchUpdates || [],
-        }));
+        if (isRangeEntry(entry)) {
+          redoStack.push({
+            sourceSeq: seq,
+            docId: normalizedCommand.docId,
+            clientId: normalizedCommand.clientId,
+            opType: 'set_range_values',
+            sheetId: updatedDoc._targetSheetId || otResult.sheetId || entry.sheetId || null,
+            baseSeq: otResult.baseSeq,
+            styles: collectReferencedStyles(updatedDoc._rangeUpdates || [], entry.styles || {}),
+            updates: (updatedDoc._rangeUpdates || []).map((u) => ({
+              row: u.row,
+              col: u.col,
+              oldValue: u.newValue,
+              oldStyleId: u.newStyleId,
+              newValue: u.oldValue,
+              newStyleId: u.oldStyleId,
+            })),
+          });
+        } else {
+          redoStack.push(createRedoBatchStackEntry({
+            sourceSeq: seq,
+            docId: normalizedCommand.docId,
+            clientId: normalizedCommand.clientId,
+            sheetId: updatedDoc._targetSheetId || otResult.sheetId || entry.sheetId || null,
+            baseSeq: otResult.baseSeq,
+            patch: entry.patch || {},
+            updates: updatedDoc._batchUpdates || [],
+          }));
+        }
       } else {
         redoStack.push(createRedoStackEntry({
           sourceSeq: seq,
@@ -249,12 +301,9 @@ async function applyUndo(command = {}) {
       sheetId: updatedDoc && updatedDoc._targetSheetId ? updatedDoc._targetSheetId : (otResult.sheetId || entry.sheetId || null),
       seq,
       ...(isBatchEntry(entry)
-        ? { updates: (updatedDoc && updatedDoc._batchUpdates ? updatedDoc._batchUpdates : []).map((update) => ({
-          row: update.row,
-          col: update.col,
-          value: update.newValue,
-          style: update.newStyle,
-        })) }
+        ? { updates: (isRangeEntry(entry)
+          ? (updatedDoc._rangeUpdates || []).map((u) => ({ row: u.row, col: u.col, value: u.newValue, styleId: u.newStyleId }))
+          : (updatedDoc._batchUpdates || []).map((u) => ({ row: u.row, col: u.col, value: u.newValue, style: u.newStyle }))) }
         : {
           row: otResult.row,
           col: otResult.col,
@@ -308,13 +357,24 @@ async function applyRedo(command = {}) {
           direction: 'redo',
         });
 
-        updatedDoc = await docsService.applyBatchSetCell({
-          docId: normalizedCommand.docId,
-          sheetId: otResult.sheetId,
-          updates: otResult.updates,
-        }, {
-          connection,
-        });
+        if (isRangeEntry(entry)) {
+          updatedDoc = await docsService.applyRangeValues({
+            docId: normalizedCommand.docId,
+            sheetId: otResult.sheetId,
+            styles: entry.styles || {},
+            cells: otResult.updates.map((u) => {
+              const cell = { row: u.row, col: u.col, value: u.value };
+              if (u.newStyleId !== undefined) cell.styleId = u.newStyleId;
+              return cell;
+            }),
+          }, { connection });
+        } else {
+          updatedDoc = await docsService.applyBatchSetCell({
+            docId: normalizedCommand.docId,
+            sheetId: otResult.sheetId,
+            updates: otResult.updates,
+          }, { connection });
+        }
       } else {
         otResult = await resolveUndoRedoOperation({
           docId: normalizedCommand.docId,
@@ -346,6 +406,9 @@ async function applyRedo(command = {}) {
 
       seq = updatedDoc.currentSeq;
 
+      const batchUpdatesForRedoHistory = isRangeEntry(entry)
+        ? (updatedDoc._rangeUpdates || [])
+        : (updatedDoc._batchUpdates || []);
       const redoHistoryEntry = isBatchEntry(entry)
         ? {
           docId: normalizedCommand.docId,
@@ -356,9 +419,9 @@ async function applyRedo(command = {}) {
           sourceSeq: entry.sourceSeq,
           targetSheetId: updatedDoc._targetSheetId || otResult.sheetId || entry.sheetId || null,
           payloadJson: {
-            type: 'batch_set_cell',
+            type: entry.opType,
             sheetId: updatedDoc._targetSheetId || otResult.sheetId || entry.sheetId || null,
-            updates: updatedDoc._batchUpdates || [],
+            updates: batchUpdatesForRedoHistory,
           },
         }
         : {
@@ -382,15 +445,28 @@ async function applyRedo(command = {}) {
       }
 
       if (isBatchEntry(entry)) {
-        undoStack.push(createAppliedBatchStackEntry({
-          sourceSeq: seq,
-          docId: normalizedCommand.docId,
-          clientId: normalizedCommand.clientId,
-          sheetId: updatedDoc._targetSheetId || otResult.sheetId || entry.sheetId || null,
-          baseSeq: otResult.baseSeq,
-          patch: entry.patch || {},
-          updates: updatedDoc._batchUpdates || [],
-        }));
+        if (isRangeEntry(entry)) {
+          undoStack.push({
+            sourceSeq: seq,
+            docId: normalizedCommand.docId,
+            clientId: normalizedCommand.clientId,
+            opType: 'set_range_values',
+            sheetId: updatedDoc._targetSheetId || otResult.sheetId || entry.sheetId || null,
+            baseSeq: otResult.baseSeq,
+            styles: collectReferencedStyles(updatedDoc._rangeUpdates || [], entry.styles || {}),
+            updates: updatedDoc._rangeUpdates || [],
+          });
+        } else {
+          undoStack.push(createAppliedBatchStackEntry({
+            sourceSeq: seq,
+            docId: normalizedCommand.docId,
+            clientId: normalizedCommand.clientId,
+            sheetId: updatedDoc._targetSheetId || otResult.sheetId || entry.sheetId || null,
+            baseSeq: otResult.baseSeq,
+            patch: entry.patch || {},
+            updates: updatedDoc._batchUpdates || [],
+          }));
+        }
       } else {
         undoStack.push(createAppliedStackEntry({
           sourceSeq: seq,
@@ -440,12 +516,9 @@ async function applyRedo(command = {}) {
       sheetId: updatedDoc && updatedDoc._targetSheetId ? updatedDoc._targetSheetId : (otResult.sheetId || entry.sheetId || null),
       seq,
       ...(isBatchEntry(entry)
-        ? { updates: (updatedDoc && updatedDoc._batchUpdates ? updatedDoc._batchUpdates : []).map((update) => ({
-          row: update.row,
-          col: update.col,
-          value: update.newValue,
-          style: update.newStyle,
-        })) }
+        ? { updates: (isRangeEntry(entry)
+          ? (updatedDoc._rangeUpdates || []).map((u) => ({ row: u.row, col: u.col, value: u.newValue, styleId: u.newStyleId }))
+          : (updatedDoc._batchUpdates || []).map((u) => ({ row: u.row, col: u.col, value: u.newValue, style: u.newStyle }))) }
         : {
           row: otResult.row,
           col: otResult.col,

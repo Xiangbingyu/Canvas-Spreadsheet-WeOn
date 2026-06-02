@@ -275,10 +275,12 @@ async function resolveUndoRedoBatchOperation({
       baseSeq: currentDoc.currentSeq,
       rebased: false,
       updates: normalizedUpdates.map((update) => ({
+        ...update,
         row: update.row,
         col: update.col,
         value: direction === 'undo' ? update.oldValue : update.newValue,
         style: direction === 'undo' ? update.oldStyle : update.newStyle,
+        styleId: direction === 'undo' ? update.oldStyleId : update.newStyleId,
       })),
     };
   }
@@ -312,12 +314,9 @@ async function resolveUndoRedoBatchOperation({
     const transformed = transformedUpdates[index];
     const original = normalizedUpdates[index];
     dedupedByPosition.set(`${transformed.row}:${transformed.col}`, {
+      ...original,
       row: transformed.row,
       col: transformed.col,
-      oldValue: original.oldValue,
-      oldStyle: original.oldStyle,
-      newValue: original.newValue,
-      newStyle: original.newStyle,
     });
   }
 
@@ -327,14 +326,12 @@ async function resolveUndoRedoBatchOperation({
     baseSeq: currentDoc.currentSeq,
     rebased: true,
     updates: Array.from(dedupedByPosition.values()).map((update) => ({
+      ...update,
       row: update.row,
       col: update.col,
       value: direction === 'undo' ? update.oldValue : update.newValue,
       style: direction === 'undo' ? update.oldStyle : update.newStyle,
-      oldValue: update.oldValue,
-      oldStyle: update.oldStyle,
-      newValue: update.newValue,
-      newStyle: update.newStyle,
+      styleId: direction === 'undo' ? update.oldStyleId : update.newStyleId,
     })),
   };
 }
