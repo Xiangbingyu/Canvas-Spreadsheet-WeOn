@@ -11,6 +11,7 @@ import {
   getDataViewportSize,
   getRowHeaderRect,
   getVisibleRange,
+  getVisibleRangeForRect,
   type Viewport,
   type VisibleRange,
 } from './viewport'
@@ -22,6 +23,10 @@ export type RenderRect = {
   y: number
   width: number
   height: number
+}
+
+export type RenderContentLayerOptions = {
+  dirtyRects?: RenderRect[]
 }
 
 export type RemoteCursorRenderData = {
@@ -204,6 +209,46 @@ function getDataAreaRect(viewport: Viewport): RenderRect {
     width: dataViewport.width,
     height: dataViewport.height,
   }
+}
+
+/**
+ * 作用：判断 dirty rect 是否有可清理和可绘制面积。
+ * 传入参数：rect 为 Canvas 逻辑像素矩形。
+ * 返回结果：矩形宽高均大于 0 时返回 true；不读取 Redux，不修改绘制状态。
+ */
+function isValidRenderRect(rect: RenderRect): boolean {
+  return rect.width > 0 && rect.height > 0
+}
+
+/**
+ * 作用：在 contentCanvas 上清理一个局部 dirty rect，并限制在数据区内，避免影响表头区域。
+ * 传入参数：ctx 为 contentCanvas 上下文，viewport 提供数据区裁剪范围，rect 为待清理矩形。
+ * 返回结果：无返回值；只清除当前 content 层像素，不读取 Redux。
+ */
+function clearContentRect(
+  ctx: CanvasRenderingContext2D,
+  viewport: Viewport,
+  rect: RenderRect
+): void {
+  if (!isValidRenderRect(rect)) {
+    return
+  }
+
+  ctx.save()
+  clipDataArea(ctx, viewport)
+  ctx.clearRect(rect.x, rect.y, rect.width, rect.height)
+  ctx.restore()
+}
+
+/**
+ * 作用：把后续 content 绘制限制在单个 dirty rect 内，避免局部重绘污染矩形外区域。
+ * 传入参数：ctx 为 contentCanvas 上下文，rect 为待绘制矩形。
+ * 返回结果：无返回值；通过 ctx.clip 修改当前 save 范围内的裁剪区。
+ */
+function clipRenderRect(ctx: CanvasRenderingContext2D, rect: RenderRect): void {
+  ctx.beginPath()
+  ctx.rect(rect.x, rect.y, rect.width, rect.height)
+  ctx.clip()
 }
 
 /**
@@ -885,8 +930,35 @@ export function renderGridLayer(ctx: CanvasRenderingContext2D, options: RenderGr
  */
 export function renderContentLayer(
   ctx: CanvasRenderingContext2D,
-  options: RenderGridOptions
+  options: RenderGridOptions,
+  contentOptions?: RenderContentLayerOptions
 ): void {
+  const dirtyRects = contentOptions?.dirtyRects?.filter(isValidRenderRect)
+  if (dirtyRects) {
+    for (const dirtyRect of dirtyRects) {
+      const dirtyRange = getVisibleRangeForRect(
+        dirtyRect,
+        options.viewport,
+        options.worksheet.defaultRowHeight,
+        options.worksheet.defaultColWidth,
+        options.worksheet.rowCount,
+        options.worksheet.colCount
+      )
+      if (!isRangeVisible(dirtyRange)) {
+        continue
+      }
+
+      clearContentRect(ctx, options.viewport, dirtyRect)
+      const draw = createDrawContext(ctx, options, dirtyRange)
+      ctx.save()
+      clipRenderRect(ctx, dirtyRect)
+      drawCellBackgrounds(draw)
+      drawCellTexts(draw)
+      ctx.restore()
+    }
+    return
+  }
+
   const draw = createDrawContext(ctx, options)
   clearCanvas(ctx, options.viewport)
   drawCellBackgrounds(draw)
