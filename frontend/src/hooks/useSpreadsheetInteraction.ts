@@ -333,8 +333,13 @@ export function useSpreadsheetInteraction(options: UseSpreadsheetInteractionOpti
         // 不在这里处理单个字符输入，让输入法自己处理 composition
         // 中文输入法的第一个 keydown 不应该进入编辑态，应该等 composition 事件
         if (event.key === 'Delete' || event.key === 'Backspace') {
-          commitCell(sel.row, sel.col, '')
-          dispatch(setSelectedCell({ row: sel.row, col: sel.col, value: '' }))
+          // 只清空内容、保留样式：读出当前格已有样式一起提交，
+          // 避免下游把「缺省 style」当成清空（与 submitEdit 同一处理）。
+          const ws = reduxStore.getState().workSheet
+          const cell = ws.cells[`${sel.row}:${sel.col}`]
+          const style: Style | undefined = cell?.styleId ? ws.styles[cell.styleId] : undefined
+          commitCell(sel.row, sel.col, '', style)
+          dispatch(setSelectedCell({ row: sel.row, col: sel.col, value: '', style }))
           event.preventDefault()
         }
       },
