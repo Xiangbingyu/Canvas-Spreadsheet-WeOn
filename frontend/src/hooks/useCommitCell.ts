@@ -59,11 +59,16 @@ export function useCommitBatch(setBatchCells?: BatchSetCellFn): BatchCommitFn {
             if (updates.length === 0) return
             const sheetId = store.getState().workSheet.sheetId
             const targets = updates.map((u) => ({ row: u.row, col: u.col }))
-            // 整批共享同一 patch：style 与 value 都来自 updates[0]。
-            // 调用方（含 undo/redo 回放）须保证整批 value/style 一致，否则应拆成多组分别提交。
+            // batch_set_cell 是「一批坐标 + 一个统一 patch」：value 只能整批共享。
+            // 仅当整批 value 完全一致时才带 value（批量改内容/撤回回放场景）；
+            // 否则只带 style（批量改样式场景），由后端「只传 style 保留各格原值」语义守住内容，
+            // 避免把起始格的值覆盖到整个选区。
+            const allSameValue = updates.every((u) => u.value === updates[0].value)
             const patch: { value?: string; style?: Record<string, unknown> | null } = {
-              value: updates[0].value,
               style: (updates[0].style ?? null) as unknown as Record<string, unknown> | null,
+            }
+            if (allSameValue) {
+              patch.value = updates[0].value
             }
             setBatchCells(sheetId, targets, patch)
           }
