@@ -18,6 +18,8 @@ import {
   removeUserCursor,
   setCurrentSeq,
   setConnectionStatus,
+  setSelf,
+  setLastEditTime,
 } from './userStore'
 import {
   addSheet,
@@ -58,6 +60,8 @@ export {
   removeUserCursor,
   setCurrentSeq,
   setConnectionStatus,
+  setSelf,
+  setLastEditTime,
   initFromDoc,
   switchSheet,
   addSheet,
