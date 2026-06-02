@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿﻿const express = require('express');
+﻿﻿const express = require('express');
 
 const healthRouter = require('./routes/health');
 const docsRouter = require('./routes/docs');
