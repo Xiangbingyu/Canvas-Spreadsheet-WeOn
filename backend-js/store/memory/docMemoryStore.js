@@ -290,12 +290,14 @@ function createDocMemoryStore() {
         const oldValue = previousCell.value ?? '';
         const oldStyleId = typeof previousCell.styleId === 'string' ? previousCell.styleId : null;
         const oldStyle = oldStyleId ? deepClone(targetSheet.styles[oldStyleId] || null) : null;
-        const nextStyleIdValue = findOrCreateStyleId(targetSheet, update.style);
+        const nextValue = update.value !== undefined ? (update.value ?? '') : oldValue;
+        const nextStyle = update.style !== undefined ? update.style : oldStyle;
+        const nextStyleIdValue = findOrCreateStyleId(targetSheet, nextStyle);
 
         targetSheet.cells[cellKey] = {
           row: update.row,
           col: update.col,
-          value: update.value ?? '',
+          value: nextValue,
           styleId: nextStyleIdValue,
         };
 
@@ -312,8 +314,8 @@ function createDocMemoryStore() {
           col: update.col,
           oldValue,
           oldStyle,
-          newValue: update.value ?? '',
-          newStyle: update.style ?? null,
+          newValue: nextValue,
+          newStyle: nextStyle,
         });
       }
 

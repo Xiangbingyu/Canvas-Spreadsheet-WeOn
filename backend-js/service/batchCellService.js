@@ -94,12 +94,21 @@ function dedupeTransformedUpdates(updates, patch) {
     dedupedByPosition.set(createUpdateKey(update), {
       row: update.row,
       col: update.col,
-      value: patch.value,
-      style: patch.style !== undefined ? patch.style : null,
+      ...(patch.value !== undefined ? { value: patch.value } : {}),
+      ...(patch.style !== undefined ? { style: patch.style } : {}),
     });
   }
 
   return Array.from(dedupedByPosition.values());
+}
+
+function toAppliedBatchUpdates(updates) {
+  return updates.map((update) => ({
+    row: update.row,
+    col: update.col,
+    value: update.newValue,
+    style: update.newStyle,
+  }));
 }
 
 function toBatchUndoEntry({
@@ -137,6 +146,7 @@ async function applyBatchSetCell(command = {}) {
       baseSeq: null,
       conflictSeq: null,
     };
+    let transformedUpdates = [];
     let finalUpdates = [];
     let targetSheetId = normalizedCommand.sheetId;
 
@@ -169,7 +179,7 @@ async function applyBatchSetCell(command = {}) {
         });
       }
 
-      finalUpdates = dedupeTransformedUpdates(effectiveCommand.updates, {
+      transformedUpdates = dedupeTransformedUpdates(effectiveCommand.updates, {
         value: effectiveCommand.value,
         style: effectiveCommand.style,
       });
@@ -177,7 +187,7 @@ async function applyBatchSetCell(command = {}) {
       updatedDoc = await docsService.applyBatchSetCell({
         docId: effectiveCommand.docId,
         sheetId: effectiveCommand.sheetId,
-        updates: finalUpdates,
+        updates: transformedUpdates,
       }, {
         connection,
       });
@@ -197,6 +207,7 @@ async function applyBatchSetCell(command = {}) {
         newValue: update.newValue,
         newStyle: update.newStyle,
       }));
+      finalUpdates = toAppliedBatchUpdates(historyUpdates);
 
       await historyStore.append({
         docId: normalizedCommand.docId,
