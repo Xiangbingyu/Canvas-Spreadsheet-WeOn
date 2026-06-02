@@ -23,7 +23,13 @@ import {
   applySheetAdded,
   store,
 } from '@/spreadsheet/store'
-import { insertRow, deleteRow, insertCol, deleteCol } from '@/spreadsheet/store/workSheetStore'
+import {
+  insertRow,
+  deleteRow,
+  insertCol,
+  deleteCol,
+  updateRange,
+} from '@/spreadsheet/store/workSheetStore'
 import type { WorkbookSnapshotPayload } from '@/spreadsheet/store/workbookStore'
 import type { WorkbookSnapshot } from '@/services/httpType'
 import {
@@ -238,16 +244,29 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
     },
     setBatchCells: (
       sheetId: string,
-      updates: Array<{
-        row: number
-        col: number
-        value: string
-        style: Record<string, unknown> | null
-      }>
+      targets: Array<{ row: number; col: number }>,
+      patch: { value?: string; style?: Record<string, unknown> | null }
     ) => {
+      // 乐观更新：先批量改本地 UI（一次 dispatch），再发 WS。
+      // 只改样式时 patch.value 为 undefined，需保留各格原有文字（reducer 总会写入 value）。
+      const sheet = store.getState().workSheet
+      dispatch(
+        updateRange({
+          sheetId,
+          updates: targets.map((t) => {
+            const prev = sheet.cells[`${t.row}:${t.col}`]
+            return {
+              row: t.row,
+              col: t.col,
+              value: patch.value !== undefined ? patch.value : (prev?.value ?? ''),
+              style: patch.style !== undefined ? (patch.style as Style | null) : undefined,
+            }
+          }),
+        })
+      )
       const client = clientRef.current
       if (!client) return
-      client.setBatchCells(sheetId, client.currentSeq, updates)
+      client.setBatchCells(sheetId, client.currentSeq, targets, patch)
     },
     insertRow: (sheetId: string, row: number) => {
       clientRef.current?.insertRow(sheetId, row)

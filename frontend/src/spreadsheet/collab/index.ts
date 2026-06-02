@@ -19,5 +19,4 @@ export type {
   ErrorMessage,
 } from '../model/collabProtocol'
 export { ERROR_CODES } from '../model/collabProtocol'
-export { convertSnapshotToCells } from './snapshotConverter'
 export { useCollab } from '../../hooks/useCollab'
