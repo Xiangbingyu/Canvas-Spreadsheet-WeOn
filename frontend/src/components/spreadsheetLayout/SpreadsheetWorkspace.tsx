@@ -45,8 +45,8 @@ export function SpreadsheetWorkspace() {
     clientId,
   })
   useEffect(() => {
-    sendCursor(selection.row, selection.col)
-  }, [selection.row, selection.col, sendCursor])
+    sendCursor(activeWorksheet.sheetId, selection.row, selection.col)
+  }, [activeWorksheet.sheetId, selection.row, selection.col, sendCursor])
   const handleImportWorkbook = useCallback(
     (workbook: WorkbookSnapshotPayload): boolean => {
       const sent = importWorkbook(workbook)

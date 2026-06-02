@@ -141,7 +141,14 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
       },
 
       onCursor(data: CursorUpdate['data']) {
-        dispatch(setUserCursor({ clientId: data.clientId, row: data.row, col: data.col }))
+        dispatch(
+          setUserCursor({
+            clientId: data.clientId,
+            sheetId: data.sheetId,
+            row: data.row,
+            col: data.col,
+          })
+        )
       },
 
       onRowInserted(data) {
@@ -236,7 +243,8 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
       )
       return true
     },
-    sendCursor: (row: number, col: number) => clientRef.current?.sendCursor(row, col),
+    sendCursor: (sheetId: string, row: number, col: number) =>
+      clientRef.current?.sendCursor(sheetId, row, col),
     addSheet: (sheetName: string): boolean => {
       const trimmed = sheetName.trim()
       if (!trimmed) return false

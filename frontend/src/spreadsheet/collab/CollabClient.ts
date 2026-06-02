@@ -210,8 +210,8 @@ export class CollabClient {
     })
   }
 
-  sendCursor(row: number, col: number): void {
-    this.send({ type: 'cursor', docId: this.docId, clientId: this.clientId, row, col })
+  sendCursor(sheetId: string, row: number, col: number): void {
+    this.send({ type: 'cursor', docId: this.docId, clientId: this.clientId, sheetId, row, col })
   }
 
   undo(): void {
