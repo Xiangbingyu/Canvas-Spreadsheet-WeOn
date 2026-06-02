@@ -31,7 +31,11 @@
 - **长期存储**：继续使用 `MySQL`
 - **锁模型**：继续保留当前文档级 `Redis` 锁，但锁仅保护 `Redis` 实时确认区
 - **协同语义**：继续保留当前 `seq + baseSeq/sourceSeq + rebase + barrier`
-- **迁移顺序**：先迁 `set_cell`，再迁 `set_title`，再迁 `undo/redo`，最后迁 `import_sheet`
+- **纳入范围**：`set_cell`、`set_title`、`undo`、`redo`、`import_sheet`、`insert_row`、`delete_row`、`insert_col`、`delete_col`、`add_sheet`、`batch_set_cell`、`cursor` 统一纳入整体后端优化方案
+- **结构变更语义**：结构变更后不再清空用户后端 `undo/redo` 栈，后续继续通过结构 transform 作用于当前坐标
+- **import_sheet 权限**：收紧为必须先 `join` 才允许执行
+- **barrier 例外**：`import_sheet` 仍作为表格内容 barrier，但不会阻断 `set_title`
+- **消息兼容**：发送方继续保留当前 `reply + broadcast` 双消息行为
 
 简化总结如下：
 
@@ -68,6 +72,13 @@
 - `undo`
 - `redo`
 - `import_sheet`
+- `insert_row`
+- `delete_row`
+- `insert_col`
+- `delete_col`
+- `add_sheet`
+- `batch_set_cell`
+- `cursor`
 - 对应 `history`、`user_op_state`、snapshot 落盘链路
 - 对应缓存失效、广播与恢复逻辑
 
@@ -221,6 +232,7 @@ Worker 负责：
 - 消息入参读取
 - 调用 `Gate`
 - 回复与广播封装
+- 保留当前发送方 `reply + broadcast` 的双消息兼容行为
 
 不再保留：
 
@@ -356,6 +368,40 @@ Worker 落盘时必须保证幂等。
 - 若重复消费，同一 `docId + seq` 不重复写入
 - `event_id` 保留给适用业务场景做附加幂等控制
 
+### 9.4 结构变更与用户栈
+
+本轮明确采用如下规则：
+
+- `insert_row`
+- `delete_row`
+- `insert_col`
+- `delete_col`
+- `add_sheet`
+
+成功后不再清空用户后端 `undo/redo` 栈。
+
+改造后需要保证：
+
+- 用户栈继续保留
+- 后续 `undo/redo` 结合结构历史做 transform
+- 结构变化后的旧坐标能够映射到当前有效坐标
+- 若遇到无法跨越的 barrier，再返回 `4090`
+
+也就是说，结构变更不再是“清栈点”，而是“后续重放时需要参与 transform 的历史点”。
+
+### 9.5 import_sheet barrier 边界
+
+`import_sheet` 仍然是表格内容层面的 barrier。
+
+但需显式保留以下例外：
+
+- 它会阻断 stale `set_cell`
+- 它会阻断 stale `batch_set_cell`
+- 它会阻断依赖旧单元格历史的 `undo/redo`
+- **它不会阻断 `set_title`**
+
+因此，标题链路在实现时不能简单复用表格 barrier 判断。
+
 ## 10. 各操作的目标流程
 
 ### 10.1 set_cell
@@ -383,6 +429,7 @@ Worker 落盘时必须保证幂等。
 - 保留 `baseSeq`
 - 主确认点在 `Redis`
 - `MySQL` 异步沉淀
+- 不受 `import_sheet barrier` 阻断
 
 ### 10.3 undo / redo
 
@@ -396,6 +443,7 @@ Worker 落盘时必须保证幂等。
 
 - 用户 `undo/redo` 栈主更新改为 `Redis`
 - `MySQL user_op_state` 作为过渡性恢复副本
+- 重放时需要显式吸收结构变更历史的 transform 结果
 
 ### 10.4 import_sheet
 
@@ -406,6 +454,81 @@ Worker 落盘时必须保证幂等。
 - 清空当前用户 `undo/redo`
 - 写入 stream
 - 立即广播整份已确认导入结果
+- 发送方必须已 `join` 当前文档
+- 不阻断后续 `set_title`
+
+### 10.5 insert_row / delete_row / insert_col / delete_col
+
+结构变更统一走整体优化方案：
+
+1. 请求进入 `Gate`
+2. 校验 `join` 身份、参数和范围
+3. 读取 `Redis state + seq`
+4. 分配新的 `seq`
+5. 原子更新 `Redis state`
+6. 追加 `Redis Stream`
+7. 保留用户 `undo/redo` 栈，不做清空
+8. 立即回复并广播结构变更结果
+9. Worker 异步写入 `MySQL history`
+
+注意：
+
+- 这些结构变更会进入后续 `undo/redo` 的 transform 参考历史
+- 不再作为清空全文档用户栈的特殊操作
+
+### 10.6 add_sheet
+
+`add_sheet` 也统一走整体优化方案：
+
+1. 请求进入 `Gate`
+2. 校验 `join` 身份与参数
+3. 在 `Redis state` 中创建新 sheet
+4. 推进 `sheetOrder` 和 `activeSheetId`
+5. 分配新 `seq`
+6. 原子写入 `Redis`
+7. 追加 `Redis Stream`
+8. 立即回复并广播 `sheet_added`
+9. Worker 异步落盘
+
+`add_sheet` 的用户栈策略与结构变更保持一致：
+
+- 不再清空后端 `undo/redo` 栈
+- 后续如需进入 `undo/redo transform`，按结构变化处理
+
+### 10.7 batch_set_cell
+
+`batch_set_cell` 统一纳入整体优化方案。
+
+目标流程：
+
+1. 请求进入 `Gate`
+2. 校验 `join` 身份、参数和 `baseSeq`
+3. 读取 `Redis state + seq`
+4. 若 `baseSeq < currentSeq`，对每个坐标逐个执行结构 transform
+5. 若中间出现 `import_sheet barrier`，返回 `4090`
+6. transform 后按最终坐标集合去重
+7. 分配单个新的 `seq`
+8. 原子更新 `Redis state`
+9. 追加单条 `Redis Stream` 事件
+10. 更新 `Redis user-op-state`
+11. 立即回复并广播 `batch_cell_updated`
+12. Worker 异步写入单条正式 `history/op_log`
+
+### 10.8 cursor
+
+`cursor` 也统一纳入整体方案，但属于特殊轻量消息。
+
+它的特点是：
+
+- 走统一的 WS handler / Gate 入口组织方式
+- 继续保留 `reply + broadcast` 的兼容策略约束时，应按当前实际协议决定是否回复
+- 不分配 `seq`
+- 不写 `Redis Stream`
+- 不写 `history`
+- 不写 `audit`
+- 不进入 `Apply&Store`
+
+换句话说，`cursor` 被纳入的是整体架构治理范围，而不是持久化链路。
 
 ## 11. 失败处理与恢复
 
@@ -414,6 +537,7 @@ Worker 落盘时必须保证幂等。
 - `Redis` 原子提交失败：本次请求失败，不广播
 - 锁获取失败：本次请求失败，按当前错误体系返回
 - 参数错误或冲突：按当前错误码返回
+- 对要求先 `join` 的写操作，未加入房间或身份不匹配时返回 `4003`
 
 ### 11.2 异步落盘失败
 
@@ -473,14 +597,38 @@ Worker 落盘时必须保证幂等。
 
 - 标题修改走与 `set_cell` 对称的新链路
 
-### 12.4 Phase 4：迁 undo / redo
+### 12.4 Phase 4：迁结构变更与 add_sheet
+
+目标：
+
+- `insert_row`
+- `delete_row`
+- `insert_col`
+- `delete_col`
+- `add_sheet`
+
+统一迁入 `Gate + Redis + Worker` 链路
+
+并完成：
+
+- 用户栈不清空
+- 结构 transform 历史保留
+
+### 12.5 Phase 5：迁 batch_set_cell
+
+目标：
+
+- `batch_set_cell` 进入统一确认链路
+- 坐标级 transform、去重和单 `seq` 语义保持不变
+
+### 12.6 Phase 6：迁 undo / redo
 
 目标：
 
 - 用户私有栈迁入 Redis 实时态
 - 保持 `sourceSeq` 语义不变
 
-### 12.5 Phase 5：迁 import_sheet
+### 12.7 Phase 7：迁 import_sheet
 
 原因：
 
@@ -490,11 +638,14 @@ Worker 落盘时必须保证幂等。
 
 - barrier 语义保持不变
 - 以 Redis 为确认点
+- 收紧为必须先 `join` 才能执行
+- 不阻断 `set_title`
 
-### 12.6 Phase 6：恢复与治理
+### 12.8 Phase 8：迁 cursor 与恢复治理
 
 目标：
 
+- `cursor` 统一纳入整体架构治理
 - 补恢复逻辑
 - 补观测
 - 补重试与死信治理
@@ -546,8 +697,12 @@ Worker 落盘时必须保证幂等。
 - `service/gate/gateService.js`
 - `service/gate/gateSetCellService.js`
 - `service/gate/gateSetTitleService.js`
+- `service/gate/gateSheetStructureService.js`
+- `service/gate/gateAddSheetService.js`
+- `service/gate/gateBatchSetCellService.js`
 - `service/gate/gateUndoRedoService.js`
 - `service/gate/gateImportSheetService.js`
+- `service/gate/gateCursorService.js`
 
 ### 13.5 新增 Worker
 
@@ -569,11 +724,21 @@ Worker 落盘时必须保证幂等。
 
 - `ws/handlers/setCell.js`
 - `ws/handlers/setTitle.js`
+- `ws/handlers/insertRow.js`
+- `ws/handlers/deleteRow.js`
+- `ws/handlers/insertCol.js`
+- `ws/handlers/deleteCol.js`
+- `ws/handlers/addSheet.js`
+- `ws/handlers/batchSetCell.js`
 - `ws/handlers/undo.js`
 - `ws/handlers/redo.js`
 - `ws/handlers/importSheet.js`
+- `ws/handlers/cursor.js`
 - `service/cellService.js`
 - `service/titleService.js`
+- `service/sheetStructureService.js`
+- `service/addSheetService.js`
+- `service/batchCellService.js`
 - `service/undoRedoService.js`
 - `service/importService.js`
 - `service/docsService.js`
@@ -596,8 +761,14 @@ Worker 落盘时必须保证幂等。
 - `set_cell baseSeq` stale
 - `set_cell baseSeq` future
 - `set_title` 正常确认
+- `set_title` 不受 `import_sheet barrier` 阻断
+- 结构变更后用户栈不清空
+- `batch_set_cell` 正常确认
+- `batch_set_cell` stale transform
 - `undo/redo sourceSeq` 正常回放
 - `import_sheet barrier` 正常生效
+- `import_sheet` 必须先 `join`
+- 发送方仍保留双消息
 
 ### 14.2 Redis 原子性测试
 
@@ -634,9 +805,13 @@ Worker 落盘时必须保证幂等。
 - 写请求主链路不再同步依赖 `MySQL` 确认
 - 同一文档的在线确认基于 `Redis` 实时态完成
 - 已确认操作可立即回复并广播
+- 发送方仍保留当前 `reply + broadcast` 双消息兼容行为
 - Worker 能稳定把实时操作流沉淀到 `MySQL`
 - 可从 `MySQL snapshot + history/op_log` 恢复文档状态
-- `set_cell`、`set_title`、`undo`、`redo`、`import_sheet` 协同语义不变
+- 结构变更后不会再清空用户后端 `undo/redo` 栈
+- `import_sheet` 收紧为必须先 `join` 才能执行
+- `import_sheet` 不阻断 `set_title`
+- `set_cell`、`set_title`、`undo`、`redo`、`import_sheet`、`insert_row`、`delete_row`、`insert_col`、`delete_col`、`add_sheet`、`batch_set_cell`、`cursor` 协同语义保持与拍板口径一致
 
 ## 16. 本轮建议开工顺序
 
@@ -647,9 +822,11 @@ Worker 落盘时必须保证幂等。
 3. 再做 `opLogFlushWorker`
 4. 再补 `snapshotMaterializeWorker`
 5. 打通 `set_title`
-6. 打通 `undo/redo`
-7. 最后迁 `import_sheet`
-8. 最后补恢复、压测和多实例回归
+6. 打通结构变更与 `add_sheet`
+7. 打通 `batch_set_cell`
+8. 打通 `undo/redo`
+9. 最后迁 `import_sheet`
+10. 最后补 `cursor`、恢复、压测和多实例回归
 
 ## 17. 结论
 
