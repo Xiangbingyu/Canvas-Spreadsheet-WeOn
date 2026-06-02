@@ -504,6 +504,23 @@ function GrideCanvas(
     [scheduleRender]
   )
 
+  const scheduleWorksheetContentChangeRender = useCallback(
+    /**
+     * 作用：处理 worksheet.cells/styles 变化后的 content 重绘调度。
+     * 传入参数：无，读取当前是否已有明确 dirty rect。
+     * 返回结果：无返回值；有明确范围时保留局部重绘，否则回退 content 完整重绘。
+     */
+    () => {
+      if (pendingContentDirtyRectsRef.current.length > 0) {
+        scheduleRender(CONTENT_AND_OVERLAY_LAYERS)
+        return
+      }
+
+      scheduleFullContentRender()
+    },
+    [scheduleFullContentRender, scheduleRender]
+  )
+
   const getCellDirtyRect = useCallback(
     /**
      * 作用：把 1-based 单元格坐标转换为 contentCanvas 上的局部重绘矩形。
@@ -565,6 +582,21 @@ function GrideCanvas(
       }
     },
     [worksheet.colCount, worksheet.defaultColWidth, worksheet.defaultRowHeight, worksheet.rowCount]
+  )
+
+  const invalidateCells = useCallback(
+    /**
+     * 作用：把变更单元格坐标转换为 content 层 dirty rect 并调度局部重绘。
+     * 传入参数：cells 为 1-based 单元格坐标数组，通常来自编辑、粘贴或样式更新。
+     * 返回结果：无返回值；不修改 Redux，只影响 Canvas 下一帧重绘范围。
+     */
+    (cells: CellCoord[]) => {
+      const dirtyRects = cells
+        .map((cell) => getCellDirtyRect(cell))
+        .filter((rect): rect is RenderRect => rect !== null)
+      appendContentDirtyRects(dirtyRects)
+    },
+    [appendContentDirtyRects, getCellDirtyRect]
   )
 
   const publishScrollUi = useCallback(() => {
@@ -667,10 +699,7 @@ function GrideCanvas(
         return { ...viewportRef.current }
       },
       invalidateCells(cells: CellCoord[]) {
-        const dirtyRects = cells
-          .map((cell) => getCellDirtyRect(cell))
-          .filter((rect): rect is RenderRect => rect !== null)
-        appendContentDirtyRects(dirtyRects)
+        invalidateCells(cells)
       },
       invalidateRange(range: SelectionRange) {
         const dirtyRect = getRangeDirtyRect(range)
@@ -679,7 +708,7 @@ function GrideCanvas(
         }
       },
     }),
-    [appendContentDirtyRects, applyScroll, getCellDirtyRect, getRangeDirtyRect, overlayCanvasRef]
+    [appendContentDirtyRects, applyScroll, getRangeDirtyRect, invalidateCells, overlayCanvasRef]
   )
 
   const onWheelScroll = useCallback(
@@ -807,6 +836,7 @@ function GrideCanvas(
         const rowOffset = pasteStartRow - clipboard.range.startRow
         const colOffset = pasteStartCol - clipboard.range.startCol
         const sheetId = ws.sheetId
+        const changedCells: CellCoord[] = []
 
         for (const [key, clipCell] of Object.entries(clipboard.cells)) {
           const [rowStr, colStr] = key.split(':')
@@ -833,7 +863,9 @@ function GrideCanvas(
               style: (clipCell as { value: string; style?: (typeof ws.styles)[string] }).style,
             })
           )
+          changedCells.push({ row: targetRow, col: targetCol })
         }
+        invalidateCells(changedCells)
         return
       }
 
@@ -853,6 +885,7 @@ function GrideCanvas(
         const rowOffset = pasteStartRow - parsed.range.startRow
         const colOffset = pasteStartCol - parsed.range.startCol
         const sheetId = ws.sheetId
+        const changedCells: CellCoord[] = []
 
         for (const [key, clipCell] of Object.entries(parsed.cells)) {
           const [rowStr, colStr] = key.split(':')
@@ -878,14 +911,16 @@ function GrideCanvas(
               value: (clipCell as { value: string }).value,
             })
           )
+          changedCells.push({ row: targetRow, col: targetCol })
         }
+        invalidateCells(changedCells)
       } catch (err) {
         console.warn('[GrideCanvas] System clipboard read failed:', err)
       }
     }
 
     pasteFromClipboard()
-  }, [reduxStore])
+  }, [invalidateCells, reduxStore])
 
   useCanvasInteraction({
     interactionCanvasRef: overlayCanvasRef,
@@ -959,11 +994,11 @@ function GrideCanvas(
     }
 
     if (previous.cells !== current.cells || previous.styles !== current.styles) {
-      scheduleFullContentRender()
+      scheduleWorksheetContentChangeRender()
     }
   }, [
     scheduleAllLayersRender,
-    scheduleFullContentRender,
+    scheduleWorksheetContentChangeRender,
     worksheet.cells,
     worksheet.colCount,
     worksheet.defaultColWidth,
