@@ -141,6 +141,7 @@ export function useSpreadsheetInteraction(options: UseSpreadsheetInteractionOpti
 
       // 走协同链路（或本地兜底）；选中态本地即时更新以保证 UI 响应
       commitCell(target.row, target.col, displayValue, style)
+      canvasHandleRef.current?.invalidateCells([{ row: target.row, col: target.col }])
       dispatch(setSelectedCell({ row: target.row, col: target.col, value: displayValue, style }))
       setEditingCell(null)
       editingCellRef.current = null
@@ -260,6 +261,7 @@ export function useSpreadsheetInteraction(options: UseSpreadsheetInteractionOpti
               const rowOffset = pasteStartRow - clipboard.range.startRow
               const colOffset = pasteStartCol - clipboard.range.startCol
 
+              const invalidCells: Array<{ row: number; col: number }> = []
               for (const [key, clipCell] of Object.entries(clipboard.cells)) {
                 const [rowStr, colStr] = key.split(':')
                 const origRow = parseInt(rowStr, 10)
@@ -277,7 +279,10 @@ export function useSpreadsheetInteraction(options: UseSpreadsheetInteractionOpti
                 }
 
                 commitCell(targetRow, targetCol, clipCell.value, clipCell.style)
+                invalidCells.push({ row: targetRow, col: targetCol })
               }
+              // 批量通知 Canvas 局部重绘，避免逐格触发整帧重绘
+              canvasHandleRef.current?.invalidateCells(invalidCells)
               return
             }
 
@@ -297,6 +302,7 @@ export function useSpreadsheetInteraction(options: UseSpreadsheetInteractionOpti
               const rowOffset = pasteStartRow - parsed.range.startRow
               const colOffset = pasteStartCol - parsed.range.startCol
 
+              const invalidCells: Array<{ row: number; col: number }> = []
               for (const [key, clipCell] of Object.entries(parsed.cells)) {
                 const [rowStr, colStr] = key.split(':')
                 const origRow = parseInt(rowStr, 10)
@@ -314,7 +320,10 @@ export function useSpreadsheetInteraction(options: UseSpreadsheetInteractionOpti
                 }
 
                 commitCell(targetRow, targetCol, clipCell.value)
+                invalidCells.push({ row: targetRow, col: targetCol })
               }
+              // 批量通知 Canvas 局部重绘
+              canvasHandleRef.current?.invalidateCells(invalidCells)
             } catch (err) {
               console.warn('[useSpreadsheetInteraction] System clipboard read failed:', err)
             }
@@ -339,6 +348,7 @@ export function useSpreadsheetInteraction(options: UseSpreadsheetInteractionOpti
           const cell = ws.cells[`${sel.row}:${sel.col}`]
           const style: Style | undefined = cell?.styleId ? ws.styles[cell.styleId] : undefined
           commitCell(sel.row, sel.col, '', style)
+          canvasHandleRef.current?.invalidateCells([{ row: sel.row, col: sel.col }])
           dispatch(setSelectedCell({ row: sel.row, col: sel.col, value: '', style }))
           event.preventDefault()
         }
