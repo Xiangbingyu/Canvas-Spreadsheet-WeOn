@@ -19,6 +19,8 @@ import {
   setUserCursor,
   setCurrentSeq,
   setConnectionStatus,
+  setSelf,
+  setLastEditTime,
   importWorkbook as importWorkbookAction,
   applySheetAdded,
   store,
@@ -81,6 +83,8 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
           })
         )
         dispatch(setCurrentSeq(data.seq))
+        const raw = data as Record<string, unknown>
+        if (typeof raw.timestamp === 'number') dispatch(setLastEditTime(raw.timestamp))
       },
 
       onTitleUpdated(data: TitleUpdated['data']) {
@@ -124,6 +128,8 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
           })
         )
         dispatch(setCurrentSeq(data.seq))
+        const raw = data as Record<string, unknown>
+        if (typeof raw.timestamp === 'number') dispatch(setLastEditTime(raw.timestamp))
       },
 
       onRedoApplied(data) {
@@ -138,6 +144,8 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
           })
         )
         dispatch(setCurrentSeq(data.seq))
+        const raw = data as Record<string, unknown>
+        if (typeof raw.timestamp === 'number') dispatch(setLastEditTime(raw.timestamp))
       },
 
       onCursor(data: CursorUpdate['data']) {
@@ -183,9 +191,12 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
 
       onConnectionChange(status) {
         dispatch(setConnectionStatus(status))
+        if (status === 'connected') {
+          dispatch(setSelf({ name: userName ?? '', color: userColor ?? '#3b82f6' }))
+        }
       },
     }),
-    [dispatch]
+    [dispatch, userName, userColor]
   )
 
   const connect = useCallback(() => {
@@ -227,7 +238,7 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
       client.setTitle(trimmed, client.currentSeq)
     },
     /**
-     * Excel 多表导入（乐观更新）
+     * Excel 多表导入（乐观更新 + WS import_sheet）
      * 1. 先写本地 Redux → UI 立即生效
      * 2. 再发 WS import_sheet → 服务端持久化并广播
      * @returns 是否已发送到协同（false 表示仅本地更新）

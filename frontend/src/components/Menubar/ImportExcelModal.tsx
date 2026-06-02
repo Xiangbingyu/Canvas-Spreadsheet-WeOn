@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Modal, Typography, Upload, message } from 'antd'
 import type { UploadFile, UploadProps } from 'antd'
 import { Loading } from '@/components/Loading/Loading'
+import { ApiError } from '@/services/httpAPI'
 import {
   ExcelParseError,
   parseExcelFromBuffer,
@@ -9,11 +10,15 @@ import {
 } from '@/spreadsheet/excel/excelImport'
 import type { WorkbookSnapshotPayload } from '@/spreadsheet/store/workbookStore'
 
+export type ImportExcelMeta = {
+  fileName: string
+}
+
 type ImportExcelModalProps = {
   open: boolean
   onClose: () => void
-  /** 解析完成后：先乐观更新本地 Redux，再发 import_sheet；返回是否已同步到服务端 */
-  onImport: (workbook: WorkbookSnapshotPayload) => boolean
+  /** 解析完成后：POST /docs 创建新文档 */
+  onImport: (workbook: WorkbookSnapshotPayload, meta: ImportExcelMeta) => Promise<void>
 }
 
 const INITIAL_PROGRESS: ParseExcelProgress = {
@@ -91,12 +96,8 @@ export function ImportExcelModal({ open, onClose, onImport }: ImportExcelModalPr
         onProgress: setProgress,
       })
 
-      const wsSent = onImport(workbook)
-      message.success(
-        wsSent
-          ? `导入成功，共 ${workbook.sheetOrder.length} 个工作表`
-          : `导入成功，共 ${workbook.sheetOrder.length} 个工作表（协同未连接，仅本地可见）`
-      )
+      await onImport(workbook, { fileName: file.name })
+      message.success(`导入成功，共 ${workbook.sheetOrder.length} 个工作表`)
       setFileList([])
       onClose()
     } catch (error) {
@@ -108,8 +109,11 @@ export function ImportExcelModal({ open, onClose, onImport }: ImportExcelModalPr
         message.error(error.message)
         return
       }
+      if (error instanceof ApiError) {
+        return
+      }
       console.error('[Excel import]', error)
-      message.error('解析失败，请检查文件是否损坏或过大')
+      message.error('导入失败，请稍后重试')
     } finally {
       resetImportSession()
     }

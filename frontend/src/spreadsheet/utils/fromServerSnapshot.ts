@@ -154,7 +154,7 @@ export function toWorkbookSnapshot(worksheet: WorksheetData): WorkbookSnapshot {
   }
 }
 
-/** Excel 多表导入结果 → WS import_sheet 请求体 */
+/** 前端 workbook 快照 → POST /docs 请求体 snapshot */
 export function toServerWorkbookSnapshotFromPayload(
   payload: WorkbookSnapshotPayload
 ): WorkbookSnapshot {

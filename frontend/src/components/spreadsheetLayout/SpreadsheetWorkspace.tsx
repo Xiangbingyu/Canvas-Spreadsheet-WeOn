@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useDispatch, useSelector } from 'react-redux'
+import { useNavigate } from 'react-router-dom'
+import { DisplayNameModal } from '@/components/CollabStatus/DisplayNameModal'
 import { FormulaBar } from '@/components/FormulaBar/FormulaBar'
 import { Loading } from '@/components/Loading/Loading'
 import { Menubar } from '@/components/Menubar/Menubar'
@@ -14,7 +16,6 @@ import { useCollab } from '@/hooks/useCollab'
 import { useUnifiedHistory } from '@/hooks/useUnifiedHistory'
 import type { RootState } from '@/spreadsheet/store'
 import { addSheet as addSheetAction, setWorksheet, store } from '@/spreadsheet/store'
-import type { WorkbookSnapshotPayload } from '@/spreadsheet/store/workbookStore'
 import { setSelectedCell } from '@/spreadsheet/store/selectStore'
 
 /** WS：优先 VITE_WS_URL；未配置时走 Vite 代理 /ws → 本机后端 */
@@ -22,65 +23,39 @@ const COLLAB_WS_URL =
   import.meta.env.VITE_WS_URL ||
   `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`
 
-type LegacySendCursor = (row: number, col: number) => void
-type SheetScopedSendCursor = (sheetId: string, row: number, col: number) => void
-
 export function SpreadsheetWorkspace() {
   const dispatch = useDispatch()
+  const navigate = useNavigate()
+  const [userName, setUserName] = useState('')
   const docId = useSelector((s: RootState) => s.collab.docId)
+  const nameModalOpen = !!docId && !userName.trim()
   const clientId = useSelector((s: RootState) => s.collab.clientId)
+  const connectionStatus = useSelector((s: RootState) => s.collab.connectionStatus)
   const activeWorksheet = useSelector((s: RootState) => s.workSheet)
   const selection = useSelector((s: RootState) => s.selection)
   const lastSentCursorRef = useRef('')
-
-  const {
-    connect,
-    disconnect,
-    setCell,
-    setTitle,
-    importWorkbook,
-    addSheet,
-    setBatchCells,
-    getClient,
-    sendCursor,
-  } = useCollab({
-    url: COLLAB_WS_URL,
-    docId,
-    clientId,
-  })
+  const { connect, disconnect, setCell, setTitle, addSheet, setBatchCells, getClient, sendCursor } =
+    useCollab({
+      url: COLLAB_WS_URL,
+      docId,
+      clientId,
+      userName: userName.trim(),
+    })
   useEffect(() => {
-    const cursorKey = `${activeWorksheet.sheetId}:${selection.row}:${selection.col}`
-    if (!activeWorksheet.sheetId || lastSentCursorRef.current === cursorKey) return
-    lastSentCursorRef.current = cursorKey
-
-    if (sendCursor.length >= 3) {
-      const sheetScopedSendCursor = sendCursor as unknown as SheetScopedSendCursor
-      sheetScopedSendCursor(activeWorksheet.sheetId, selection.row, selection.col)
+    if (connectionStatus !== 'connected') {
+      lastSentCursorRef.current = ''
       return
     }
 
-    const legacySendCursor = sendCursor as unknown as LegacySendCursor
-    legacySendCursor(selection.row, selection.col)
+    const cursorKey = `${activeWorksheet.sheetId}:${selection.row}:${selection.col}`
+    if (!activeWorksheet.sheetId || lastSentCursorRef.current === cursorKey) {
+      return
+    }
 
-  }, [activeWorksheet.sheetId, selection.row, selection.col, sendCursor])
-  const handleImportWorkbook = useCallback(
-    (workbook: WorkbookSnapshotPayload): boolean => {
-      const sent = importWorkbook(workbook)
-      const activeSheet = workbook.sheets[workbook.activeSheetId]
-      if (activeSheet) {
-        dispatch(
-          setSelectedCell({
-            row: 1,
-            col: 1,
-            value: activeSheet.cells['1:1']?.value ?? '',
-            style: {},
-          })
-        )
-      }
-      return sent
-    },
-    [importWorkbook, dispatch]
-  )
+    sendCursor(activeWorksheet.sheetId, selection.row, selection.col)
+    lastSentCursorRef.current = cursorKey
+  }, [activeWorksheet.sheetId, connectionStatus, selection.row, selection.col, sendCursor])
+
 
   const handleAddSheet = useCallback(
     (sheetName: string) => {
@@ -104,7 +79,7 @@ export function SpreadsheetWorkspace() {
   )
 
   useEffect(() => {
-    if (!docId) {
+    if (!docId || !userName.trim()) {
       disconnect()
       return
     }
@@ -114,7 +89,7 @@ export function SpreadsheetWorkspace() {
     return () => {
       disconnect()
     }
-  }, [docId, clientId, connect, disconnect])
+  }, [docId, clientId, userName, connect, disconnect])
 
   const onCommitCell = useCommitCell(setCell)
   const onCommitBatch = useCommitBatch(setBatchCells)
@@ -138,7 +113,12 @@ export function SpreadsheetWorkspace() {
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-white font-[Roboto,Arial,sans-serif]">
-      <Menubar onImportWorkbook={handleImportWorkbook} onSetTitle={setTitle} />
+      <DisplayNameModal
+        open={nameModalOpen}
+        onConfirm={setUserName}
+        onCancel={() => navigate('/')}
+      />
+      <Menubar onSetTitle={setTitle} />
       <Toolbar
         onCommitCell={commitWithHistory}
         onCommitBatch={commitBatchWithHistory}
@@ -169,7 +149,7 @@ export function SpreadsheetWorkspace() {
         <Loading visible={false} />
       </div>
 
-      <StatusBar />
+      <StatusBar awaitingDisplayName={!!docId && !userName.trim()} />
       <SheetTabs onAddSheet={handleAddSheet} />
     </div>
   )
