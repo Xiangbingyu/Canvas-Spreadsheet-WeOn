@@ -69,7 +69,7 @@ export function ExportExcelModal({ open, fileName, onClose }: ExportExcelModalPr
     >
       <Space orientation="vertical" size="middle" className="w-full">
         <Typography.Text type="secondary">
-          将表格导出为 .xlsx（含样式）。导出时将选择保存文件夹，文件名为文档标题。
+          将表格导出为 .xlsx。导出时将选择保存文件夹，文件名为文档标题。
         </Typography.Text>
 
         <div>

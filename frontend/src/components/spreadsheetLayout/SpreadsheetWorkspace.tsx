@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useDispatch, useSelector } from 'react-redux'
+import { useNavigate } from 'react-router-dom'
+import { DisplayNameModal } from '@/components/CollabStatus/DisplayNameModal'
 import { FormulaBar } from '@/components/FormulaBar/FormulaBar'
 import { Loading } from '@/components/Loading/Loading'
 import { Menubar } from '@/components/Menubar/Menubar'
@@ -26,7 +28,10 @@ type SheetScopedSendCursor = (sheetId: string, row: number, col: number) => void
 
 export function SpreadsheetWorkspace() {
   const dispatch = useDispatch()
+  const navigate = useNavigate()
+  const [userName, setUserName] = useState('')
   const docId = useSelector((s: RootState) => s.collab.docId)
+  const nameModalOpen = !!docId && !userName.trim()
   const clientId = useSelector((s: RootState) => s.collab.clientId)
   const activeWorksheet = useSelector((s: RootState) => s.workSheet)
   const selection = useSelector((s: RootState) => s.selection)
@@ -37,6 +42,7 @@ export function SpreadsheetWorkspace() {
       url: COLLAB_WS_URL,
       docId,
       clientId,
+      userName: userName.trim(),
     })
   useEffect(() => {
     const cursorKey = `${activeWorksheet.sheetId}:${selection.row}:${selection.col}`
@@ -74,7 +80,7 @@ export function SpreadsheetWorkspace() {
   )
 
   useEffect(() => {
-    if (!docId) {
+    if (!docId || !userName.trim()) {
       disconnect()
       return
     }
@@ -84,7 +90,7 @@ export function SpreadsheetWorkspace() {
     return () => {
       disconnect()
     }
-  }, [docId, clientId, connect, disconnect])
+  }, [docId, clientId, userName, connect, disconnect])
 
   const onCommitCell = useCommitCell(setCell)
   const onCommitBatch = useCommitBatch(setBatchCells)
@@ -108,6 +114,11 @@ export function SpreadsheetWorkspace() {
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-white font-[Roboto,Arial,sans-serif]">
+      <DisplayNameModal
+        open={nameModalOpen}
+        onConfirm={setUserName}
+        onCancel={() => navigate('/')}
+      />
       <Menubar onSetTitle={setTitle} />
       <Toolbar
         onCommitCell={commitWithHistory}
@@ -139,7 +150,7 @@ export function SpreadsheetWorkspace() {
         <Loading visible={false} />
       </div>
 
-      <StatusBar />
+      <StatusBar awaitingDisplayName={!!docId && !userName.trim()} />
       <SheetTabs onAddSheet={handleAddSheet} />
     </div>
   )

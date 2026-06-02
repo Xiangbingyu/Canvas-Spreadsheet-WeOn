@@ -2,7 +2,11 @@ import { useSelector } from 'react-redux'
 import type { RootState } from '@/spreadsheet/store'
 import { OnlineUsers } from '@/components/CollabStatus/OnlineUsers'
 
-export function StatusBar() {
+type StatusBarProps = {
+  awaitingDisplayName?: boolean
+}
+
+export function StatusBar({ awaitingDisplayName }: StatusBarProps) {
   const users = useSelector((s: RootState) => s.collab.users)
   const userIds = users.map((u) => u.clientId).join('、')
 
@@ -11,7 +15,7 @@ export function StatusBar() {
       <span>
         {users.length} 位用户正在编辑{userIds ? ` · ${userIds}` : ''}
       </span>
-      <OnlineUsers />
+      <OnlineUsers awaitingDisplayName={awaitingDisplayName} />
     </div>
   )
 }
