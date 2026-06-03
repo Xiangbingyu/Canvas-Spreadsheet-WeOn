@@ -151,16 +151,18 @@ async function applyStructureChange(command = {}, opType) {
       await executeMutation();
     }
 
-    docStateCache.set(normalizedCommand.docId, updatedDoc);
-    historyCache.append({
-      docId: normalizedCommand.docId,
-      clientId: normalizedCommand.clientId,
-      seq,
-      opType: normalizedCommand.opType,
-      targetSheetId: updatedDoc && updatedDoc._targetSheetId ? updatedDoc._targetSheetId : normalizedCommand.sheetId,
-      targetRow: normalizedCommand.row,
-      targetCol: normalizedCommand.col,
-    });
+    await Promise.all([
+      docStateCache.set(normalizedCommand.docId, updatedDoc),
+      historyCache.append({
+        docId: normalizedCommand.docId,
+        clientId: normalizedCommand.clientId,
+        seq,
+        opType: normalizedCommand.opType,
+        targetSheetId: updatedDoc && updatedDoc._targetSheetId ? updatedDoc._targetSheetId : normalizedCommand.sheetId,
+        targetRow: normalizedCommand.row,
+        targetCol: normalizedCommand.col,
+      }),
+    ]);
     await docsService.invalidateDocCaches(normalizedCommand.docId);
 
     await auditService.recordAuditEvent({

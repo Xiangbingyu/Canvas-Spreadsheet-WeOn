@@ -142,6 +142,7 @@ async function applyBatchSetCell(command = {}) {
     let updatedDoc = null;
     let seq = 0;
     let trimmedUndoStack = [];
+    let nextOpState = null;
     let effectiveCommand = normalizedCommand;
     let rebaseResult = {
       enabled: false,
@@ -158,10 +159,16 @@ async function applyBatchSetCell(command = {}) {
     }
 
     const executeMutation = async (connection = null) => {
-      const currentDoc = await docsService.getDocStateForWrite(normalizedCommand.docId, {
-        connection,
-        forUpdate: Boolean(connection),
-      });
+      let currentDoc;
+      if (storeConfig.driver === 'mysql') {
+        currentDoc = await docsService.getLiveDocRecord(normalizedCommand.docId);
+      }
+      if (!currentDoc) {
+        currentDoc = await docsService.getDocStateForWrite(normalizedCommand.docId, {
+          connection,
+          forUpdate: Boolean(connection),
+        });
+      }
 
       if (!currentDoc) {
         throw createServiceError(ERROR_CODES.DOCUMENT_NOT_FOUND, `document not found: ${normalizedCommand.docId}`);
@@ -250,12 +257,13 @@ async function applyBatchSetCell(command = {}) {
       }));
       trimmedUndoStack = trimUndoStack(undoStack);
 
-      await userOpStateStore.saveState({
+      nextOpState = {
         docId: normalizedCommand.docId,
         clientId: normalizedCommand.clientId,
         undoStackJson: trimmedUndoStack,
         redoStackJson: [],
-      }, { connection });
+      };
+      await userOpStateStore.saveState(nextOpState, { connection });
     };
 
     if (storeConfig.driver === 'mysql') {
@@ -264,15 +272,21 @@ async function applyBatchSetCell(command = {}) {
       await executeMutation();
     }
 
-    docStateCache.set(normalizedCommand.docId, updatedDoc);
-    historyCache.append({
-      docId: normalizedCommand.docId,
-      clientId: normalizedCommand.clientId,
-      seq,
-      baseSeq: rebaseResult.baseSeq,
-      opType: 'batch_set_cell',
-      targetSheetId,
-    });
+    if (nextOpState && typeof userOpStateStore.syncRuntimeState === 'function') {
+      await userOpStateStore.syncRuntimeState(nextOpState);
+    }
+
+    await Promise.all([
+      docStateCache.set(normalizedCommand.docId, updatedDoc),
+      historyCache.append({
+        docId: normalizedCommand.docId,
+        clientId: normalizedCommand.clientId,
+        seq,
+        baseSeq: rebaseResult.baseSeq,
+        opType: 'batch_set_cell',
+        targetSheetId,
+      }),
+    ]);
     await docsService.invalidateDocCaches(normalizedCommand.docId);
 
     await auditService.recordAuditEvent({

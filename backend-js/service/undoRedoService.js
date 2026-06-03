@@ -4,6 +4,7 @@ const { withTransaction } = require('../db/mysql');
 const docLock = require('../infra/redis/lock');
 const docsService = require('./docsService');
 const docStateCache = require('../cache/docStateCache');
+const historyCache = require('../cache/historyCache');
 const userOpStateStore = require('../store/userOpStateStore');
 const auditService = require('../audit/auditService');
 const collabConfig = require('../config/collabConfig');
@@ -105,6 +106,8 @@ async function applyUndo(command = {}) {
     let seq = 0;
     let undoStack = [];
     let trimmedRedoStack = [];
+    let nextOpState = null;
+    let undoHistoryEntry = null;
     let entry = null;
     let otResult = null;
 
@@ -193,7 +196,7 @@ async function applyUndo(command = {}) {
       const batchUpdatesForHistory = isRangeEntry(entry)
         ? (updatedDoc._rangeUpdates || [])
         : (updatedDoc._batchUpdates || []);
-      const undoHistoryEntry = isBatchEntry(entry)
+      undoHistoryEntry = isBatchEntry(entry)
         ? {
           docId: normalizedCommand.docId,
           clientId: normalizedCommand.clientId,
@@ -272,7 +275,7 @@ async function applyUndo(command = {}) {
       }
       trimmedRedoStack = trimUndoStack(redoStack);
 
-      const nextOpState = {
+      nextOpState = {
         docId: normalizedCommand.docId,
         clientId: normalizedCommand.clientId,
         undoStackJson: undoStack,
@@ -292,7 +295,14 @@ async function applyUndo(command = {}) {
       await executeMutation();
     }
 
-    docStateCache.set(normalizedCommand.docId, updatedDoc);
+    if (nextOpState && typeof userOpStateStore.syncRuntimeState === 'function') {
+      await userOpStateStore.syncRuntimeState(nextOpState);
+    }
+
+    await Promise.all([
+      docStateCache.set(normalizedCommand.docId, updatedDoc),
+      undoHistoryEntry ? historyCache.append(undoHistoryEntry) : Promise.resolve(),
+    ]);
     await docsService.invalidateDocCaches(normalizedCommand.docId);
 
     await recordAuditBestEffort({
@@ -332,6 +342,8 @@ async function applyRedo(command = {}) {
     let seq = 0;
     let redoStack = [];
     let trimmedUndoStack = [];
+    let nextOpState = null;
+    let redoHistoryEntry = null;
     let entry = null;
     let otResult = null;
 
@@ -420,7 +432,7 @@ async function applyRedo(command = {}) {
       const batchUpdatesForRedoHistory = isRangeEntry(entry)
         ? (updatedDoc._rangeUpdates || [])
         : (updatedDoc._batchUpdates || []);
-      const redoHistoryEntry = isBatchEntry(entry)
+      redoHistoryEntry = isBatchEntry(entry)
         ? {
           docId: normalizedCommand.docId,
           clientId: normalizedCommand.clientId,
@@ -492,7 +504,7 @@ async function applyRedo(command = {}) {
       }
       trimmedUndoStack = trimUndoStack(undoStack);
 
-      const nextOpState = {
+      nextOpState = {
         docId: normalizedCommand.docId,
         clientId: normalizedCommand.clientId,
         undoStackJson: trimmedUndoStack,
@@ -512,7 +524,14 @@ async function applyRedo(command = {}) {
       await executeMutation();
     }
 
-    docStateCache.set(normalizedCommand.docId, updatedDoc);
+    if (nextOpState && typeof userOpStateStore.syncRuntimeState === 'function') {
+      await userOpStateStore.syncRuntimeState(nextOpState);
+    }
+
+    await Promise.all([
+      docStateCache.set(normalizedCommand.docId, updatedDoc),
+      redoHistoryEntry ? historyCache.append(redoHistoryEntry) : Promise.resolve(),
+    ]);
     await docsService.invalidateDocCaches(normalizedCommand.docId);
 
     await recordAuditBestEffort({

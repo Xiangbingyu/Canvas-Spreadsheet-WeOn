@@ -44,6 +44,7 @@ async function executeImportSheet(normalizedCommand) {
   return docLock.withDocLock(normalizedCommand.docId, async () => {
     let updatedDoc = null;
     let seq = 0;
+    let nextOpState = null;
 
     if (storeConfig.driver === 'mysql') {
       await asyncWriteQueue.drain();
@@ -72,12 +73,13 @@ async function executeImportSheet(normalizedCommand) {
         payloadJson: normalizedCommand.snapshot,
       }, { connection });
 
-      await userOpStateStore.saveState({
+      nextOpState = {
         docId: normalizedCommand.docId,
         clientId: normalizedCommand.clientId,
         undoStackJson: [],
         redoStackJson: [],
-      }, { connection });
+      };
+      await userOpStateStore.saveState(nextOpState, { connection });
     };
 
     if (storeConfig.driver === 'mysql') {
@@ -86,10 +88,16 @@ async function executeImportSheet(normalizedCommand) {
       await executeMutation();
     }
 
+    if (nextOpState && typeof userOpStateStore.syncRuntimeState === 'function') {
+      await userOpStateStore.syncRuntimeState(nextOpState);
+    }
+
     // importSheet is a full replacement — invalidate memory caches before repopulating
-    historyCache.invalidateByDocId(normalizedCommand.docId);
-    docStateCache.invalidate(normalizedCommand.docId);
-    docStateCache.set(normalizedCommand.docId, updatedDoc);
+    await Promise.all([
+      historyCache.invalidateByDocId(normalizedCommand.docId),
+      docStateCache.invalidate(normalizedCommand.docId),
+    ]);
+    await docStateCache.set(normalizedCommand.docId, updatedDoc);
     await docsService.invalidateDocCaches(normalizedCommand.docId);
 
     await auditService.recordAuditEvent({

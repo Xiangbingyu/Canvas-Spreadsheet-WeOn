@@ -10,15 +10,22 @@ const collabConfig = require('../config/collabConfig');
 const { normalizeBaseSeq, rebaseSetCellCommand } = require('./cellOtService');
 const docStateCache = require('../cache/docStateCache');
 const historyCache = require('../cache/historyCache');
+const docSnapshotCache = require('../cache/docSnapshotCache');
+const cacheStore = require('../cache/cacheStore');
+const cacheConfig = require('../config/cacheConfig');
+const { docSeqKey, docSnapshotKey, histEntryKey } = require('../cache/cacheKeys');
 const asyncWriteQueue = require('../infra/asyncWriteQueue');
+const { commitSetCellAtomically } = require('../infra/redis/setCellAtomicCommit');
 const { deepClone } = require('../utils/clone');
 const { normalizeDocSnapshot } = require('../domain/entities/doc');
 
-// historyStore wrapper: hit memory cache first, fall back to DB
+const ATOMIC_SET_CELL_RETRY_LIMIT = 1;
+
+// historyStore wrapper: hit cache first, fall back to DB
 const historyCacheAwareStore = {
   ...historyStore,
   async listByDocIdSeqRange(docId, start, end, opts) {
-    const cached = historyCache.listByDocIdSeqRange(docId, start, end);
+    const cached = await historyCache.listByDocIdSeqRange(docId, start, end);
     if (cached !== null) return cached;
     return historyStore.listByDocIdSeqRange(docId, start, end, opts);
   },
@@ -78,6 +85,10 @@ function createServiceError(code, message, details = null) {
   return error;
 }
 
+function isSeqMismatchError(error) {
+  return String(error?.message || '').includes('SEQ_MISMATCH');
+}
+
 function isValidCellPosition(value) {
   return Number.isInteger(value) && value >= 1;
 }
@@ -117,6 +128,42 @@ function trimUndoStack(entries) {
   return entries.length <= limit ? entries : entries.slice(entries.length - limit);
 }
 
+function toCachedDocView(docRecord) {
+  return {
+    docId: docRecord.docId,
+    title: docRecord.title,
+    currentSeq: docRecord.currentSeq,
+    createdBy: docRecord.createdBy,
+    createdAt: docRecord.createdAt,
+    updatedAt: docRecord.updatedAt || new Date().toISOString(),
+    snapshot: docRecord.snapshotJson,
+  };
+}
+
+async function writeLiveDocState(docRecord, historyEntry = null) {
+  const entries = [
+    {
+      key: docSeqKey(docRecord.docId),
+      value: { currentSeq: docRecord.currentSeq },
+    },
+    {
+      key: docSnapshotKey(docRecord.docId),
+      value: toCachedDocView(docRecord),
+      ttlMs: cacheConfig.docSnapshotTtlMs,
+    },
+  ];
+
+  if (historyEntry) {
+    entries.push({
+      key: histEntryKey(historyEntry.docId, historyEntry.seq),
+      value: historyEntry,
+      ttlMs: cacheConfig.historyTtlMs,
+    });
+  }
+
+  await cacheStore.setMany(entries);
+}
+
 async function applySetCell(command = {}) {
   const normalizedCommand = normalizeSetCellCommand(command);
 
@@ -131,84 +178,152 @@ async function applySetCell(command = {}) {
     let updatedRecord;
 
     if (storeConfig.driver === 'mysql') {
-      // --- mysql fast path: all reads/writes in memory, MySQL async ---
-      let currentDoc = docStateCache.get(normalizedCommand.docId);
-      if (!currentDoc) {
-        currentDoc = await docsService.getDocStateForWrite(normalizedCommand.docId);
-        if (!currentDoc) throw createServiceError(ERROR_CODES.DOCUMENT_NOT_FOUND, `document not found: ${normalizedCommand.docId}`);
-        docStateCache.set(normalizedCommand.docId, currentDoc);
-      }
+      // --- mysql fast path: reads from cache, MySQL async ---
+      const docId = normalizedCommand.docId;
+      const canUseAtomicRedisCommit = cacheConfig.driver === 'redis'
+        && userOpStateStore.type === 'mysql+redis';
+      const maxAttempts = canUseAtomicRedisCommit ? (ATOMIC_SET_CELL_RETRY_LIMIT + 1) : 1;
 
-      const otResult = await rebaseSetCellCommand({
-        command: normalizedCommand,
-        currentDoc,
-        historyStore: historyCacheAwareStore,
-      });
-      effectiveCommand = otResult.command;
-      rebaseResult = otResult.rebaseResult;
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        // Read seq and snapshot separately (both backed by cacheStore → Redis or memory)
+        let [seqData, docView] = await Promise.all([
+          docStateCache.get(docId),
+          docSnapshotCache.get(docId),
+        ]);
 
-      const currentSheets = (currentDoc.snapshotJson || {}).sheets || {};
-      if (!currentSheets[effectiveCommand.sheetId]) {
-        throw createServiceError(ERROR_CODES.INVALID_PARAMS, `sheet not found: ${effectiveCommand.sheetId}`, {
-          docId: effectiveCommand.docId, sheetId: effectiveCommand.sheetId,
+        if (!seqData || !docView) {
+          const dbDoc = await docsService.getDocStateForWrite(docId);
+          if (!dbDoc) throw createServiceError(ERROR_CODES.DOCUMENT_NOT_FOUND, `document not found: ${docId}`);
+          await writeLiveDocState({
+            ...dbDoc,
+            snapshotJson: normalizeDocSnapshot(dbDoc.snapshotJson, { docId }),
+          });
+          [seqData, docView] = await Promise.all([
+            docStateCache.get(docId),
+            docSnapshotCache.get(docId),
+          ]);
+        }
+
+        // Compose currentDoc from the two cache entries
+        const currentDoc = {
+          docId: docView.docId,
+          title: docView.title,
+          currentSeq: seqData.currentSeq,
+          createdBy: docView.createdBy,
+          createdAt: docView.createdAt,
+          updatedAt: docView.updatedAt,
+          snapshotJson: docView.snapshot,
+        };
+
+        const otResult = await rebaseSetCellCommand({
+          command: normalizedCommand,
+          currentDoc,
+          historyStore: historyCacheAwareStore,
         });
+        effectiveCommand = otResult.command;
+        rebaseResult = otResult.rebaseResult;
+
+        const currentSheets = (currentDoc.snapshotJson || {}).sheets || {};
+        if (!currentSheets[effectiveCommand.sheetId]) {
+          throw createServiceError(ERROR_CODES.INVALID_PARAMS, `sheet not found: ${effectiveCommand.sheetId}`, {
+            docId: effectiveCommand.docId, sheetId: effectiveCommand.sheetId,
+          });
+        }
+
+        const applied = applySetCellToRecord(currentDoc, effectiveCommand);
+        if (!applied) throw createServiceError(ERROR_CODES.DOCUMENT_NOT_FOUND, `document not found: ${normalizedCommand.docId}`);
+        ({ updatedRecord, targetSheetId, oldValue, oldStyle } = applied);
+
+        seq = currentDoc.currentSeq + 1;
+        updatedRecord.currentSeq = seq;
+
+        const historyEntry = {
+          docId: normalizedCommand.docId,
+          clientId: normalizedCommand.clientId,
+          seq,
+          baseSeq: rebaseResult.baseSeq,
+          opType: 'set_cell',
+          targetSheetId,
+          targetRow: effectiveCommand.row,
+          targetCol: effectiveCommand.col,
+          oldValueJson: { value: oldValue, style: oldStyle },
+          newValueJson: { value: effectiveCommand.value, style: effectiveCommand.style },
+          createdAt: new Date().toISOString(),
+        };
+
+        // undo stack — still sync (lightweight, no snapshot)
+        const opState = await userOpStateStore.getState(normalizedCommand.docId, normalizedCommand.clientId);
+        const undoStack = opState ? [...opState.undoStackJson] : [];
+        undoStack.push({
+          sourceSeq: seq,
+          docId: normalizedCommand.docId,
+          clientId: normalizedCommand.clientId,
+          opType: 'set_cell',
+          sheetId: targetSheetId,
+          row: effectiveCommand.row,
+          col: effectiveCommand.col,
+          oldValue,
+          oldStyle,
+          newValue: effectiveCommand.value,
+          newStyle: effectiveCommand.style,
+          baseSeq: rebaseResult.baseSeq,
+        });
+        trimmedUndoStack = trimUndoStack(undoStack);
+        const nextUserOpState = {
+          docId: normalizedCommand.docId,
+          clientId: normalizedCommand.clientId,
+          undoStackJson: trimmedUndoStack,
+          redoStackJson: [],
+        };
+        const persistMessage = {
+          type: 'persistSetCell',
+          data: {
+            docId: normalizedCommand.docId,
+            snapshotJson: updatedRecord.snapshotJson,
+            seq,
+            updatedAt: historyEntry.createdAt,
+            historyEntry,
+            userOpState: nextUserOpState,
+          },
+        };
+
+        if (canUseAtomicRedisCommit) {
+          try {
+            await commitSetCellAtomically({
+              expectedSeq: currentDoc.currentSeq,
+              updatedRecord,
+              historyEntry,
+              userOpState: nextUserOpState,
+              persistMessage,
+            });
+            break;
+          } catch (error) {
+            if (isSeqMismatchError(error) && attempt < maxAttempts) {
+              console.warn('[cellService] set_cell atomic commit seq mismatch, retrying once', {
+                docId: normalizedCommand.docId,
+                expectedSeq: currentDoc.currentSeq,
+                attempt,
+              });
+              continue;
+            }
+
+            if (isSeqMismatchError(error)) {
+              throw createServiceError(ERROR_CODES.CONFLICT, 'set_cell live state sequence mismatch', {
+                docId: normalizedCommand.docId,
+                expectedSeq: currentDoc.currentSeq,
+                attempts: attempt,
+              });
+            }
+
+            throw error;
+          }
+        } else {
+          await userOpStateStore.saveState(nextUserOpState);
+          await writeLiveDocState(updatedRecord, historyEntry);
+          await asyncWriteQueue.enqueue(persistMessage);
+          break;
+        }
       }
-
-      const applied = applySetCellToRecord(currentDoc, effectiveCommand);
-      if (!applied) throw createServiceError(ERROR_CODES.DOCUMENT_NOT_FOUND, `document not found: ${normalizedCommand.docId}`);
-      ({ updatedRecord, targetSheetId, oldValue, oldStyle } = applied);
-
-      seq = currentDoc.currentSeq + 1;
-      updatedRecord.currentSeq = seq;
-
-      const historyEntry = {
-        docId: normalizedCommand.docId,
-        clientId: normalizedCommand.clientId,
-        seq,
-        baseSeq: rebaseResult.baseSeq,
-        opType: 'set_cell',
-        targetSheetId,
-        targetRow: effectiveCommand.row,
-        targetCol: effectiveCommand.col,
-        oldValueJson: { value: oldValue, style: oldStyle },
-        newValueJson: { value: effectiveCommand.value, style: effectiveCommand.style },
-        createdAt: new Date().toISOString(),
-      };
-
-      // undo stack — still sync (lightweight, no snapshot)
-      const opState = await userOpStateStore.getState(normalizedCommand.docId, normalizedCommand.clientId);
-      const undoStack = opState ? [...opState.undoStackJson] : [];
-      undoStack.push({
-        sourceSeq: seq,
-        docId: normalizedCommand.docId,
-        clientId: normalizedCommand.clientId,
-        opType: 'set_cell',
-        sheetId: targetSheetId,
-        row: effectiveCommand.row,
-        col: effectiveCommand.col,
-        oldValue,
-        oldStyle,
-        newValue: effectiveCommand.value,
-        newStyle: effectiveCommand.style,
-        baseSeq: rebaseResult.baseSeq,
-      });
-      trimmedUndoStack = trimUndoStack(undoStack);
-      await userOpStateStore.saveState({
-        docId: normalizedCommand.docId,
-        clientId: normalizedCommand.clientId,
-        undoStackJson: trimmedUndoStack,
-        redoStackJson: [],
-      });
-
-      // Commit the live in-memory state only after the sync user-op-state write succeeds.
-      docStateCache.set(normalizedCommand.docId, updatedRecord);
-      historyCache.append(historyEntry);
-      asyncWriteQueue.enqueue({
-        type: 'applySetCell',
-        data: { docId: normalizedCommand.docId, snapshotJson: updatedRecord.snapshotJson, seq, updatedAt: historyEntry.createdAt },
-      });
-      asyncWriteQueue.enqueue({ type: 'appendHistory', data: historyEntry });
-      await docsService.invalidateDocCaches(normalizedCommand.docId);
     } else {
       // --- memory store path: unchanged ---
       let currentDocForMemory = null;

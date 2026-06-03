@@ -123,6 +123,7 @@ async function applySetRangeValues(command = {}) {
     let updatedDoc = null;
     let seq = 0;
     let trimmedUndoStack = [];
+    let nextOpState = null;
     let effectiveCommand = normalizedCommand;
     let finalCells = [];
     let targetSheetId = normalizedCommand.sheetId;
@@ -208,12 +209,13 @@ async function applySetRangeValues(command = {}) {
       }));
       trimmedUndoStack = trimStack(undoStack);
 
-      await userOpStateStore.saveState({
+      nextOpState = {
         docId: normalizedCommand.docId,
         clientId: normalizedCommand.clientId,
         undoStackJson: trimmedUndoStack,
         redoStackJson: [],
-      }, { connection });
+      };
+      await userOpStateStore.saveState(nextOpState, { connection });
     };
 
     if (storeConfig.driver === 'mysql') {
@@ -222,15 +224,21 @@ async function applySetRangeValues(command = {}) {
       await executeMutation();
     }
 
-    docStateCache.set(normalizedCommand.docId, updatedDoc);
-    historyCache.append({
-      docId: normalizedCommand.docId,
-      clientId: normalizedCommand.clientId,
-      seq,
-      baseSeq: effectiveCommand.baseSeq,
-      opType: 'set_range_values',
-      targetSheetId,
-    });
+    if (nextOpState && typeof userOpStateStore.syncRuntimeState === 'function') {
+      await userOpStateStore.syncRuntimeState(nextOpState);
+    }
+
+    await Promise.all([
+      docStateCache.set(normalizedCommand.docId, updatedDoc),
+      historyCache.append({
+        docId: normalizedCommand.docId,
+        clientId: normalizedCommand.clientId,
+        seq,
+        baseSeq: effectiveCommand.baseSeq,
+        opType: 'set_range_values',
+        targetSheetId,
+      }),
+    ]);
     await docsService.invalidateDocCaches(normalizedCommand.docId);
 
     await auditService.recordAuditEvent({

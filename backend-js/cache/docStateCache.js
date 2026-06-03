@@ -1,17 +1,16 @@
-const { deepClone } = require('../utils/clone');
-
-const store = new Map();
+const cacheStore = require('./cacheStore');
+const { docSeqKey } = require('./cacheKeys');
 
 module.exports = {
-  get(docId) {
-    return store.get(docId) || null;
+  async get(docId) {
+    return cacheStore.get(docSeqKey(docId));
   },
 
-  set(docId, record) {
-    store.set(docId, deepClone(record));
+  async set(docId, record) {
+    await cacheStore.set(docSeqKey(docId), { currentSeq: record.currentSeq });
   },
 
-  invalidate(docId) {
-    store.delete(docId);
+  async invalidate(docId) {
+    await cacheStore.delete(docSeqKey(docId));
   },
 };

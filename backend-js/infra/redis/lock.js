@@ -10,6 +10,12 @@ const RELEASE_LOCK_SCRIPT = `
   end
   return 0
 `;
+const RENEW_LOCK_SCRIPT = `
+  if redis.call("GET", KEYS[1]) == ARGV[1] then
+    return redis.call("PEXPIRE", KEYS[1], ARGV[2])
+  end
+  return 0
+`;
 
 function createNoopLockManager() {
   return {
@@ -58,6 +64,19 @@ function createRedisLockManager() {
     });
   }
 
+  async function renewLock(docId, token) {
+    await ensureReady();
+
+    if (isClosing || !client.isOpen) {
+      return 0;
+    }
+
+    return client.eval(RENEW_LOCK_SCRIPT, {
+      keys: [getLockKey(docId)],
+      arguments: [token, String(lockConfig.ttlMs)],
+    });
+  }
+
   return {
     async withDocLock(docId, handler) {
       await ensureReady();
@@ -86,9 +105,34 @@ function createRedisLockManager() {
         await new Promise((resolve) => setTimeout(resolve, lockConfig.retryIntervalMs));
       }
 
+      let renewalTimer;
       try {
+        let renewalInFlight = false;
+        if (lockConfig.ttlMs > 1000) {
+          const renewalInterval = Math.floor(lockConfig.ttlMs / 2);
+          renewalTimer = setInterval(async () => {
+            if (renewalInFlight) {
+              return;
+            }
+
+            renewalInFlight = true;
+            try {
+              if (client.isOpen) {
+                const renewed = await renewLock(docId, token);
+                if (renewed !== 1) {
+                  console.error(`lock renewal skipped for ${docId}: token no longer owns the lock`);
+                }
+              }
+            } catch (err) {
+              console.error(`lock renewal failed for ${docId}:`, err);
+            } finally {
+              renewalInFlight = false;
+            }
+          }, renewalInterval);
+        }
         return await handler();
       } finally {
+        if (renewalTimer) clearInterval(renewalTimer);
         await releaseLock(docId, token).catch((error) => {
           console.error(`release doc lock failed for ${docId}:`, error);
         });

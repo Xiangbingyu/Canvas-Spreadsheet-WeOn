@@ -106,14 +106,16 @@ async function applySetTitle(command = {}) {
       await executeMutation();
     }
 
-    docStateCache.set(normalizedCommand.docId, updatedDoc);
-    historyCache.append({
-      docId: normalizedCommand.docId,
-      clientId: normalizedCommand.clientId,
-      seq,
-      baseSeq: rebaseResult.baseSeq,
-      opType: 'set_title',
-    });
+    await Promise.all([
+      docStateCache.set(normalizedCommand.docId, updatedDoc),
+      historyCache.append({
+        docId: normalizedCommand.docId,
+        clientId: normalizedCommand.clientId,
+        seq,
+        baseSeq: rebaseResult.baseSeq,
+        opType: 'set_title',
+      }),
+    ]);
     await docsService.invalidateDocCaches(normalizedCommand.docId);
 
     await auditService.recordAuditEvent({

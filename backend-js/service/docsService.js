@@ -132,9 +132,48 @@ async function primeDocCaches(docRecord, options = {}) {
   const docMeta = options.docMeta || toDocMeta(docRecord);
 
   await Promise.all([
+    docStateCache.set(docRecord.docId, docRecord),
     docSnapshotCache.set(docRecord.docId, docView),
     docMetaCache.set(docRecord.docId, docMeta),
   ]);
+}
+
+async function getLiveDocRecord(docId) {
+  if (storeConfig.driver !== 'mysql') {
+    return null;
+  }
+
+  const [liveSeq, liveSnapshot] = await Promise.all([
+    docStateCache.get(docId),
+    docSnapshotCache.get(docId),
+  ]);
+
+  if (!liveSnapshot) {
+    return null;
+  }
+
+  if (
+    liveSeq
+    && Number.isInteger(liveSeq.currentSeq)
+    && Number.isInteger(liveSnapshot.currentSeq)
+    && liveSeq.currentSeq !== liveSnapshot.currentSeq
+  ) {
+    await Promise.all([
+      docSnapshotCache.invalidate(docId),
+      docMetaCache.invalidate(docId),
+    ]);
+    return null;
+  }
+
+  return {
+    docId: liveSnapshot.docId,
+    title: liveSnapshot.title,
+    currentSeq: liveSeq?.currentSeq ?? liveSnapshot.currentSeq,
+    createdBy: liveSnapshot.createdBy,
+    createdAt: liveSnapshot.createdAt,
+    updatedAt: liveSnapshot.updatedAt,
+    snapshotJson: liveSnapshot.snapshot,
+  };
 }
 
 async function getValidRememberedCreateDocResponse(record) {
@@ -148,7 +187,7 @@ async function getValidRememberedCreateDocResponse(record) {
 
 async function getDocMeta(docId) {
   const normalizedDocId = normalizeDocId(docId);
-  const liveDoc = storeConfig.driver === 'mysql' ? docStateCache.get(normalizedDocId) : null;
+  const liveDoc = await getLiveDocRecord(normalizedDocId);
 
   if (liveDoc) {
     const docMeta = toDocMeta(liveDoc);
@@ -357,9 +396,12 @@ async function listDocsByUser(input = {}) {
     return cachedList;
   }
 
-  const allDocs = (await docStore.list()).map((doc) => (
-    storeConfig.driver === 'mysql' ? (docStateCache.get(doc.docId) || doc) : doc
-  ));
+  const allDocs = await Promise.all(
+    (await docStore.list()).map(async (doc) => {
+      const liveDoc = await getLiveDocRecord(doc.docId);
+      return liveDoc || doc;
+    })
+  );
   const createdDocs = [];
   const participatedDocs = [];
 
@@ -448,7 +490,7 @@ function normalizeDocId(docId) {
 // 3. store 命中后同时回填 snapshot/meta 缓存
 async function getDocState(docId) {
   const normalizedDocId = normalizeDocId(docId);
-  const liveDoc = storeConfig.driver === 'mysql' ? docStateCache.get(normalizedDocId) : null;
+  const liveDoc = await getLiveDocRecord(normalizedDocId);
 
   if (liveDoc) {
     const docView = toDocView(liveDoc);
@@ -519,6 +561,7 @@ module.exports = {
   getDocState,
   getDocStateForWrite,
   getDocMeta,
+  getLiveDocRecord,
   applySetCell,
   applyBatchSetCell,
   applyRangeValues,
