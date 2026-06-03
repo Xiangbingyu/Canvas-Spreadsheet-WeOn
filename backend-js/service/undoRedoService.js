@@ -3,10 +3,12 @@ const storeConfig = require('../config/storeConfig');
 const { withTransaction } = require('../db/mysql');
 const docLock = require('../infra/redis/lock');
 const docsService = require('./docsService');
+const docStateCache = require('../cache/docStateCache');
 const userOpStateStore = require('../store/userOpStateStore');
 const auditService = require('../audit/auditService');
 const collabConfig = require('../config/collabConfig');
 const { isNonEmptyString } = require('../protocol/validators');
+const asyncWriteQueue = require('../infra/asyncWriteQueue');
 const {
   resolveUndoRedoOperation,
   resolveUndoRedoBatchOperation,
@@ -105,6 +107,10 @@ async function applyUndo(command = {}) {
     let trimmedRedoStack = [];
     let entry = null;
     let otResult = null;
+
+    if (storeConfig.driver === 'mysql') {
+      await asyncWriteQueue.drain();
+    }
 
     const executeMutation = async (connection = null) => {
       const currentDoc = await docsService.getDocStateForWrite(normalizedCommand.docId, {
@@ -286,6 +292,7 @@ async function applyUndo(command = {}) {
       await executeMutation();
     }
 
+    docStateCache.set(normalizedCommand.docId, updatedDoc);
     await docsService.invalidateDocCaches(normalizedCommand.docId);
 
     await recordAuditBestEffort({
@@ -327,6 +334,10 @@ async function applyRedo(command = {}) {
     let trimmedUndoStack = [];
     let entry = null;
     let otResult = null;
+
+    if (storeConfig.driver === 'mysql') {
+      await asyncWriteQueue.drain();
+    }
 
     const executeMutation = async (connection = null) => {
       const currentDoc = await docsService.getDocStateForWrite(normalizedCommand.docId, {
@@ -501,6 +512,7 @@ async function applyRedo(command = {}) {
       await executeMutation();
     }
 
+    docStateCache.set(normalizedCommand.docId, updatedDoc);
     await docsService.invalidateDocCaches(normalizedCommand.docId);
 
     await recordAuditBestEffort({

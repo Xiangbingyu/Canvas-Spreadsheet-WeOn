@@ -1,6 +1,8 @@
 const docSnapshotCache = require('../cache/docSnapshotCache');
 const docMetaCache = require('../cache/docMetaCache');
+const docStateCache = require('../cache/docStateCache');
 const userDocsListCache = require('../cache/userDocsListCache');
+const storeConfig = require('../config/storeConfig');
 const idempotencyService = require('../idempotency/idempotencyService');
 const { createDocRequestKey } = require('../idempotency/idempotencyKeys');
 const { ERROR_CODES } = require('../protocol/errorCodes');
@@ -146,6 +148,14 @@ async function getValidRememberedCreateDocResponse(record) {
 
 async function getDocMeta(docId) {
   const normalizedDocId = normalizeDocId(docId);
+  const liveDoc = storeConfig.driver === 'mysql' ? docStateCache.get(normalizedDocId) : null;
+
+  if (liveDoc) {
+    const docMeta = toDocMeta(liveDoc);
+    await primeDocCaches(liveDoc, { docMeta, docView: toDocView(liveDoc) });
+    return docMeta;
+  }
+
   const cachedMeta = await docMetaCache.get(normalizedDocId);
 
   if (cachedMeta) {
@@ -347,7 +357,9 @@ async function listDocsByUser(input = {}) {
     return cachedList;
   }
 
-  const allDocs = await docStore.list();
+  const allDocs = (await docStore.list()).map((doc) => (
+    storeConfig.driver === 'mysql' ? (docStateCache.get(doc.docId) || doc) : doc
+  ));
   const createdDocs = [];
   const participatedDocs = [];
 
@@ -436,6 +448,14 @@ function normalizeDocId(docId) {
 // 3. store 命中后同时回填 snapshot/meta 缓存
 async function getDocState(docId) {
   const normalizedDocId = normalizeDocId(docId);
+  const liveDoc = storeConfig.driver === 'mysql' ? docStateCache.get(normalizedDocId) : null;
+
+  if (liveDoc) {
+    const docView = toDocView(liveDoc);
+    await primeDocCaches(liveDoc, { docView, docMeta: toDocMeta(liveDoc) });
+    return docView;
+  }
+
   const cachedDoc = await docSnapshotCache.get(normalizedDocId);
 
   if (cachedDoc) {
