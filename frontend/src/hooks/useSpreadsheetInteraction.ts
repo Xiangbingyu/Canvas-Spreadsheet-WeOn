@@ -2,9 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import { useDispatch, useSelector, useStore } from 'react-redux'
 import { InteractionEngine } from '@/spreadsheet/interaction/interactionEngine'
 import { GRID_CHROME } from '@/spreadsheet/utils/coordinates'
-import { updateCell } from '@/spreadsheet/store/workSheetStore'
+import { updateCell, setRangeValues } from '@/spreadsheet/store/workSheetStore'
+import type { RangeValueCell } from '@/spreadsheet/store/workbookStore'
 import { setSelectedCell } from '@/spreadsheet/store/selectStore'
 import { setClipboard } from '@/spreadsheet/store'
+import { findOrCreateStyleId } from '@/spreadsheet/utils/generateStyleId'
 import { cellsToTSV, parseTSV } from '@/spreadsheet/utils/tsvConverter'
 import { parseFormula, isFormula } from '@/spreadsheet/utils/formulaParser'
 import { calculateFormula } from '@/spreadsheet/utils/formulaCalculator'
@@ -261,6 +263,10 @@ export function useSpreadsheetInteraction(options: UseSpreadsheetInteractionOpti
               const rowOffset = pasteStartRow - clipboard.range.startRow
               const colOffset = pasteStartCol - clipboard.range.startCol
 
+              // 收集整片为「样式池化」结构，一条 setRangeValues 原子写入，
+              // 替代逐格 commitCell（避免 N 格 = N 条 WS 消息抢锁，对齐协议提案）。
+              const stylesPool: Record<string, Style> = {}
+              const rangeCells: RangeValueCell[] = []
               const invalidCells: Array<{ row: number; col: number }> = []
               for (const [key, clipCell] of Object.entries(clipboard.cells)) {
                 const [rowStr, colStr] = key.split(':')
@@ -278,11 +284,26 @@ export function useSpreadsheetInteraction(options: UseSpreadsheetInteractionOpti
                   continue
                 }
 
-                commitCell(targetRow, targetCol, clipCell.value, clipCell.style)
+                // 样式池化：相同样式只存一份，cell 用 styleId 引用；无样式则不带 styleId
+                const styleId = clipCell.style
+                  ? findOrCreateStyleId(stylesPool, clipCell.style)
+                  : undefined
+                rangeCells.push({
+                  row: targetRow,
+                  col: targetCol,
+                  value: clipCell.value,
+                  ...(styleId !== undefined ? { styleId } : {}),
+                })
                 invalidCells.push({ row: targetRow, col: targetCol })
               }
-              // 批量通知 Canvas 局部重绘，避免逐格触发整帧重绘
-              canvasHandleRef.current?.invalidateCells(invalidCells)
+
+              if (rangeCells.length > 0) {
+                // 本地兜底写入（协同 set_range_values 接口 ready 后改为走 WS 发送）
+                const sheetId = reduxStore.getState().workSheet.sheetId
+                dispatch(setRangeValues({ sheetId, styles: stylesPool, cells: rangeCells }))
+                // 批量通知 Canvas 局部重绘，避免逐格触发整帧重绘
+                canvasHandleRef.current?.invalidateCells(invalidCells)
+              }
               return
             }
 
@@ -302,6 +323,8 @@ export function useSpreadsheetInteraction(options: UseSpreadsheetInteractionOpti
               const rowOffset = pasteStartRow - parsed.range.startRow
               const colOffset = pasteStartCol - parsed.range.startCol
 
+              // 系统剪贴板 TSV 只有内容、无样式：收集为 cells（仅 value），一条 setRangeValues 写入
+              const rangeCells: RangeValueCell[] = []
               const invalidCells: Array<{ row: number; col: number }> = []
               for (const [key, clipCell] of Object.entries(parsed.cells)) {
                 const [rowStr, colStr] = key.split(':')
@@ -319,11 +342,17 @@ export function useSpreadsheetInteraction(options: UseSpreadsheetInteractionOpti
                   continue
                 }
 
-                commitCell(targetRow, targetCol, clipCell.value)
+                rangeCells.push({ row: targetRow, col: targetCol, value: clipCell.value })
                 invalidCells.push({ row: targetRow, col: targetCol })
               }
-              // 批量通知 Canvas 局部重绘
-              canvasHandleRef.current?.invalidateCells(invalidCells)
+
+              if (rangeCells.length > 0) {
+                // 本地兜底写入（协同 set_range_values 接口 ready 后改为走 WS 发送）
+                const sheetId = reduxStore.getState().workSheet.sheetId
+                dispatch(setRangeValues({ sheetId, cells: rangeCells }))
+                // 批量通知 Canvas 局部重绘
+                canvasHandleRef.current?.invalidateCells(invalidCells)
+              }
             } catch (err) {
               console.warn('[useSpreadsheetInteraction] System clipboard read failed:', err)
             }

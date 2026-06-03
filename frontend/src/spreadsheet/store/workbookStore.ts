@@ -8,7 +8,7 @@
  * 对应 WS set_cell / cell_updated / undo_applied / redo_applied
  */
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit'
-import type { WorksheetData } from '@/spreadsheet/model/types'
+import type { Style, WorksheetData } from '@/spreadsheet/model/types'
 import { createEmptySheet, generateNextSheetId } from '@/spreadsheet/utils/createEmptySheet'
 import {
   applyUpdateCellToWorksheet,
@@ -61,6 +61,28 @@ export type ApplySheetAddedPayload = {
 export type UpdateRangePayload = {
   sheetId: string
   updates: ApplyUpdateCellInput[]
+}
+
+/**
+ * set_range_values 的单元格项（协议形态）：逐格不同的 value/style。
+ * - value 缺省：保留该格原值
+ * - styleId 缺省：保留该格原样式；显式 null：清空样式
+ */
+export type RangeValueCell = {
+  row: number
+  col: number
+  value?: string
+  styleId?: string | null
+}
+
+/**
+ * set_range_values 的 payload（与 WS 协议提案对齐，见 plan/SetRangeValues_协议提案_lxl.md）。
+ * 样式池化：相同样式只存一份在 styles 池，cells 用 styleId 引用，承载超大数据写入。
+ */
+export type SetRangeValuesPayload = {
+  sheetId: string
+  styles?: Record<string, Style>
+  cells: RangeValueCell[]
 }
 
 const workbookSlice = createSlice({
@@ -190,6 +212,44 @@ const workbookSlice = createSlice({
         applyUpdateCellToWorksheet(sheet, u)
       }
     },
+
+    /**
+     * 逐格不同的原子批量写入（对应 WS set_range_values / range_values_updated）
+     *
+     * 与 updateRange 的区别：updateRange 各 update 内联 Style；本接口用样式池化
+     * （styles 池 + cells 引用 styleId），承载粘贴 / 混排撤回等超大数据写入。
+     * reducer 内把 styleId 解引用为 Style 后复用 applyUpdateCellToWorksheet：
+     * - styleId 缺省 → style 传 undefined（保留原样式）
+     * - styleId 为 null → style 传 null（清空样式）
+     * - styleId 命中池 → style 传对应 Style 对象
+     * - value 缺省 → 用该格原值（保留内容）
+     *
+     * 协作模块收到广播后只需：dispatch(setRangeValues({ sheetId, styles, cells }))
+     */
+    setRangeValues(state, action: PayloadAction<SetRangeValuesPayload>) {
+      const { sheetId, styles, cells } = action.payload
+      const sheet = state.sheets[sheetId]
+      if (!sheet) return
+
+      for (const cell of cells) {
+        const { row, col, value, styleId } = cell
+
+        let style: Style | null | undefined
+        if (styleId === null) {
+          style = null // 显式清空样式
+        } else if (styleId !== undefined) {
+          style = styles?.[styleId] // 引用样式池；池中缺失则为 undefined（保留原样式）
+        } else {
+          style = undefined // 不改样式
+        }
+
+        // value 缺省时保留该格原值
+        const prev = sheet.cells[`${row}:${col}`]
+        const nextValue = value !== undefined ? value : (prev?.value ?? '')
+
+        applyUpdateCellToWorksheet(sheet, { row, col, value: nextValue, style })
+      }
+    },
   },
 })
 
@@ -202,5 +262,6 @@ export const {
   importWorkbook,
   updateCell,
   updateRange,
+  setRangeValues,
 } = workbookSlice.actions
 export const workbookReducer = workbookSlice.reducer
