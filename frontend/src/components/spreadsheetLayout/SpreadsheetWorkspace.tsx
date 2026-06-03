@@ -10,6 +10,7 @@ import { StatusBar } from '@/components/statusBar/StatusBar'
 import { Toolbar } from '@/components/Toolbar/Toolbar'
 import { CellEditOverlay } from '@/components/cellEditor/CellEditOverlay'
 import GrideCanvas from '@/components/grideCanvas/GrideCanvas'
+import type { GrideCanvasHandle } from '@/components/grideCanvas/GrideCanvas'
 import { useSpreadsheetInteraction } from '@/hooks/useSpreadsheetInteraction'
 import { useCommitCell, useCommitBatch } from '@/hooks/useCommitCell'
 import type { BatchCommitFn } from '@/hooks/useCommitCell'
@@ -37,6 +38,12 @@ export function SpreadsheetWorkspace() {
   const activeWorksheet = useSelector((s: RootState) => s.workSheet)
   const selection = useSelector((s: RootState) => s.selection)
   const lastSentCursorRef = useRef('')
+  // 远端 set_range_values 回写后做 Canvas 局部重绘的入口。canvasHandleRef 由
+  // useSpreadsheetInteraction 在下方返回，这里用一个稳定 ref 中转，供 useCollab 调用时读取。
+  const canvasHandleHolderRef = useRef<GrideCanvasHandle | null>(null)
+  const handleRemoteRangeApplied = useCallback((cells: Array<{ row: number; col: number }>) => {
+    canvasHandleHolderRef.current?.invalidateCells(cells)
+  }, [])
   const {
     connect,
     disconnect,
@@ -54,6 +61,7 @@ export function SpreadsheetWorkspace() {
     docId,
     clientId,
     userName: userName.trim(),
+    onRemoteRangeApplied: handleRemoteRangeApplied,
   })
   useEffect(() => {
     if (connectionStatus !== 'connected') {
@@ -131,6 +139,11 @@ export function SpreadsheetWorkspace() {
   } = useSpreadsheetInteraction({
     onCommitCell: commitWithHistory,
     onCommitRange: commitRangeWithHistory,
+  })
+
+  // 把交互模块的 canvasHandleRef 同步到中转 ref，供 useCollab 的远端回写局部重绘读取。
+  useEffect(() => {
+    canvasHandleHolderRef.current = canvasHandleRef.current
   })
 
   // 提交后通知 Canvas 局部重绘（不写 Redux、不提交数据，仅标记脏区下一帧只重绘这些格）。

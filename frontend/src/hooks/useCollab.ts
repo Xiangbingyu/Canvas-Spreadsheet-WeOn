@@ -43,6 +43,12 @@ import {
 import type { Style } from '@/spreadsheet/model/types'
 import type { AppDispatch, RootState } from '@/spreadsheet/store'
 
+/**
+ * 远端 set_range_values 回写时走局部重绘的变更格数上限。
+ * 超过则脏区过多、不如一次全量重绘，交回 Redux 订阅触发的全量路径。
+ */
+const REMOTE_INVALIDATE_LIMIT = 500
+
 /** 乐观更新：先把 workbook 写入本地 Redux（Canvas 立即刷新） */
 function applyLocalWorkbookImport(dispatch: AppDispatch, workbook: WorkbookSnapshotPayload) {
   dispatch(importWorkbookAction(workbook))
@@ -58,13 +64,32 @@ interface UseCollabOptions {
   clientId: string
   userName?: string
   userColor?: string
+  /**
+   * 远端 set_range_values 回写后，把变更坐标交给上层做 Canvas 局部重绘。
+   * useCollab 在 collab 层、拿不到 canvasHandleRef，由持有它的 SpreadsheetWorkspace 注入。
+   * 缺省时退回 Redux 订阅触发的全量重绘（行为不变）。
+   */
+  onRemoteRangeApplied?: (cells: Array<{ row: number; col: number }>) => void
 }
 
-export function useCollab({ url, docId, clientId, userName, userColor }: UseCollabOptions) {
+export function useCollab({
+  url,
+  docId,
+  clientId,
+  userName,
+  userColor,
+  onRemoteRangeApplied,
+}: UseCollabOptions) {
   const dispatch = useDispatch()
   const sheetId = useSelector((s: RootState) => s.workSheet.sheetId)
   const clientRef = useRef<CollabClient | null>(null)
   const [conflicts, setConflicts] = useState<ConflictInfo[] | null>(null)
+
+  // 放进 ref，避免回调变化时重建 callbacks memo
+  const onRemoteRangeAppliedRef = useRef(onRemoteRangeApplied)
+  useEffect(() => {
+    onRemoteRangeAppliedRef.current = onRemoteRangeApplied
+  }, [onRemoteRangeApplied])
 
   const callbacks = useMemo<CollabCallbacks>(
     () => ({
@@ -132,6 +157,14 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
         dispatch(setCurrentSeq(data.seq))
         const raw = data as Record<string, unknown>
         if (typeof raw.timestamp === 'number') dispatch(setLastEditTime(raw.timestamp))
+        // 优化二：仅当变更落在当前激活 sheet 时，按坐标做 Canvas 局部重绘。
+        // 大批量（超阈值）时局部脏区过多反而比一次全量重绘慢，交回上层按缺省全量处理。
+        if (data.sheetId === store.getState().workSheet.sheetId) {
+          const notify = onRemoteRangeAppliedRef.current
+          if (notify && data.cells.length > 0 && data.cells.length <= REMOTE_INVALIDATE_LIMIT) {
+            notify(data.cells.map((c) => ({ row: c.row, col: c.col })))
+          }
+        }
       },
 
       onUndoApplied(data) {
