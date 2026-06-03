@@ -11,6 +11,7 @@ import type {
   RowDeleted,
   ColInserted,
   ColDeleted,
+  RangeValuesUpdated,
   UserInfo,
   Snapshot,
 } from '../model/collabProtocol'
@@ -41,6 +42,8 @@ export interface CollabCallbacks {
   onColInserted?: (data: ColInserted['data']) => void
   /** 列被删除 */
   onColDeleted?: (data: ColDeleted['data']) => void
+  /** 批量逐格不同值写入（粘贴/批量撤回） */
+  onRangeValuesUpdated?: (data: RangeValuesUpdated['data']) => void
   /** 新建工作表 */
   onSheetAdded?: (data: SheetAdded['data']) => void
   /** 在线用户列表更新 */
@@ -49,6 +52,29 @@ export interface CollabCallbacks {
   onError: (code: number, message: string) => void
   /** 连接状态变化 */
   onConnectionChange: (status: 'connected' | 'disconnected' | 'reconnecting') => void
+  /** P2-3: 离线重连后检测到冲突 */
+  onConflict?: (conflicts: ConflictInfo[]) => void
+}
+
+/** P2-3: 单个冲突信息 */
+export interface ConflictInfo {
+  row: number
+  col: number
+  myValue: string
+  myTimestamp: number
+  remoteValue: string
+  styleConflicts: Array<{ key: string; myValue: unknown; remoteValue: unknown }>
+  mergedStyle: Record<string, unknown> | null
+}
+
+interface ReplayTracker {
+  row: number
+  col: number
+  myValue: string
+  myTimestamp: number
+  eventId: string
+  /** 记录该 op 被分配的第一个 seq，用于检测间隙 */
+  resolvedSeq?: number
 }
 
 // ===== CollabClient =====
@@ -79,9 +105,22 @@ export class CollabClient {
   private pendingOps = new Map<number, () => void>()
   private sendQueue: string[] = []
 
+  // P2-2: pending 确认 + 重连增强
+  private pendingMessages = new Map<string, Record<string, unknown>>()
+  // P2-3: 冲突追踪
+  private replayTrackers: ReplayTracker[] = []
+  private replayConflictTimer: ReturnType<typeof setTimeout> | null = null
+  // P2-4: 存储空间告警
+  private storageWarned = false
+  private retryCount = 0
+  private readonly maxRetries = 10
+  private readonly baseReconnectInterval: number
+  private connectAttemptId = 0
+  private reconnectDebounceTimer: ReturnType<typeof setTimeout> | null = null
+  private pageHidden = false
+
   private onSend?: (msg: Record<string, unknown>) => void
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
-  private reconnectInterval: number
   private destroyed = false
 
   constructor(options: CollabClientOptions) {
@@ -91,8 +130,21 @@ export class CollabClient {
     this.userName = options.userName ?? ''
     this.userColor = options.userColor ?? '#3b82f6'
     this.callbacks = options.callbacks
-    this.reconnectInterval = options.reconnectInterval ?? 1000
+    this.baseReconnectInterval = options.reconnectInterval ?? 1000
     this.onSend = options.onSend
+
+    // P2-2: 监听页面可见性，后台暂停重连
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', () => {
+        this.pageHidden = document.hidden
+        if (document.hidden) {
+          this.clearReconnectTimer()
+        } else if (!this.isConnected && !this.destroyed) {
+          this.clearReconnectTimer()
+          this.connect()
+        }
+      })
+    }
   }
 
   // ============================
@@ -103,12 +155,25 @@ export class CollabClient {
     if (this.destroyed) return
     if (this.onSend) return // stub 模式，不创建真实 WebSocket
 
+    const attemptId = ++this.connectAttemptId
     this.ws = new WebSocket(this.url)
 
     this.ws.onopen = () => {
+      // 竞态防护：不是最新握手就关闭
+      if (attemptId !== this.connectAttemptId) {
+        this.ws?.close()
+        return
+      }
+      this.retryCount = 0
+      this.storageWarned = false
       this.callbacks.onConnectionChange('connected')
       this.join()
       this.flushSendQueue()
+      // 网络抖动防抖：成功连接后取消待执行的重连
+      if (this.reconnectDebounceTimer) {
+        clearTimeout(this.reconnectDebounceTimer)
+        this.reconnectDebounceTimer = null
+      }
     }
 
     this.ws.onmessage = (event) => {
@@ -125,7 +190,13 @@ export class CollabClient {
     this.ws.onclose = () => {
       if (!this.destroyed) {
         this.callbacks.onConnectionChange('disconnected')
-        this.scheduleReconnect()
+        // P2-2: 未确认的消息写入离线队列，防止丢失
+        this.flushPendingToOfflineQueue()
+        // 网络抖动防抖：500ms 后再决定是否重连
+        this.clearReconnectDebounce()
+        this.reconnectDebounceTimer = setTimeout(() => {
+          this.scheduleReconnect()
+        }, 500)
       }
     }
 
@@ -137,7 +208,14 @@ export class CollabClient {
   disconnect(): void {
     this.destroyed = true
     this.clearReconnectTimer()
+    this.clearReconnectDebounce()
     this.pendingOps.clear()
+    this.pendingMessages.clear()
+    this.replayTrackers = []
+    if (this.replayConflictTimer) {
+      clearTimeout(this.replayConflictTimer)
+      this.replayConflictTimer = null
+    }
     this.seenSeqs.clear()
     this.sendQueue = []
     if (this.ws) {
@@ -177,7 +255,8 @@ export class CollabClient {
     sheetId: string,
     baseSeq: number
   ): void {
-    this.send({
+    const eventId = crypto.randomUUID()
+    const msg: Record<string, unknown> = {
       type: 'set_cell',
       docId: this.docId,
       clientId: this.clientId,
@@ -187,7 +266,10 @@ export class CollabClient {
       value,
       style: style ?? null,
       baseSeq,
-    })
+      eventId,
+    }
+    this.pendingMessages.set(eventId, msg)
+    this.send(msg)
   }
 
   setTitle(title: string, baseSeq: number): void {
@@ -282,16 +364,50 @@ export class CollabClient {
     targets: Array<{ row: number; col: number }>,
     patch: { value?: string; style?: Record<string, unknown> | null }
   ): void {
-    this.send({
+    const eventId = crypto.randomUUID()
+    const msg: Record<string, unknown> = {
       type: 'batch_set_cell',
       docId: this.docId,
       clientId: this.clientId,
       sheetId,
       baseSeq,
       updates: targets.map((t) => ({ row: t.row, col: t.col })),
+      eventId,
       ...(patch.value !== undefined ? { value: patch.value } : {}),
       ...(patch.style !== undefined ? { style: patch.style } : {}),
-    })
+    }
+    this.pendingMessages.set(eventId, msg)
+    this.send(msg)
+  }
+
+  /**
+   * 批量逐格不同值写入（粘贴/批量撤回）。
+   * cells 每项可独立携带 value/styleId，整批一次锁、一个 seq。
+   */
+  setRangeValues(
+    sheetId: string,
+    baseSeq: number,
+    cells: Array<{ row: number; col: number; value?: string; styleId?: string | null }>,
+    styles?: Record<string, Record<string, unknown>>
+  ): void {
+    const eventId = crypto.randomUUID()
+    const msg: Record<string, unknown> = {
+      type: 'set_range_values',
+      docId: this.docId,
+      clientId: this.clientId,
+      sheetId,
+      baseSeq,
+      cells: cells.map((c) => {
+        const item: Record<string, unknown> = { row: c.row, col: c.col }
+        if ('value' in c) item.value = c.value
+        if ('styleId' in c) item.styleId = c.styleId
+        return item
+      }),
+      eventId,
+    }
+    if (styles) msg.styles = styles
+    this.pendingMessages.set(eventId, msg)
+    this.send(msg)
   }
 
   // ============================
@@ -313,6 +429,7 @@ export class CollabClient {
         this.seq = msg.data.currentSeq
         this.seenSeqs.clear()
         this.pendingOps.clear()
+        this.pendingMessages.clear() // P2-2: snapshot 已是最新，旧 pending 作废
         this.callbacks.onSnapshot(msg.data.snapshot, msg.data.currentSeq)
         this.callbacks.onPresence(msg.data.users)
         this.replayOfflineQueue()
@@ -321,6 +438,11 @@ export class CollabClient {
       case 'cell_updated':
         this.applyOrdered(msg.data.seq, () => {
           this.callbacks.onCellUpdated(msg.data)
+          const raw = msg.data as Record<string, unknown>
+          // P2-2: 服务端回显 eventId 时清除 pending
+          if (typeof raw.eventId === 'string') this.pendingMessages.delete(raw.eventId)
+          // P2-3: 追踪离线回放的回执
+          this.trackReplayAck(msg.data)
         })
         break
 
@@ -398,6 +520,17 @@ export class CollabClient {
               canRedo: msg.data.canRedo,
             })
           }
+          // P2-2: 服务端回显 eventId 时清除 pending
+          const raw = msg.data as Record<string, unknown>
+          if (typeof raw.eventId === 'string') this.pendingMessages.delete(raw.eventId)
+        })
+        break
+
+      case 'range_values_updated':
+        this.applyOrdered(msg.data.seq, () => {
+          this.callbacks.onRangeValuesUpdated?.(msg.data)
+          const raw = msg.data as Record<string, unknown>
+          if (typeof raw.eventId === 'string') this.pendingMessages.delete(raw.eventId)
         })
         break
 
@@ -455,15 +588,21 @@ export class CollabClient {
   // ============================
 
   private scheduleReconnect(): void {
-    if (this.destroyed) return
+    if (this.destroyed || this.pageHidden) return
+    if (this.retryCount >= this.maxRetries) {
+      this.callbacks.onConnectionChange('failed')
+      return
+    }
     this.callbacks.onConnectionChange('reconnecting')
-    // 清理状态，重连后靠 join_ack 全量 snapshot 重建，不补发旧消息
     this.seenSeqs.clear()
     this.pendingOps.clear()
     this.sendQueue = []
+    // 指数退避: 1s → 2s → 4s → 8s → 16s → 30s(cap)
+    const delay = Math.min(this.baseReconnectInterval * Math.pow(2, this.retryCount), 30_000)
+    this.retryCount++
     this.reconnectTimer = setTimeout(() => {
       this.connect()
-    }, this.reconnectInterval)
+    }, delay)
   }
 
   private clearReconnectTimer(): void {
@@ -471,6 +610,46 @@ export class CollabClient {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
     }
+  }
+
+  private clearReconnectDebounce(): void {
+    if (this.reconnectDebounceTimer) {
+      clearTimeout(this.reconnectDebounceTimer)
+      this.reconnectDebounceTimer = null
+    }
+  }
+
+  /** P2-2: onclose 时将未确认消息写入 OfflineQueue，避免丢失 */
+  private flushPendingToOfflineQueue(): void {
+    if (this.pendingMessages.size === 0) return
+    for (const msg of this.pendingMessages.values()) {
+      if (msg.type === 'set_cell') {
+        OfflineQueue.enqueue({
+          type: 'set_cell',
+          docId: this.docId,
+          sheetId: (msg.sheetId as string) ?? '',
+          row: msg.row as number,
+          col: msg.col as number,
+          value: (msg.value as string) ?? '',
+          style: (msg.style as Record<string, unknown> | null) ?? null,
+          baseSeq: (msg.baseSeq as number) ?? this.seq,
+          timestamp: Date.now(),
+        })
+      } else if (msg.type === 'batch_set_cell') {
+        const targets = (msg.updates as Array<{ row: number; col: number }> | undefined) ?? []
+        const okBatch = OfflineQueue.enqueueBatch({
+          type: 'batch_set_cell',
+          docId: this.docId,
+          sheetId: (msg.sheetId as string) ?? '',
+          baseSeq: (msg.baseSeq as number) ?? this.seq,
+          targets,
+          value: 'value' in msg ? (msg.value as string) : undefined,
+          style: 'style' in msg ? (msg.style as Record<string, unknown> | null) : undefined,
+        })
+        if (!okBatch) this.warnStorageFull()
+      }
+    }
+    this.pendingMessages.clear()
   }
 
   // ============================
@@ -494,7 +673,7 @@ export class CollabClient {
     if (this.seq > 0) {
       if (msg.type === 'set_cell') {
         const m = msg as Record<string, unknown>
-        OfflineQueue.enqueue({
+        const ok = OfflineQueue.enqueue({
           type: 'set_cell',
           docId: this.docId,
           sheetId: (m.sheetId as string) ?? '',
@@ -503,13 +682,15 @@ export class CollabClient {
           value: (m.value as string) ?? '',
           style: (m.style as Record<string, unknown> | null) ?? null,
           baseSeq: (m.baseSeq as number) ?? this.seq,
+          timestamp: Date.now(),
         })
+        if (!ok) this.warnStorageFull()
         return
       }
       if (msg.type === 'batch_set_cell') {
         const m = msg as Record<string, unknown>
         const targets = (m.updates as Array<{ row: number; col: number }> | undefined) ?? []
-        OfflineQueue.enqueueBatch({
+        const ok2 = OfflineQueue.enqueueBatch({
           type: 'batch_set_cell',
           docId: this.docId,
           sheetId: (m.sheetId as string) ?? '',
@@ -518,10 +699,18 @@ export class CollabClient {
           value: 'value' in m ? (m.value as string) : undefined,
           style: 'style' in m ? (m.style as Record<string, unknown> | null) : undefined,
         })
+        if (!ok2) this.warnStorageFull()
         return
       }
     }
     this.sendQueue.push(data)
+  }
+
+  /** P2-4: 离线存储空间不足时提示用户（仅首次） */
+  private warnStorageFull(): void {
+    if (this.storageWarned) return
+    this.storageWarned = true
+    this.callbacks.onError(5001, '离线存储空间不足，请清理浏览器数据')
   }
 
   private flushSendQueue(): void {
@@ -536,6 +725,14 @@ export class CollabClient {
   private replayOfflineQueue(): void {
     const ops = OfflineQueue.dequeueAll()
     if (ops.length === 0) return
+
+    // P2-3: 清理旧的追踪和定时器
+    this.replayTrackers = []
+    if (this.replayConflictTimer) {
+      clearTimeout(this.replayConflictTimer)
+      this.replayConflictTimer = null
+    }
+
     const remaining: StoredOp[] = []
     for (const op of ops) {
       if (op.docId !== this.docId) {
@@ -543,6 +740,14 @@ export class CollabClient {
         continue
       }
       if (op.type === 'set_cell') {
+        const eventId = crypto.randomUUID()
+        this.replayTrackers.push({
+          row: op.row,
+          col: op.col,
+          myValue: op.value,
+          myTimestamp: op.timestamp || Date.now(),
+          eventId,
+        })
         this.send({
           type: 'set_cell',
           docId: this.docId,
@@ -553,6 +758,7 @@ export class CollabClient {
           value: op.value,
           style: op.style,
           baseSeq: op.baseSeq,
+          eventId,
         })
       } else if (op.type === 'batch_set_cell') {
         this.send({
@@ -567,6 +773,14 @@ export class CollabClient {
         })
       }
     }
+
+    // P2-3: 5 秒后仍未收齐回执 → 按已收到的判断冲突
+    if (this.replayTrackers.length > 0) {
+      this.replayConflictTimer = setTimeout(() => {
+        this.resolveConflicts()
+      }, 5000)
+    }
+
     // 放回其他文档的操作，避免 dequeueAll 误删
     for (const op of remaining) {
       if (op.type === 'set_cell') {
@@ -574,6 +788,56 @@ export class CollabClient {
       } else {
         OfflineQueue.enqueueBatch(op)
       }
+    }
+  }
+
+  /** P2-3: cell_updated 回执时记录 replayed op 的 seq */
+  private trackReplayAck(data: CellUpdated['data']): void {
+    const raw = data as Record<string, unknown>
+    const eventId = raw.eventId as string | undefined
+    if (!eventId) return
+    const tracker = this.replayTrackers.find((t) => t.eventId === eventId)
+    if (!tracker) return
+    tracker.resolvedSeq = data.seq
+    // 全部收齐 → 立即判断
+    if (this.replayTrackers.every((t) => t.resolvedSeq !== undefined)) {
+      if (this.replayConflictTimer) {
+        clearTimeout(this.replayConflictTimer)
+        this.replayConflictTimer = null
+      }
+      this.resolveConflicts()
+    }
+  }
+
+  /** P2-3: 收集冲突并回调 */
+  private resolveConflicts(): void {
+    if (this.replayTrackers.length === 0) return
+    const conflicts: ConflictInfo[] = []
+    // 按 seq 排序，检测间隙
+    const sorted = [...this.replayTrackers]
+      .filter((t) => t.resolvedSeq !== undefined)
+      .sort((a, b) => (a.resolvedSeq ?? 0) - (b.resolvedSeq ?? 0))
+
+    for (let i = 1; i < sorted.length; i++) {
+      const prev = sorted[i - 1]
+      const curr = sorted[i]
+      // seq 间距 > 1 → 中间有操作插入 → 当前格可能冲突
+      if ((curr.resolvedSeq ?? 0) - (prev.resolvedSeq ?? 0) > 1) {
+        conflicts.push({
+          row: curr.row,
+          col: curr.col,
+          myValue: curr.myValue,
+          myTimestamp: curr.myTimestamp,
+          remoteValue: '', // 服务端未回传别人的值，弹窗显示"未知"
+          styleConflicts: [],
+          mergedStyle: null,
+        })
+      }
+    }
+
+    this.replayTrackers = []
+    if (conflicts.length > 0) {
+      this.callbacks.onConflict?.(conflicts)
     }
   }
 

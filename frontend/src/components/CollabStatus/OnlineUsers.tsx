@@ -4,15 +4,17 @@ import type { RootState } from '@/spreadsheet/store'
 function statusColor(status: string, awaitingDisplayName: boolean): string {
   if (status === 'connected') return '#22c55e'
   if (status === 'reconnecting') return '#eab308'
+  if (status === 'failed') return '#ef4444'
   if (awaitingDisplayName) return '#9aa0a6'
-  return '#ef4444'
+  return '#9ca3af'
 }
 
 function statusLabel(status: string, awaitingDisplayName: boolean): string {
   if (status === 'connected') return '已连接'
   if (status === 'reconnecting') return '重连中'
+  if (status === 'failed') return '连接失败'
   if (awaitingDisplayName) return '请先填写名称'
-  return '已断开'
+  return '未连接'
 }
 
 function Avatar({ name, color }: { name: string; color: string }) {
@@ -41,11 +43,13 @@ export function OnlineUsers({ awaitingDisplayName = false }: OnlineUsersProps) {
   // clientId 为空 = 尚未 join，不弹横幅避免初始闪烁
   const bannerVisible = clientId !== '' && status !== 'connected'
   const bannerText =
-    status === 'reconnecting'
-      ? '网络已断开，正在重连…'
-      : awaitingDisplayName
-        ? '请先填写你的显示名称'
-        : '连接已断开'
+    status === 'failed'
+      ? '连接失败，请检查网络后刷新页面'
+      : status === 'reconnecting'
+        ? '网络已断开，正在重连…'
+        : awaitingDisplayName
+          ? '请先填写你的显示名称'
+          : '连接已断开'
 
   // 服务端 presence 列表包含自己，过滤掉避免重复
   const otherUsers = users.filter((u) => u.clientId !== clientId)
@@ -53,7 +57,11 @@ export function OnlineUsers({ awaitingDisplayName = false }: OnlineUsersProps) {
   return (
     <>
       {bannerVisible && (
-        <div className="fixed top-0 left-0 right-0 z-50 bg-yellow-50 text-center text-[13px] leading-8 text-yellow-800 shadow transition-opacity duration-300">
+        <div
+          className={`fixed top-0 left-0 right-0 z-50 text-center text-[13px] leading-8 shadow transition-opacity duration-300 ${
+            status === 'failed' ? 'bg-red-50 text-red-800' : 'bg-yellow-50 text-yellow-800'
+          }`}
+        >
           {bannerText}
         </div>
       )}

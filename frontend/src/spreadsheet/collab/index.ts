@@ -1,5 +1,5 @@
 export { CollabClient } from './CollabClient'
-export type { CollabCallbacks, CollabClientOptions } from './CollabClient'
+export type { CollabCallbacks, CollabClientOptions, ConflictInfo } from './CollabClient'
 export type {
   Snapshot,
   Cell,
@@ -15,6 +15,8 @@ export type {
   SheetImported,
   UndoApplied,
   RedoApplied,
+  RangeValuesUpdated,
+  SetRangeValuesRequest,
   PresenceMessage,
   ErrorMessage,
 } from '../model/collabProtocol'

@@ -15,6 +15,7 @@ import { useCommitCell, useCommitBatch } from '@/hooks/useCommitCell'
 import type { BatchCommitFn } from '@/hooks/useCommitCell'
 import type { CommitCellFn } from '@/hooks/useSpreadsheetInteraction'
 import { useCollab } from '@/hooks/useCollab'
+import { ConflictDialog } from '@/components/CollabStatus/ConflictDialog'
 import { useUnifiedHistory } from '@/hooks/useUnifiedHistory'
 import type { RootState } from '@/spreadsheet/store'
 import { addSheet as addSheetAction, setWorksheet, store } from '@/spreadsheet/store'
@@ -36,13 +37,23 @@ export function SpreadsheetWorkspace() {
   const activeWorksheet = useSelector((s: RootState) => s.workSheet)
   const selection = useSelector((s: RootState) => s.selection)
   const lastSentCursorRef = useRef('')
-  const { connect, disconnect, setCell, setTitle, addSheet, setBatchCells, getClient, sendCursor } =
-    useCollab({
-      url: COLLAB_WS_URL,
-      docId,
-      clientId,
-      userName: userName.trim(),
-    })
+  const {
+    connect,
+    disconnect,
+    setCell,
+    setTitle,
+    addSheet,
+    setBatchCells,
+    getClient,
+    sendCursor,
+    conflicts,
+    resolveConflicts,
+  } = useCollab({
+    url: COLLAB_WS_URL,
+    docId,
+    clientId,
+    userName: userName.trim(),
+  })
   useEffect(() => {
     if (connectionStatus !== 'connected') {
       lastSentCursorRef.current = ''
@@ -170,6 +181,13 @@ export function SpreadsheetWorkspace() {
 
       <StatusBar awaitingDisplayName={!!docId && !userName.trim()} />
       <SheetTabs onAddSheet={handleAddSheet} />
+      {conflicts && (
+        <ConflictDialog
+          conflicts={conflicts}
+          onClose={() => resolveConflicts([])}
+          onResolve={resolveConflicts}
+        />
+      )}
     </div>
   )
 }
