@@ -4,7 +4,7 @@ import { useDispatch } from 'react-redux'
 import { useNavigate, useParams } from 'react-router-dom'
 import { SpreadsheetWorkspace } from '@/components/spreadsheetLayout/SpreadsheetWorkspace'
 import API, { ApiError } from '@/services/httpAPI'
-import { initFromDoc, setDocTitle, setWorksheet, store } from '@/spreadsheet/store'
+import { initFromDoc, setDocTitle, setWorksheet } from '@/spreadsheet/store'
 import { setDocSession } from '@/spreadsheet/store/userStore'
 import { allocateClientId } from '@/spreadsheet/utils/allocateClientId'
 import { fromHttpDocWorkbookSnapshot } from '@/spreadsheet/utils/fromServerSnapshot'
@@ -30,8 +30,7 @@ export function SpreadsheetPage() {
         const workbook = fromHttpDocWorkbookSnapshot(doc.snapshot)
         const docTitle = doc.title?.trim() || '未命名表格'
         dispatch(initFromDoc({ docTitle, ...workbook }))
-        const { activeSheetId, sheets } = store.getState().workbook
-        const activeSheet = sheets[activeSheetId]
+        const activeSheet = workbook.sheets[workbook.activeSheetId]
         if (activeSheet) {
           dispatch(setWorksheet(activeSheet))
         }

@@ -1,5 +1,6 @@
 import type {
   WsResponse,
+  BatchCellUpdated,
   CellUpdated,
   TitleUpdated,
   CursorUpdate,
@@ -24,6 +25,8 @@ export interface CollabCallbacks {
   onSnapshot: (snapshot: Snapshot, currentSeq: number) => void
   /** 单元格被更新（别人或自己的操作被服务端确认） */
   onCellUpdated: (data: CellUpdated['data']) => void
+  /** batch_set_cell 批量更新（统一 patch 或逐格 updates） */
+  onBatchCellUpdated: (data: BatchCellUpdated['data']) => void
   /** 标题被更新 */
   onTitleUpdated: (data: TitleUpdated['data']) => void
   /** 其他用户光标位置变化 */
@@ -51,7 +54,7 @@ export interface CollabCallbacks {
   /** 错误 */
   onError: (code: number, message: string) => void
   /** 连接状态变化 */
-  onConnectionChange: (status: 'connected' | 'disconnected' | 'reconnecting') => void
+  onConnectionChange: (status: 'connected' | 'disconnected' | 'reconnecting' | 'failed') => void
   /** P2-3: 离线重连后检测到冲突 */
   onConflict?: (conflicts: ConflictInfo[]) => void
 }
@@ -506,21 +509,7 @@ export class CollabClient {
 
       case 'batch_cell_updated':
         this.applyOrdered(msg.data.seq, () => {
-          for (const update of msg.data.updates) {
-            this.callbacks.onCellUpdated({
-              docId: msg.data.docId,
-              clientId: msg.data.clientId,
-              sheetId: msg.data.sheetId,
-              seq: msg.data.seq,
-              row: update.row,
-              col: update.col,
-              value: update.value,
-              style: update.style,
-              canUndo: msg.data.canUndo,
-              canRedo: msg.data.canRedo,
-            })
-          }
-          // P2-2: 服务端回显 eventId 时清除 pending
+          this.callbacks.onBatchCellUpdated(msg.data)
           const raw = msg.data as Record<string, unknown>
           if (typeof raw.eventId === 'string') this.pendingMessages.delete(raw.eventId)
         })

@@ -9,6 +9,7 @@ import {
 } from '@/spreadsheet/collab/CollabClient'
 import type {
   CellUpdated,
+  BatchCellUpdated,
   CursorUpdate,
   SheetAdded,
   SheetImported,
@@ -64,6 +65,23 @@ function applyWorkbookSnapshot(dispatch: AppDispatch, workbook: WorkbookImportSn
   }
 }
 
+function applyCollabSeqMeta(
+  dispatch: AppDispatch,
+  data: { seq: number } & Record<string, unknown>
+): void {
+  dispatch(setCurrentSeq(data.seq))
+  if (typeof data.timestamp === 'number') dispatch(setLastEditTime(data.timestamp))
+}
+
+/** batch_cell_updated / range 回包：style 字段 → updateRange 的 style 语义 */
+function styleFromServerPayload(
+  style: Record<string, unknown> | null | undefined
+): Style | null | undefined {
+  if (style === null) return null
+  if (style) return style as Style
+  return undefined
+}
+
 export function useCollab({ url, docId, clientId, userName, userColor }: UseCollabOptions) {
   const dispatch = useDispatch()
   const sheetId = useSelector((s: RootState) => s.workSheet.sheetId)
@@ -89,9 +107,26 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
             style: data.style ? (data.style as Style) : undefined,
           })
         )
-        dispatch(setCurrentSeq(data.seq))
-        const raw = data as Record<string, unknown>
-        if (typeof raw.timestamp === 'number') dispatch(setLastEditTime(raw.timestamp))
+        applyCollabSeqMeta(dispatch, data as { seq: number } & Record<string, unknown>)
+      },
+
+      onBatchCellUpdated(data: BatchCellUpdated['data']) {
+        const sheet = store.getState().workSheet
+        dispatch(
+          updateRange({
+            sheetId: data.sheetId,
+            updates: data.updates.map((u) => ({
+              row: u.row,
+              col: u.col,
+              value:
+                'value' in (u as Record<string, unknown>)
+                  ? u.value
+                  : (sheet.cells[`${u.row}:${u.col}`]?.value ?? ''),
+              style: styleFromServerPayload(u.style),
+            })),
+          })
+        )
+        applyCollabSeqMeta(dispatch, data as { seq: number } & Record<string, unknown>)
       },
 
       onTitleUpdated(data: TitleUpdated['data']) {
@@ -124,26 +159,21 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
       },
 
       onRangeValuesUpdated(data) {
-        // 关键：用服务端 transform 后的最终 cells 更新 store，不用本地请求的坐标
-        for (const cell of data.cells) {
-          dispatch(
-            updateCell({
+        dispatch(
+          updateRange({
+            sheetId: data.sheetId,
+            updates: data.cells.map((cell) => ({
               row: cell.row,
               col: cell.col,
               value: cell.value,
-              sheetId: data.sheetId,
               style:
                 cell.styleId && data.styles?.[cell.styleId]
                   ? (data.styles[cell.styleId] as Style)
-                  : cell.styleId === null
-                    ? null
-                    : undefined,
-            })
-          )
-        }
-        dispatch(setCurrentSeq(data.seq))
-        const raw = data as Record<string, unknown>
-        if (typeof raw.timestamp === 'number') dispatch(setLastEditTime(raw.timestamp))
+                  : styleFromServerPayload(cell.styleId === null ? null : undefined),
+            })),
+          })
+        )
+        applyCollabSeqMeta(dispatch, data as { seq: number } & Record<string, unknown>)
       },
 
       onUndoApplied(data) {
@@ -157,9 +187,7 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
             style: data.style ? (data.style as Style) : undefined,
           })
         )
-        dispatch(setCurrentSeq(data.seq))
-        const raw = data as Record<string, unknown>
-        if (typeof raw.timestamp === 'number') dispatch(setLastEditTime(raw.timestamp))
+        applyCollabSeqMeta(dispatch, data as { seq: number } & Record<string, unknown>)
       },
 
       onRedoApplied(data) {
@@ -173,9 +201,7 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
             style: data.style ? (data.style as Style) : undefined,
           })
         )
-        dispatch(setCurrentSeq(data.seq))
-        const raw = data as Record<string, unknown>
-        if (typeof raw.timestamp === 'number') dispatch(setLastEditTime(raw.timestamp))
+        applyCollabSeqMeta(dispatch, data as { seq: number } & Record<string, unknown>)
       },
 
       onCursor(data: CursorUpdate['data']) {
