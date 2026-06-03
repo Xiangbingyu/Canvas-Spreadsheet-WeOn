@@ -23,12 +23,44 @@ import type { CommitCellFn } from '@/hooks/useSpreadsheetInteraction'
 import type { BatchCommitFn } from '@/hooks/useCommitCell'
 import type { CollabClient } from '@/spreadsheet/collab/CollabClient'
 
+type LocalSheetUpdateOperation = 'edit' | 'style' | 'delete' | 'unknown'
+
 /**
  * 批量回放多组消息时的发送间隔（毫秒）。
  * 后端每条 batch_set_cell 都要抢文档锁并跑一次事务，锁等待超时 3s。
  * 串行间隔发送可错开抢锁时机，避免并发抢锁超时。取值需 < 后端锁 TTL 且足够小不影响体感。
  */
 const GROUP_SEND_GAP_MS = 60
+
+function getSheetUpdatePerf() {
+  return typeof window === 'undefined' ? undefined : window.__sheetUpdatePerf
+}
+
+function getSingleUpdateOperation(value: string, style?: Style): LocalSheetUpdateOperation {
+  if (style !== undefined) {
+    return 'style'
+  }
+
+  return value === '' ? 'delete' : 'edit'
+}
+
+function getBatchUpdateOperation(
+  updates: Array<{ value: string; style?: Style }>
+): LocalSheetUpdateOperation {
+  if (updates.length === 0) {
+    return 'unknown'
+  }
+
+  if (updates.every(({ style }) => style !== undefined)) {
+    return 'style'
+  }
+
+  if (updates.every(({ value, style }) => value === '' && style === undefined)) {
+    return 'delete'
+  }
+
+  return 'edit'
+}
 
 export interface UseUnifiedHistoryResult {
   /** 包装后的提交函数：执行写入并记录历史。替代直接调用 onCommitCell。 */
@@ -198,10 +230,15 @@ export function useUnifiedHistory(
   // 用户编辑入口：先抓 before，提交后抓 after，入栈
   const commitWithHistory = useCallback<CommitCellFn>(
     (row, col, value, style) => {
+      const updatePerf = getSheetUpdatePerf()
+      const traceId = updatePerf?.start(getSingleUpdateOperation(value, style), row, col) ?? null
       const before = readSnapshot(row, col)
+      updatePerf?.markHistorySnapshotDone(traceId)
       rawCommit(row, col, value, style)
+      updatePerf?.markCommitEnd(traceId)
       const after: CellSnapshot = { value, style: style ?? before.style }
       historyRef.current.push({ row, col, before, after })
+      updatePerf?.markHistoryPushDone(traceId)
     },
     [readSnapshot, rawCommit]
   )
@@ -209,11 +246,22 @@ export function useUnifiedHistory(
   // 批量提交入口：多个单元格的修改作为一个原子操作
   const commitBatchWithHistory = useCallback<BatchCommitFn>(
     (updates: Array<{ row: number; col: number; value: string; style?: Style }>) => {
+      const firstUpdate = updates[0]
+      const updatePerf = getSheetUpdatePerf()
+      const traceId = firstUpdate
+        ? (updatePerf?.start(
+            getBatchUpdateOperation(updates),
+            firstUpdate.row,
+            firstUpdate.col,
+            `${updates.length} cells`
+          ) ?? null)
+        : null
       const operations: CellOperation[] = updates.map(({ row, col, value, style }) => {
         const before = readSnapshot(row, col)
         const after: CellSnapshot = { value, style: style ?? before.style }
         return { row, col, before, after }
       })
+      updatePerf?.markHistorySnapshotDone(traceId)
 
       // 一次批量提交，不再逐个调用 rawCommit
       if (batchCommitRef.current) {
@@ -226,10 +274,12 @@ export function useUnifiedHistory(
           }
         })
       }
+      updatePerf?.markCommitEnd(traceId)
 
       if (operations.length > 0) {
         historyRef.current.push({ type: 'batch_cell', operations })
       }
+      updatePerf?.markHistoryPushDone(traceId)
     },
     [readSnapshot]
   )
