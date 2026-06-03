@@ -44,6 +44,7 @@ export function SpreadsheetWorkspace() {
     setTitle,
     addSheet,
     setBatchCells,
+    setRangeValues,
     getClient,
     sendCursor,
     conflicts,
@@ -105,8 +106,14 @@ export function SpreadsheetWorkspace() {
 
   const onCommitCell = useCommitCell(setCell)
   const onCommitBatch = useCommitBatch(setBatchCells)
-  const { commitWithHistory, commitBatchWithHistory, executeRowColWithHistory, undo, redo } =
-    useUnifiedHistory(onCommitCell, onCommitBatch, getClient())
+  const {
+    commitWithHistory,
+    commitBatchWithHistory,
+    commitRangeWithHistory,
+    executeRowColWithHistory,
+    undo,
+    redo,
+  } = useUnifiedHistory(onCommitCell, onCommitBatch, getClient(), setRangeValues)
 
   const {
     engine,
@@ -121,7 +128,10 @@ export function SpreadsheetWorkspace() {
     cancelEdit,
     onScrollChange,
     formulaBarValue,
-  } = useSpreadsheetInteraction({ onCommitCell: commitWithHistory })
+  } = useSpreadsheetInteraction({
+    onCommitCell: commitWithHistory,
+    onCommitRange: commitRangeWithHistory,
+  })
 
   // 提交后通知 Canvas 局部重绘（不写 Redux、不提交数据，仅标记脏区下一帧只重绘这些格）。
   // FormulaBar / Toolbar 不直接依赖 Canvas，由此处包一层注入 canvasHandleRef。

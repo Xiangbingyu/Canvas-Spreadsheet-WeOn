@@ -51,7 +51,7 @@ export interface CollabCallbacks {
   /** 错误 */
   onError: (code: number, message: string) => void
   /** 连接状态变化 */
-  onConnectionChange: (status: 'connected' | 'disconnected' | 'reconnecting') => void
+  onConnectionChange: (status: 'connected' | 'disconnected' | 'reconnecting' | 'failed') => void
   /** P2-3: 离线重连后检测到冲突 */
   onConflict?: (conflicts: ConflictInfo[]) => void
 }

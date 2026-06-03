@@ -31,6 +31,7 @@ import {
   insertCol,
   deleteCol,
   updateRange,
+  setRangeValues as setRangeValuesAction,
 } from '@/spreadsheet/store/workSheetStore'
 import type { WorkbookSnapshotPayload } from '@/spreadsheet/store/workbookStore'
 import type { WorkbookSnapshot } from '@/services/httpType'
@@ -118,23 +119,16 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
       },
 
       onRangeValuesUpdated(data) {
-        // 关键：用服务端 transform 后的最终 cells 更新 store，不用本地请求的坐标
-        for (const cell of data.cells) {
-          dispatch(
-            updateCell({
-              row: cell.row,
-              col: cell.col,
-              value: cell.value,
-              sheetId: data.sheetId,
-              style:
-                cell.styleId && data.styles?.[cell.styleId]
-                  ? (data.styles[cell.styleId] as Style)
-                  : cell.styleId === null
-                    ? null
-                    : undefined,
-            })
-          )
-        }
+        // 关键：用服务端 transform 后的最终 cells 更新 store，不用本地请求的坐标。
+        // 整批走一次原子 setRangeValues（样式池化 styleId 引用），避免逐格 dispatch
+        // ——粘贴上万格时 N 次 dispatch 会触发 N 次订阅通知 + N 帧重绘，导致页面卡死。
+        dispatch(
+          setRangeValuesAction({
+            sheetId: data.sheetId,
+            styles: data.styles as Record<string, Style> | undefined,
+            cells: data.cells,
+          })
+        )
         dispatch(setCurrentSeq(data.seq))
         const raw = data as Record<string, unknown>
         if (typeof raw.timestamp === 'number') dispatch(setLastEditTime(raw.timestamp))
@@ -323,11 +317,17 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
     },
     setRangeValues: (
       cells: Array<{ row: number; col: number; value?: string; styleId?: string | null }>,
-      styles?: Record<string, Record<string, unknown>>
+      styles?: Record<string, Style>
     ) => {
       const client = clientRef.current
       if (!client) return
-      client.setRangeValues(sheetId, client.currentSeq, cells, styles)
+      // 适配层：内部用领域类型 Style，发往 WS 客户端时按其通用 Record 签名透传。
+      client.setRangeValues(
+        sheetId,
+        client.currentSeq,
+        cells,
+        styles as Record<string, Record<string, unknown>> | undefined
+      )
     },
     insertRow: (sheetId: string, row: number) => {
       clientRef.current?.insertRow(sheetId, row)

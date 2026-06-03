@@ -21,8 +21,19 @@ import type { GrideCanvasHandle } from '@/components/grideCanvas/GrideCanvas'
  */
 export type CommitCellFn = (row: number, col: number, value: string, style?: Style) => void
 
+/**
+ * 区域批量写入回调（由上层注入，对应协同 set_range_values）。
+ * - 传入时：走协同 WS，store 由协同广播 onRangeValuesUpdated 回写（非乐观，以服务端 transform 结果为准）。
+ * - 不传时：本地兜底 dispatch(setRangeValues)，保证无协同环境（单测/离线）仍可用。
+ */
+export type CommitRangeFn = (
+  cells: Array<{ row: number; col: number; value?: string; styleId?: string | null }>,
+  styles?: Record<string, Style>
+) => void
+
 export interface UseSpreadsheetInteractionOptions {
   onCommitCell?: CommitCellFn
+  onCommitRange?: CommitRangeFn
 }
 
 const ENGINE_CONFIG = {
@@ -33,17 +44,21 @@ const ENGINE_CONFIG = {
 }
 
 export function useSpreadsheetInteraction(options: UseSpreadsheetInteractionOptions = {}) {
-  const { onCommitCell } = options
+  const { onCommitCell, onCommitRange } = options
   const dispatch = useDispatch()
   const reduxStore = useStore<RootState>()
   const worksheet = useSelector((s: RootState) => s.workSheet)
   const selection = useSelector((s: RootState) => s.selection)
 
-  // 把 onCommitCell 放进 ref，避免它变化时重建依赖它的 useCallback / useEffect
+  // 把回调放进 ref，避免它变化时重建依赖它的 useCallback / useEffect
   const onCommitCellRef = useRef(onCommitCell)
+  const onCommitRangeRef = useRef(onCommitRange)
   useEffect(() => {
     onCommitCellRef.current = onCommitCell
   }, [onCommitCell])
+  useEffect(() => {
+    onCommitRangeRef.current = onCommitRange
+  }, [onCommitRange])
 
   /**
    * 统一的单元格写入：优先走协同回调，否则本地 dispatch 兜底。
@@ -57,6 +72,27 @@ export function useSpreadsheetInteraction(options: UseSpreadsheetInteractionOpti
       } else {
         const sheetId = reduxStore.getState().workSheet.sheetId
         dispatch(updateCell({ sheetId, row, col, value, style }))
+      }
+    },
+    [dispatch, reduxStore]
+  )
+
+  /**
+   * 统一的区域批量写入（粘贴用）：优先走协同 set_range_values，否则本地 dispatch 兜底。
+   * 走协同时不在此 dispatch，由协同广播 onRangeValuesUpdated 回写（避免双写）。
+   */
+  const commitRange = useCallback(
+    (
+      cells: Array<{ row: number; col: number; value?: string; styleId?: string | null }>,
+      styles?: Record<string, Style>
+    ) => {
+      if (cells.length === 0) return
+      const commit = onCommitRangeRef.current
+      if (commit) {
+        commit(cells, styles)
+      } else {
+        const sheetId = reduxStore.getState().workSheet.sheetId
+        dispatch(setRangeValues({ sheetId, styles, cells }))
       }
     },
     [dispatch, reduxStore]
@@ -204,40 +240,43 @@ export function useSpreadsheetInteraction(options: UseSpreadsheetInteractionOpti
         if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'c') {
           const ws = reduxStore.getState().workSheet
           const range = sel.range
+          const minRow = Math.min(range.start.row, range.end.row)
+          const maxRow = Math.max(range.start.row, range.end.row)
+          const minCol = Math.min(range.start.col, range.end.col)
+          const maxCol = Math.max(range.start.col, range.end.col)
           const cells: Record<string, { value: string; style?: Style }> = {}
 
-          // 遍历选区范围内的所有单元格
-          for (let row = range.start.row; row <= range.end.row; row++) {
-            for (let col = range.start.col; col <= range.end.col; col++) {
-              const key = `${row}:${col}`
-              const cell = ws.cells[key]
-              const style = cell?.styleId ? ws.styles[cell.styleId] : undefined
-              cells[key] = {
-                value: cell?.value ?? '',
-                style,
-              }
+          // 只遍历 cells 里「有数据」的格子（稀疏化）：空格子直接跳过、不入剪贴板。
+          // 大选区里大量空白格不再逐格建条目，复制不再随选区面积线性变慢。
+          // 清空语义不丢：剪贴板 range 记录了完整矩形，粘贴时据此为缺口补「清空」。
+          for (const [key, cell] of Object.entries(ws.cells)) {
+            if (cell.row < minRow || cell.row > maxRow || cell.col < minCol || cell.col > maxCol) {
+              continue
             }
+            const style = cell.styleId ? ws.styles[cell.styleId] : undefined
+            cells[key] = { value: cell.value ?? '', style }
           }
 
-          // 存到内部剪贴板
+          // 存到内部剪贴板（range 为完整矩形边界，cells 为稀疏数据）
           dispatch(
             setClipboard({
               cells,
               range: {
-                startRow: range.start.row,
-                startCol: range.start.col,
-                endRow: range.end.row,
-                endCol: range.end.col,
+                startRow: minRow,
+                startCol: minCol,
+                endRow: maxRow,
+                endCol: maxCol,
               },
             })
           )
 
-          // 写入系统剪贴板（TSV 格式）
+          // 写入系统剪贴板（TSV 格式）。cellsToTSV 按矩形逐格读传入的 cells 映射，
+          // 缺口处自然输出空字符串、不查 Redux，与稀疏 cells 天然兼容。
           const tsv = cellsToTSV(cells, {
-            startRow: range.start.row,
-            startCol: range.start.col,
-            endRow: range.end.row,
-            endCol: range.end.col,
+            startRow: minRow,
+            startCol: minCol,
+            endRow: maxRow,
+            endCol: maxCol,
           })
           if (navigator.clipboard && navigator.clipboard.writeText) {
             navigator.clipboard.writeText(tsv).catch((err) => {
@@ -263,11 +302,19 @@ export function useSpreadsheetInteraction(options: UseSpreadsheetInteractionOpti
               const rowOffset = pasteStartRow - clipboard.range.startRow
               const colOffset = pasteStartCol - clipboard.range.startCol
 
+              // 目标矩形（粘贴覆盖区），用于「清空缺口」判定
+              const tgtStartRow = clipboard.range.startRow + rowOffset
+              const tgtEndRow = clipboard.range.endRow + rowOffset
+              const tgtStartCol = clipboard.range.startCol + colOffset
+              const tgtEndCol = clipboard.range.endCol + colOffset
+
               // 收集整片为「样式池化」结构，一条 setRangeValues 原子写入，
               // 替代逐格 commitCell（避免 N 格 = N 条 WS 消息抢锁，对齐协议提案）。
               const stylesPool: Record<string, Style> = {}
               const rangeCells: RangeValueCell[] = []
               const invalidCells: Array<{ row: number; col: number }> = []
+
+              // 1) 写入剪贴板里「有数据」的格子（稀疏，仅实际有内容/样式的源格）
               for (const [key, clipCell] of Object.entries(clipboard.cells)) {
                 const [rowStr, colStr] = key.split(':')
                 const origRow = parseInt(rowStr, 10)
@@ -297,10 +344,29 @@ export function useSpreadsheetInteraction(options: UseSpreadsheetInteractionOpti
                 invalidCells.push({ row: targetRow, col: targetCol })
               }
 
+              // 2) 保留 Excel 清空语义：目标矩形里、源剪贴板对应位置为「空缺口」、
+              //    但当前目标格有数据的，要被清空。只遍历目标区现有数据格（数据规模有界，
+              //    不随矩形面积线性增长），缺口对应源无数据 → 发 value:''+styleId:null。
+              for (const [, cell] of Object.entries(ws.cells)) {
+                if (
+                  cell.row < tgtStartRow ||
+                  cell.row > tgtEndRow ||
+                  cell.col < tgtStartCol ||
+                  cell.col > tgtEndCol
+                ) {
+                  continue
+                }
+                const srcKey = `${cell.row - rowOffset}:${cell.col - colOffset}`
+                if (clipboard.cells[srcKey]) {
+                  continue // 该位置源有数据，已在步骤 1 覆盖
+                }
+                rangeCells.push({ row: cell.row, col: cell.col, value: '', styleId: null })
+                invalidCells.push({ row: cell.row, col: cell.col })
+              }
+
               if (rangeCells.length > 0) {
-                // 本地兜底写入（协同 set_range_values 接口 ready 后改为走 WS 发送）
-                const sheetId = reduxStore.getState().workSheet.sheetId
-                dispatch(setRangeValues({ sheetId, styles: stylesPool, cells: rangeCells }))
+                // 走协同 set_range_values（缺省时本地兜底）；store 更新交给上层/广播
+                commitRange(rangeCells, stylesPool)
                 // 批量通知 Canvas 局部重绘，避免逐格触发整帧重绘
                 canvasHandleRef.current?.invalidateCells(invalidCells)
               }
@@ -347,9 +413,8 @@ export function useSpreadsheetInteraction(options: UseSpreadsheetInteractionOpti
               }
 
               if (rangeCells.length > 0) {
-                // 本地兜底写入（协同 set_range_values 接口 ready 后改为走 WS 发送）
-                const sheetId = reduxStore.getState().workSheet.sheetId
-                dispatch(setRangeValues({ sheetId, cells: rangeCells }))
+                // 走协同 set_range_values（缺省时本地兜底）；store 更新交给上层/广播
+                commitRange(rangeCells)
                 // 批量通知 Canvas 局部重绘
                 canvasHandleRef.current?.invalidateCells(invalidCells)
               }
@@ -405,7 +470,7 @@ export function useSpreadsheetInteraction(options: UseSpreadsheetInteractionOpti
         },
       })
     }
-  }, [engine, worksheet, dispatch, startEdit, reduxStore, commitCell])
+  }, [engine, worksheet, dispatch, startEdit, reduxStore, commitCell, commitRange])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
