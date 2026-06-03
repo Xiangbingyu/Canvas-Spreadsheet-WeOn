@@ -8,11 +8,12 @@
 //工作表数据管理store
 
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit'
-import type { Cell, WorksheetData } from '@/spreadsheet/model/types'
+import type { Cell, Style, WorksheetData } from '@/spreadsheet/model/types'
 import { applyUpdateCellToWorksheet } from '@/spreadsheet/utils/applyUpdateCell'
 import {
   updateCell as updateWorkbookCell,
   updateRange as updateWorkbookRange,
+  setRangeValues as setWorkbookRangeValues,
 } from './workbookStore'
 
 // 初始化工作表
@@ -142,9 +143,35 @@ const workSheetSlice = createSlice({
         applyUpdateCellToWorksheet(state, u)
       }
     })
+
+    /**
+     * 监听 workbook/setRangeValues：逐格不同的原子批量写入同步到当前激活 sheet。
+     * 与 workbookStore.setRangeValues 同一套 styleId 解引用逻辑（样式池化）。
+     */
+    builder.addCase(setWorkbookRangeValues, function syncActiveWorksheetRangeValues(state, action) {
+      const { sheetId, styles, cells } = action.payload
+      if (sheetId !== state.sheetId) return
+      for (const cell of cells) {
+        const { row, col, value, styleId } = cell
+
+        let style: Style | null | undefined
+        if (styleId === null) {
+          style = null
+        } else if (styleId !== undefined) {
+          style = styles?.[styleId]
+        } else {
+          style = undefined
+        }
+
+        const prev = state.cells[`${row}:${col}`]
+        const nextValue = value !== undefined ? value : (prev?.value ?? '')
+
+        applyUpdateCellToWorksheet(state, { row, col, value: nextValue, style })
+      }
+    })
   },
 })
 
 export const { setWorksheet, insertRow, deleteRow, insertCol, deleteCol } = workSheetSlice.actions
-export { updateCell, updateRange } from './workbookStore'
+export { updateCell, updateRange, setRangeValues } from './workbookStore'
 export const workSheetReducer = workSheetSlice.reducer

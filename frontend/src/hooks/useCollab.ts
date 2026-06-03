@@ -39,6 +39,7 @@ import {
   insertCol,
   insertRow,
   updateRange,
+  setRangeValues as setRangeValuesAction,
 } from '@/spreadsheet/store/workSheetStore'
 import {
   fromHttpDocWorkbookSnapshot,
@@ -47,13 +48,36 @@ import {
   type WorkbookImportSnapshot,
 } from '@/spreadsheet/utils/fromServerSnapshot'
 
+
+/**
+ * 远端 set_range_values 回写时走局部重绘的变更格数上限。
+ * 超过则脏区过多、不如一次全量重绘，交回 Redux 订阅触发的全量路径。
+ */
+const REMOTE_INVALIDATE_LIMIT = 500
+
+/** 乐观更新：先把 workbook 写入本地 Redux（Canvas 立即刷新） */
+function applyLocalWorkbookImport(dispatch: AppDispatch, workbook: WorkbookSnapshotPayload) {
+  dispatch(importWorkbookAction(workbook))
+  const activeSheet = workbook.sheets[workbook.activeSheetId]
+  if (activeSheet) {
+    dispatch(setWorksheet(activeSheet))
+  }
+}
+
 interface UseCollabOptions {
   url: string
   docId: string
   clientId: string
   userName?: string
   userColor?: string
+  /**
+   * 远端 set_range_values 回写后，把变更坐标交给上层做 Canvas 局部重绘。
+   * useCollab 在 collab 层、拿不到 canvasHandleRef，由持有它的 SpreadsheetWorkspace 注入。
+   * 缺省时退回 Redux 订阅触发的全量重绘（行为不变）。
+   */
+  onRemoteRangeApplied?: (cells: Array<{ row: number; col: number }>) => void
 }
+
 
 /** 乐观更新：workbook 快照写入 store，并按 reducer 解析后的 activeSheetId 同步 workSheet */
 function applyWorkbookSnapshot(dispatch: AppDispatch, workbook: WorkbookImportSnapshot) {
@@ -87,6 +111,12 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
   const sheetId = useSelector((s: RootState) => s.workSheet.sheetId)
   const clientRef = useRef<CollabClient | null>(null)
   const [conflicts, setConflicts] = useState<ConflictInfo[] | null>(null)
+
+  // 放进 ref，避免回调变化时重建 callbacks memo
+  const onRemoteRangeAppliedRef = useRef(onRemoteRangeApplied)
+  useEffect(() => {
+    onRemoteRangeAppliedRef.current = onRemoteRangeApplied
+  }, [onRemoteRangeApplied])
 
   const callbacks = useMemo<CollabCallbacks>(
     () => ({
@@ -159,21 +189,27 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
       },
 
       onRangeValuesUpdated(data) {
+        // 关键：用服务端 transform 后的最终 cells 更新 store，不用本地请求的坐标。
+        // 整批走一次原子 setRangeValues（样式池化 styleId 引用），避免逐格 dispatch
+        // ——粘贴上万格时 N 次 dispatch 会触发 N 次订阅通知 + N 帧重绘，导致页面卡死。
         dispatch(
-          updateRange({
+          setRangeValuesAction({
             sheetId: data.sheetId,
-            updates: data.cells.map((cell) => ({
-              row: cell.row,
-              col: cell.col,
-              value: cell.value,
-              style:
-                cell.styleId && data.styles?.[cell.styleId]
-                  ? (data.styles[cell.styleId] as Style)
-                  : styleFromServerPayload(cell.styleId === null ? null : undefined),
-            })),
+            styles: data.styles as Record<string, Style> | undefined,
+            cells: data.cells,
           })
         )
-        applyCollabSeqMeta(dispatch, data as { seq: number } & Record<string, unknown>)
+        dispatch(setCurrentSeq(data.seq))
+        const raw = data as Record<string, unknown>
+        if (typeof raw.timestamp === 'number') dispatch(setLastEditTime(raw.timestamp))
+        // 优化二：仅当变更落在当前激活 sheet 时，按坐标做 Canvas 局部重绘。
+        // 大批量（超阈值）时局部脏区过多反而比一次全量重绘慢，交回上层按缺省全量处理。
+        if (data.sheetId === store.getState().workSheet.sheetId) {
+          const notify = onRemoteRangeAppliedRef.current
+          if (notify && data.cells.length > 0 && data.cells.length <= REMOTE_INVALIDATE_LIMIT) {
+            notify(data.cells.map((c) => ({ row: c.row, col: c.col })))
+          }
+        }
       },
 
       onUndoApplied(data) {
@@ -355,11 +391,24 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
     },
     setRangeValues: (
       cells: Array<{ row: number; col: number; value?: string; styleId?: string | null }>,
-      styles?: Record<string, Record<string, unknown>>
+      styles?: Record<string, Style>
     ) => {
+      if (cells.length === 0) return
+      // 乐观局部更新：先按请求 cells 即时写本地（一次原子 dispatch，Canvas 立即重绘），
+      // 再发 WS。与 setCell/setBatchCells 同一套「本地先行、广播对齐」模式——撤回/重做、
+      // 粘贴按下即时有反应，消除「等服务端往返才变」的卡顿感。
+      // 广播 onRangeValuesUpdated 回来时按服务端 transform 后的最终 cells 覆盖（幂等），
+      // 行列并发等情形以广播为准，乐观值被纠正。
+      dispatch(setRangeValuesAction({ sheetId, styles, cells }))
       const client = clientRef.current
       if (!client) return
-      client.setRangeValues(sheetId, client.currentSeq, cells, styles)
+      // 适配层：内部用领域类型 Style，发往 WS 客户端时按其通用 Record 签名透传。
+      client.setRangeValues(
+        sheetId,
+        client.currentSeq,
+        cells,
+        styles as Record<string, Record<string, unknown>> | undefined
+      )
     },
     insertRow: (sheetId: string, row: number) => {
       clientRef.current?.insertRow(sheetId, row)
