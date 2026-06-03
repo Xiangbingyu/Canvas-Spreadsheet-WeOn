@@ -18,6 +18,23 @@ export type VisibleRange = {
   colEnd: number
 }
 
+/** Canvas 逻辑像素矩形，用于局部重绘范围计算。 */
+export type ViewportRect = {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+function createEmptyVisibleRange(): VisibleRange {
+  return {
+    rowStart: 1,
+    rowEnd: 0,
+    colStart: 1,
+    colEnd: 0,
+  }
+}
+
 /**
  * 创建初始视口
  * @returns 滚动为 0、尺寸为 0 的视口对象
@@ -116,12 +133,7 @@ export function getVisibleRange(
   rowCount: number,
   colCount: number
 ): VisibleRange {
-  const emptyRange: VisibleRange = {
-    rowStart: 1,
-    rowEnd: 0,
-    colStart: 1,
-    colEnd: 0,
-  }
+  const emptyRange = createEmptyVisibleRange()
 
   if (rowCount <= 0 || colCount <= 0) {
     return emptyRange
@@ -181,6 +193,64 @@ export function getVisibleRange(
     colEnd,
   }
   return range
+}
+
+/**
+ * 作用：根据 Canvas 逻辑像素矩形计算该矩形覆盖的可见行列范围，用于 content 层 dirty-rect 局部重绘。
+ * 传入参数：rect 为 Canvas 坐标矩形；viewport 为当前视口；行高列宽和总行列数来自 WorksheetData。
+ * 返回结果：返回 1-based 可见行列范围；不相交时返回 rowEnd < rowStart 的空范围。
+ */
+export function getVisibleRangeForRect(
+  rect: ViewportRect,
+  viewport: Viewport,
+  rowHeight: number,
+  colWidth: number,
+  rowCount: number,
+  colCount: number
+): VisibleRange {
+  const emptyRange = createEmptyVisibleRange()
+
+  if (
+    rect.width <= 0 ||
+    rect.height <= 0 ||
+    rowCount <= 0 ||
+    colCount <= 0 ||
+    rowHeight <= 0 ||
+    colWidth <= 0
+  ) {
+    return emptyRange
+  }
+
+  const dataViewport = getDataViewportSize(viewport)
+  const dataLeft = GRID_CHROME.headerColWidth
+  const dataTop = GRID_CHROME.headerRowHeight
+  const dataRight = dataLeft + dataViewport.width
+  const dataBottom = dataTop + dataViewport.height
+
+  const left = Math.max(rect.x, dataLeft)
+  const top = Math.max(rect.y, dataTop)
+  const right = Math.min(rect.x + rect.width, dataRight)
+  const bottom = Math.min(rect.y + rect.height, dataBottom)
+
+  if (right <= left || bottom <= top) {
+    return emptyRange
+  }
+
+  const sheetLeft = viewport.scrollX + (left - dataLeft)
+  const sheetRight = viewport.scrollX + (right - dataLeft)
+  const sheetTop = viewport.scrollY + (top - dataTop)
+  const sheetBottom = viewport.scrollY + (bottom - dataTop)
+
+  const rowStart = Math.max(1, Math.floor(sheetTop / rowHeight) + 1)
+  const rowEnd = Math.min(rowCount, Math.ceil(sheetBottom / rowHeight))
+  const colStart = Math.max(1, Math.floor(sheetLeft / colWidth) + 1)
+  const colEnd = Math.min(colCount, Math.ceil(sheetRight / colWidth))
+
+  if (rowEnd < rowStart || colEnd < colStart) {
+    return emptyRange
+  }
+
+  return { rowStart, rowEnd, colStart, colEnd }
 }
 
 /**

@@ -72,7 +72,9 @@ function normalizeCreateDocInput(input = {}) {
 }
 
 // 把 store 层记录转换为 HTTP 返回使用的文档视图。
-function toDocView(docRecord) {
+function toDocView(docRecord, options = {}) {
+  const { reuseSnapshot = false } = options;
+
   return {
     docId: docRecord.docId,
     title: docRecord.title,
@@ -80,7 +82,9 @@ function toDocView(docRecord) {
     createdBy: docRecord.createdBy,
     createdAt: docRecord.createdAt,
     updatedAt: docRecord.updatedAt,
-    snapshot: normalizeDocSnapshot(docRecord.snapshotJson, { docId: docRecord.docId }),
+    snapshot: reuseSnapshot
+      ? docRecord.snapshotJson
+      : normalizeDocSnapshot(docRecord.snapshotJson, { docId: docRecord.docId }),
   };
 }
 
@@ -117,14 +121,17 @@ function uniqueNonEmptyStrings(values = []) {
   );
 }
 
-async function primeDocCaches(docRecord) {
+async function primeDocCaches(docRecord, options = {}) {
   if (!docRecord) {
     return;
   }
 
+  const docView = options.docView || toDocView(docRecord);
+  const docMeta = options.docMeta || toDocMeta(docRecord);
+
   await Promise.all([
-    docSnapshotCache.set(docRecord.docId, toDocView(docRecord)),
-    docMetaCache.set(docRecord.docId, toDocMeta(docRecord)),
+    docSnapshotCache.set(docRecord.docId, docView),
+    docMetaCache.set(docRecord.docId, docMeta),
   ]);
 }
 
@@ -262,9 +269,10 @@ async function createDoc(input = {}) {
       createdBy: normalizedInput.createdBy,
       snapshotJson: normalizedInput.snapshot,
     });
-    const docView = toDocView(createdDoc);
+    const docView = toDocView(createdDoc, { reuseSnapshot: true });
+    const docMeta = toDocMeta(createdDoc);
 
-    await primeDocCaches(createdDoc);
+    await primeDocCaches(createdDoc, { docView, docMeta });
     await invalidateUserDocsListCaches([createdDoc.createdBy]);
 
     await auditService.recordAuditEvent({
@@ -460,6 +468,11 @@ async function applyBatchSetCell(command, options = {}) {
   return docStore.applyBatchSetCell(command, { connection });
 }
 
+async function applyRangeValues(command, options = {}) {
+  const { connection = null } = options;
+  return docStore.applyRangeValues(command, { connection });
+}
+
 async function applySetTitle(command, options = {}) {
   const { connection = null } = options;
   return docStore.applySetTitle(command, { connection });
@@ -488,6 +501,7 @@ module.exports = {
   getDocMeta,
   applySetCell,
   applyBatchSetCell,
+  applyRangeValues,
   applySetTitle,
   applyImportSheet,
   applyAddSheet,

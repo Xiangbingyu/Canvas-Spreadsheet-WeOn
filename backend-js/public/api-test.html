@@ -331,7 +331,7 @@
         </div>
         <div class="hero-card">
           <div class="hero-label">WebSocket message types</div>
-          <div class="hero-value">join, presence, cursor, set_cell, batch_set_cell, insert_row, delete_row, insert_col, delete_col, set_title, add_sheet, import_sheet, undo, redo</div>
+          <div class="hero-value">join, presence, cursor, set_cell, batch_set_cell, set_range_values, insert_row, delete_row, insert_col, delete_col, set_title, add_sheet, import_sheet, undo, redo</div>
         </div>
       </div>
     </section>
@@ -595,6 +595,54 @@
             color: '#ffffff',
             bgColor: '#2563eb',
           },
+        },
+      },
+      {
+        title: 'Set Range Values',
+        type: 'set_range_values',
+        description: 'Apply per-cell value/styleId patches in one atomic batch. Success frames use range_values_updated. This example covers pooled styles, plain value cells and clearing a cell style with styleId=null.',
+        template: {
+          type: 'set_range_values',
+          docId: 'doc_sys_001',
+          clientId: 'user_001',
+          sheetId: 'sheet_20260527_001',
+          baseSeq: 1,
+          styles: {
+            s_header: {
+              bold: true,
+              color: '#ffffff',
+              bgColor: '#2563eb',
+            },
+            s_value: {
+              italic: true,
+              color: '#1d4ed8',
+            },
+          },
+          cells: [
+            { row: 2, col: 2, value: 'Name', styleId: 's_header' },
+            { row: 2, col: 3, value: 'Age', styleId: 's_header' },
+            { row: 3, col: 2, value: 'Alice' },
+            { row: 3, col: 3, value: '28', styleId: 's_value' },
+            { row: 4, col: 2, value: '', styleId: null },
+          ],
+        },
+      },
+      {
+        title: 'Set Range Values (Value Only)',
+        type: 'set_range_values',
+        description: 'Minimal batch paste example. Uses no styles pool and only overwrites values, which is the most common cross-application paste case.',
+        template: {
+          type: 'set_range_values',
+          docId: 'doc_sys_001',
+          clientId: 'user_001',
+          sheetId: 'sheet_20260527_001',
+          baseSeq: 1,
+          cells: [
+            { row: 6, col: 2, value: 'A1' },
+            { row: 6, col: 3, value: 'B1' },
+            { row: 7, col: 2, value: 'A2' },
+            { row: 7, col: 3, value: 'B2' },
+          ],
         },
       },
       {

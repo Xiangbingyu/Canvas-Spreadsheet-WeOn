@@ -55,10 +55,12 @@ test('GET /api-test serves the backend api test page', async () => {
     assert.equal(response.status, 200);
     assert.match(response.headers.get('content-type') || '', /text\/html/);
     assert.match(html, /Backend API Test Page/);
-    assert.match(html, /join, presence, cursor, set_cell, batch_set_cell, insert_row, delete_row, insert_col, delete_col, set_title, add_sheet, import_sheet, undo, redo/);
+    assert.match(html, /join, presence, cursor, set_cell, batch_set_cell, set_range_values, insert_row, delete_row, insert_col, delete_col, set_title, add_sheet, import_sheet, undo, redo/);
     assert.match(html, /method:\s*'GET'/);
     assert.match(html, /path:\s*'\/docs'/);
     assert.match(html, /method:\s*'POST'/);
+    assert.match(html, /type:\s*'set_range_values'/);
+    assert.match(html, /Set Range Values \(Value Only\)/);
   } finally {
     await server.close();
   }

@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react'
-import { useSelector } from 'react-redux'
+import { useDispatch, useSelector } from 'react-redux'
+import { setSelectedCell } from '@/spreadsheet/store/selectStore'
 import type { RootState } from '@/spreadsheet/store'
 import type { CommitCellFn } from '@/hooks/useSpreadsheetInteraction'
 
@@ -15,6 +16,7 @@ type FormulaBarProps = {
  * 支持直接在栏内编辑并提交（Enter / 失焦提交，Esc 取消），提交走 onCommitCell。
  */
 export function FormulaBar({ value, onCommitCell }: FormulaBarProps) {
+  const dispatch = useDispatch()
   const selection = useSelector((s: RootState) => s.selection)
   const address = selection.address || 'A1'
   // 外部值：网格编辑态优先用实时覆盖，否则取选中格的值
@@ -32,6 +34,17 @@ export function FormulaBar({ value, onCommitCell }: FormulaBarProps) {
     if (!onCommitCell) return
     if (draft === externalValue) return // 无变化不提交
     onCommitCell(selection.row, selection.col, draft, selection.style)
+    // 同步更新 selectStore，否则未聚焦时公式栏镜像的 selection.value 仍是旧值
+    // （onCommitCell 走协同链路异步回写，不会同步刷新本地 selection）。
+    dispatch(
+      setSelectedCell({
+        row: selection.row,
+        col: selection.col,
+        value: draft,
+        style: selection.style,
+        range: selection.range,
+      })
+    )
   }
 
   const cancel = () => {

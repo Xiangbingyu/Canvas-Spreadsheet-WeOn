@@ -12,6 +12,7 @@ const handleAddSheet = require('./handlers/addSheet');
 const handleImportSheet = require('./handlers/importSheet');
 const handleUndo = require('./handlers/undo');
 const handleRedo = require('./handlers/redo');
+const handleSetRangeValues = require('./handlers/setRangeValues');
 const { ERROR_CODES } = require('../protocol/errorCodes');
 const { WS_MESSAGE_TYPES } = require('../protocol/messageTypes');
 const { createWsError } = require('../utils/response');
@@ -31,6 +32,7 @@ const handlers = {
   [WS_MESSAGE_TYPES.IMPORT_SHEET]: handleImportSheet,
   [WS_MESSAGE_TYPES.UNDO]: handleUndo,
   [WS_MESSAGE_TYPES.REDO]: handleRedo,
+  [WS_MESSAGE_TYPES.SET_RANGE_VALUES]: handleSetRangeValues,
 };
 
 async function dispatchMessage(context) {

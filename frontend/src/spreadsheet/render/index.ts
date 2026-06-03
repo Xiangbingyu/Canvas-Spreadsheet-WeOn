@@ -4,6 +4,7 @@ export {
   renderGridLayer,
   renderOverlayLayer,
   type GridSelection,
+  type RenderContentLayerOptions,
   type RenderGridOptions,
   type RenderRect,
 } from './layerRenderer'
@@ -17,6 +18,8 @@ export {
   getRowHeaderRect,
   getSheetSize,
   getVisibleRange,
+  getVisibleRangeForRect,
+  type ViewportRect,
   type Viewport,
   type VisibleRange,
 } from './viewport'
