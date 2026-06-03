@@ -319,6 +319,13 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
       cells: Array<{ row: number; col: number; value?: string; styleId?: string | null }>,
       styles?: Record<string, Style>
     ) => {
+      if (cells.length === 0) return
+      // 乐观局部更新：先按请求 cells 即时写本地（一次原子 dispatch，Canvas 立即重绘），
+      // 再发 WS。与 setCell/setBatchCells 同一套「本地先行、广播对齐」模式——撤回/重做、
+      // 粘贴按下即时有反应，消除「等服务端往返才变」的卡顿感。
+      // 广播 onRangeValuesUpdated 回来时按服务端 transform 后的最终 cells 覆盖（幂等），
+      // 行列并发等情形以广播为准，乐观值被纠正。
+      dispatch(setRangeValuesAction({ sheetId, styles, cells }))
       const client = clientRef.current
       if (!client) return
       // 适配层：内部用领域类型 Style，发往 WS 客户端时按其通用 Record 签名透传。
