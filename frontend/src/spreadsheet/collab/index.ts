@@ -15,6 +15,8 @@ export type {
   SheetImported,
   UndoApplied,
   RedoApplied,
+  RangeValuesUpdated,
+  SetRangeValuesRequest,
   PresenceMessage,
   ErrorMessage,
 } from '../model/collabProtocol'

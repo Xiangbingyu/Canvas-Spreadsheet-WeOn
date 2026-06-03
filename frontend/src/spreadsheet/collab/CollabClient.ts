@@ -11,6 +11,7 @@ import type {
   RowDeleted,
   ColInserted,
   ColDeleted,
+  RangeValuesUpdated,
   UserInfo,
   Snapshot,
 } from '../model/collabProtocol'
@@ -41,6 +42,8 @@ export interface CollabCallbacks {
   onColInserted?: (data: ColInserted['data']) => void
   /** 列被删除 */
   onColDeleted?: (data: ColDeleted['data']) => void
+  /** 批量逐格不同值写入（粘贴/批量撤回） */
+  onRangeValuesUpdated?: (data: RangeValuesUpdated['data']) => void
   /** 新建工作表 */
   onSheetAdded?: (data: SheetAdded['data']) => void
   /** 在线用户列表更新 */
@@ -377,6 +380,36 @@ export class CollabClient {
     this.send(msg)
   }
 
+  /**
+   * 批量逐格不同值写入（粘贴/批量撤回）。
+   * cells 每项可独立携带 value/styleId，整批一次锁、一个 seq。
+   */
+  setRangeValues(
+    sheetId: string,
+    baseSeq: number,
+    cells: Array<{ row: number; col: number; value?: string; styleId?: string | null }>,
+    styles?: Record<string, Record<string, unknown>>
+  ): void {
+    const eventId = crypto.randomUUID()
+    const msg: Record<string, unknown> = {
+      type: 'set_range_values',
+      docId: this.docId,
+      clientId: this.clientId,
+      sheetId,
+      baseSeq,
+      cells: cells.map((c) => {
+        const item: Record<string, unknown> = { row: c.row, col: c.col }
+        if ('value' in c) item.value = c.value
+        if ('styleId' in c) item.styleId = c.styleId
+        return item
+      }),
+      eventId,
+    }
+    if (styles) msg.styles = styles
+    this.pendingMessages.set(eventId, msg)
+    this.send(msg)
+  }
+
   // ============================
   //  消息入口（公开，方便 stub server 注入）
   // ============================
@@ -488,6 +521,14 @@ export class CollabClient {
             })
           }
           // P2-2: 服务端回显 eventId 时清除 pending
+          const raw = msg.data as Record<string, unknown>
+          if (typeof raw.eventId === 'string') this.pendingMessages.delete(raw.eventId)
+        })
+        break
+
+      case 'range_values_updated':
+        this.applyOrdered(msg.data.seq, () => {
+          this.callbacks.onRangeValuesUpdated?.(msg.data)
           const raw = msg.data as Record<string, unknown>
           if (typeof raw.eventId === 'string') this.pendingMessages.delete(raw.eventId)
         })

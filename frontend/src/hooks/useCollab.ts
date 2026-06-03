@@ -117,6 +117,29 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
         dispatch(setCurrentSeq(data.seq))
       },
 
+      onRangeValuesUpdated(data) {
+        // 关键：用服务端 transform 后的最终 cells 更新 store，不用本地请求的坐标
+        for (const cell of data.cells) {
+          dispatch(
+            updateCell({
+              row: cell.row,
+              col: cell.col,
+              value: cell.value,
+              sheetId: data.sheetId,
+              style:
+                cell.styleId && data.styles?.[cell.styleId]
+                  ? (data.styles[cell.styleId] as Style)
+                  : cell.styleId === null
+                    ? null
+                    : undefined,
+            })
+          )
+        }
+        dispatch(setCurrentSeq(data.seq))
+        const raw = data as Record<string, unknown>
+        if (typeof raw.timestamp === 'number') dispatch(setLastEditTime(raw.timestamp))
+      },
+
       onUndoApplied(data) {
         const cell = store.getState().workSheet.cells[`${data.row}:${data.col}`]
         dispatch(
@@ -297,6 +320,14 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
       const client = clientRef.current
       if (!client) return
       client.setBatchCells(sheetId, client.currentSeq, targets, patch)
+    },
+    setRangeValues: (
+      cells: Array<{ row: number; col: number; value?: string; styleId?: string | null }>,
+      styles?: Record<string, Record<string, unknown>>
+    ) => {
+      const client = clientRef.current
+      if (!client) return
+      client.setRangeValues(sheetId, client.currentSeq, cells, styles)
     },
     insertRow: (sheetId: string, row: number) => {
       clientRef.current?.insertRow(sheetId, row)
