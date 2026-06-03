@@ -26,6 +26,8 @@
   UNDO_APPLIED: 'undo_applied',
   REDO: 'redo',
   REDO_APPLIED: 'redo_applied',
+  SET_RANGE_VALUES: 'set_range_values',
+  RANGE_VALUES_UPDATED: 'range_values_updated',
   ERROR: 'error',
 };
 

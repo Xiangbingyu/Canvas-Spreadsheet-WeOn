@@ -2439,6 +2439,150 @@ test('batch_set_cell supports batch undo and redo after structure changes', asyn
   }
 });
 
+test('set_range_values applies pooled styles and returns the final cells', async () => {
+  const srv = await createTestServer();
+  const c = await connect(srv.wsUrl);
+  try {
+    const joinAck = await joinDoc(c, 'doc_sys_001', 'u_range_basic');
+    const baseSeq = joinAck.data.currentSeq;
+
+    const base = c.received.length;
+    c.send({
+      type: 'set_range_values',
+      docId: 'doc_sys_001',
+      clientId: 'u_range_basic',
+      sheetId: DEFAULT_SHEET_ID,
+      baseSeq,
+      styles: {
+        s_header: { bold: true, color: '#ffffff', bgColor: '#2563eb' },
+        s_value: { italic: true, color: '#1d4ed8' },
+      },
+      cells: [
+        { row: 12, col: 2, value: 'Name', styleId: 's_header' },
+        { row: 12, col: 3, value: 'Age', styleId: 's_header' },
+        { row: 13, col: 2, value: 'Alice' },
+        { row: 13, col: 3, value: '28', styleId: 's_value' },
+      ],
+    });
+    await c.waitFor(base + 2);
+
+    const reply = c.received[base];
+    assert.equal(reply.type, 'range_values_updated');
+    assert.equal(reply.data.cells.length, 4);
+    assert.deepEqual(reply.data.styles, {
+      s_header: { bold: true, color: '#ffffff', bgColor: '#2563eb' },
+      s_value: { italic: true, color: '#1d4ed8' },
+    });
+
+    const { getDocState } = require('../service/docsService');
+    const docState = await getDocState('doc_sys_001');
+    const sheet = docState.snapshot.sheets[DEFAULT_SHEET_ID];
+    assert.equal(sheet.cells['12:2'].value, 'Name');
+    assert.equal(sheet.cells['12:2'].styleId, 's_header');
+    assert.equal(sheet.cells['13:2'].value, 'Alice');
+    assert.equal(sheet.cells['13:2'].styleId, null);
+    assert.equal(sheet.cells['13:3'].value, '28');
+    assert.equal(sheet.cells['13:3'].styleId, 's_value');
+  } finally {
+    await c.close();
+    await srv.close();
+  }
+});
+
+test('set_range_values rejects malformed cell entries with 4000', async () => {
+  const srv = await createTestServer();
+  const c = await connect(srv.wsUrl);
+  try {
+    await joinDoc(c, 'doc_sys_001', 'u_range_invalid');
+
+    const base = c.received.length;
+    c.send({
+      type: 'set_range_values',
+      docId: 'doc_sys_001',
+      clientId: 'u_range_invalid',
+      sheetId: DEFAULT_SHEET_ID,
+      cells: [null],
+    });
+    await c.waitFor(base + 1);
+
+    const reply = c.received[base];
+    assert.equal(reply.type, 'error');
+    assert.equal(reply.code, 4000);
+    assert.match(reply.message, /cells\[0\] must be an object/);
+  } finally {
+    await c.close();
+    await srv.close();
+  }
+});
+
+test('set_range_values redo keeps the surviving styleId after transform collisions', async () => {
+  const srv = await createTestServer();
+  const c = await connect(srv.wsUrl);
+  try {
+    const joinAck = await joinDoc(c, 'doc_sys_001', 'u_range_undo_redo');
+    const baseSeq = joinAck.data.currentSeq;
+
+    let base = c.received.length;
+    c.send({
+      type: 'set_range_values',
+      docId: 'doc_sys_001',
+      clientId: 'u_range_undo_redo',
+      sheetId: DEFAULT_SHEET_ID,
+      baseSeq,
+      styles: {
+        s_first: { bold: true, color: '#dc2626' },
+        s_second: { italic: true, color: '#2563eb' },
+      },
+      cells: [
+        { row: 14, col: 2, value: 'first', styleId: 's_first' },
+        { row: 14, col: 3, value: 'second', styleId: 's_second' },
+      ],
+    });
+    await c.waitFor(base + 2);
+
+    base = c.received.length;
+    c.send({
+      type: 'delete_col',
+      docId: 'doc_sys_001',
+      clientId: 'u_range_undo_redo',
+      sheetId: DEFAULT_SHEET_ID,
+      col: 2,
+    });
+    await c.waitFor(base + 2);
+
+    base = c.received.length;
+    c.send({
+      type: 'undo',
+      docId: 'doc_sys_001',
+      clientId: 'u_range_undo_redo',
+    });
+    await c.waitFor(base + 2);
+
+    base = c.received.length;
+    c.send({
+      type: 'redo',
+      docId: 'doc_sys_001',
+      clientId: 'u_range_undo_redo',
+    });
+    await c.waitFor(base + 2);
+
+    const redoReply = c.received[base];
+    assert.equal(redoReply.type, 'redo_applied');
+    assert.deepEqual(redoReply.data.updates, [
+      { row: 14, col: 2, value: 'second', styleId: 's_second' },
+    ]);
+
+    const { getDocState } = require('../service/docsService');
+    const docState = await getDocState('doc_sys_001');
+    const sheet = docState.snapshot.sheets[DEFAULT_SHEET_ID];
+    assert.equal(sheet.cells['14:2'].value, 'second');
+    assert.equal(sheet.cells['14:2'].styleId, 's_second');
+  } finally {
+    await c.close();
+    await srv.close();
+  }
+});
+
 test('delayed set_cell overwrites the transformed target after one insert_col', async () => {
   const srv = await createTestServer();
   const c = await connect(srv.wsUrl);

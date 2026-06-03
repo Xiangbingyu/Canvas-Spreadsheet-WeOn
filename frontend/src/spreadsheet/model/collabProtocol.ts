@@ -24,6 +24,7 @@ export type ClientMessageType =
   | 'insert_col'
   | 'delete_col'
   | 'batch_set_cell'
+  | 'set_range_values'
 
 export type ServerMessageType =
   | 'join_ack'
@@ -40,6 +41,7 @@ export type ServerMessageType =
   | 'col_inserted'
   | 'col_deleted'
   | 'batch_cell_updated'
+  | 'range_values_updated'
   | 'error'
 
 // ===== 客户端 → 服务端 =====
@@ -154,6 +156,21 @@ export interface BatchSetCellRequest {
   }>
 }
 
+export interface SetRangeValuesRequest {
+  type: 'set_range_values'
+  docId: string
+  clientId: string
+  sheetId: string
+  baseSeq: number
+  styles?: Record<string, Record<string, unknown>>
+  cells: Array<{
+    row: number // 1-indexed
+    col: number // 1-indexed
+    value?: string
+    styleId?: string | null
+  }>
+}
+
 export type WsRequest =
   | JoinRequest
   | SetCellRequest
@@ -168,6 +185,7 @@ export type WsRequest =
   | DeleteColRequest
   | AddSheetRequest
   | BatchSetCellRequest
+  | SetRangeValuesRequest
 
 // ===== 服务端 → 客户端 =====
 
@@ -386,6 +404,27 @@ export interface BatchCellUpdated {
   }
 }
 
+export interface RangeValuesUpdated {
+  type: 'range_values_updated'
+  code: 0
+  message: 'ok'
+  data: {
+    docId: string
+    clientId: string
+    sheetId: string
+    seq: number
+    styles?: Record<string, Record<string, unknown>>
+    cells: Array<{
+      row: number // 1-indexed
+      col: number // 1-indexed
+      value: string
+      styleId: string | null
+    }>
+    canUndo: boolean
+    canRedo: boolean
+  }
+}
+
 export type WsResponse =
   | JoinAck
   | CellUpdated
@@ -400,6 +439,7 @@ export type WsResponse =
   | ColInserted
   | ColDeleted
   | BatchCellUpdated
+  | RangeValuesUpdated
   | SheetAdded
   | ErrorMessage
 

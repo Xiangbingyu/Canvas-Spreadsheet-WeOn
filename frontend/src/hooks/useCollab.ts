@@ -1,8 +1,8 @@
-import { useEffect, useRef, useCallback, useMemo } from 'react'
+import { useEffect, useRef, useCallback, useMemo, useState } from 'react'
 import { useDispatch, useSelector } from 'react-redux'
 import { message as antMessage } from 'antd'
 import { CollabClient } from '../spreadsheet/collab/CollabClient'
-import type { CollabCallbacks } from '../spreadsheet/collab/CollabClient'
+import type { CollabCallbacks, ConflictInfo } from '../spreadsheet/collab/CollabClient'
 import type {
   Snapshot,
   CellUpdated,
@@ -63,6 +63,7 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
   const dispatch = useDispatch()
   const sheetId = useSelector((s: RootState) => s.workSheet.sheetId)
   const clientRef = useRef<CollabClient | null>(null)
+  const [conflicts, setConflicts] = useState<ConflictInfo[] | null>(null)
 
   const callbacks = useMemo<CollabCallbacks>(
     () => ({
@@ -114,6 +115,29 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
           dispatch(setWorksheet(activeSheet))
         }
         dispatch(setCurrentSeq(data.seq))
+      },
+
+      onRangeValuesUpdated(data) {
+        // 关键：用服务端 transform 后的最终 cells 更新 store，不用本地请求的坐标
+        for (const cell of data.cells) {
+          dispatch(
+            updateCell({
+              row: cell.row,
+              col: cell.col,
+              value: cell.value,
+              sheetId: data.sheetId,
+              style:
+                cell.styleId && data.styles?.[cell.styleId]
+                  ? (data.styles[cell.styleId] as Style)
+                  : cell.styleId === null
+                    ? null
+                    : undefined,
+            })
+          )
+        }
+        dispatch(setCurrentSeq(data.seq))
+        const raw = data as Record<string, unknown>
+        if (typeof raw.timestamp === 'number') dispatch(setLastEditTime(raw.timestamp))
       },
 
       onUndoApplied(data) {
@@ -194,6 +218,13 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
         if (status === 'connected') {
           dispatch(setSelf({ name: userName ?? '', color: userColor ?? '#3b82f6' }))
         }
+        if (status === 'failed') {
+          antMessage.error('连接失败，请检查网络后刷新页面重试')
+        }
+      },
+
+      onConflict(list) {
+        setConflicts(list)
       },
     }),
     [dispatch, userName, userColor]
@@ -290,6 +321,14 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
       if (!client) return
       client.setBatchCells(sheetId, client.currentSeq, targets, patch)
     },
+    setRangeValues: (
+      cells: Array<{ row: number; col: number; value?: string; styleId?: string | null }>,
+      styles?: Record<string, Record<string, unknown>>
+    ) => {
+      const client = clientRef.current
+      if (!client) return
+      client.setRangeValues(sheetId, client.currentSeq, cells, styles)
+    },
     insertRow: (sheetId: string, row: number) => {
       clientRef.current?.insertRow(sheetId, row)
     },
@@ -305,5 +344,25 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
     undo: () => clientRef.current?.undo(),
     redo: () => clientRef.current?.redo(),
     getClient: () => clientRef.current ?? undefined,
+    conflicts,
+    resolveConflicts: (decisions: Array<{ row: number; col: number; keepMine: boolean }>) => {
+      for (const d of decisions) {
+        if (d.keepMine && conflicts) {
+          const c = conflicts.find((x) => x.row === d.row && x.col === d.col)
+          if (c) {
+            clientRef.current?.setCell(
+              c.row,
+              c.col,
+              c.myValue,
+              c.mergedStyle as Record<string, unknown> | null,
+              store.getState().workSheet.sheetId,
+              clientRef.current.currentSeq
+            )
+          }
+        }
+        // 保留别人的：不动（远端值已在 store 中）
+      }
+      setConflicts(null)
+    },
   }
 }

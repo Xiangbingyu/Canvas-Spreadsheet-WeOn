@@ -10,6 +10,7 @@ export interface QueuedOp {
   value: string
   style: Record<string, unknown> | null
   baseSeq: number
+  timestamp: number
 }
 
 export interface QueuedBatchOp {
@@ -35,30 +36,31 @@ function loadAll(): StoredOp[] {
   }
 }
 
-function saveAll(ops: StoredOp[]): void {
+function saveAll(ops: StoredOp[]): boolean {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(ops))
+    return true
   } catch {
-    // localStorage 满或不可用，静默失败
+    return false
   }
 }
 
 export const OfflineQueue = {
-  enqueue(op: QueuedOp): void {
+  enqueue(op: QueuedOp): boolean {
     const ops = loadAll()
     // 去重：同一 cell 的旧操作被新操作覆盖
     const idx = ops.findIndex((o) => o.type === 'set_cell' && o.row === op.row && o.col === op.col)
     if (idx >= 0) ops.splice(idx, 1)
     ops.push(op)
     while (ops.length > MAX_QUEUE_SIZE) ops.shift()
-    saveAll(ops)
+    return saveAll(ops)
   },
 
-  enqueueBatch(op: QueuedBatchOp): void {
+  enqueueBatch(op: QueuedBatchOp): boolean {
     const ops = loadAll()
     ops.push(op)
     while (ops.length > MAX_QUEUE_SIZE) ops.shift()
-    saveAll(ops)
+    return saveAll(ops)
   },
 
   dequeueAll(): StoredOp[] {

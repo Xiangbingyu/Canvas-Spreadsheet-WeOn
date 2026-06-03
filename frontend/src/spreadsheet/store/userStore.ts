@@ -17,7 +17,7 @@ export interface CollabState {
   users: OnlineUser[]
   userCursors: Record<string, { sheetId: string; row: number; col: number }>
   currentSeq: number
-  connectionStatus: 'disconnected' | 'connected' | 'reconnecting'
+  connectionStatus: 'disconnected' | 'connected' | 'reconnecting' | 'failed'
   selfName: string
   selfColor: string
   lastEditTime: number
@@ -87,7 +87,7 @@ const collabSlice = createSlice({
     /** 更新连接状态 */
     setConnectionStatus(
       state,
-      action: PayloadAction<'disconnected' | 'connected' | 'reconnecting'>
+      action: PayloadAction<'disconnected' | 'connected' | 'reconnecting' | 'failed'>
     ) {
       state.connectionStatus = action.payload
     },

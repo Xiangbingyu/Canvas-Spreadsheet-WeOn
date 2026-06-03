@@ -500,6 +500,109 @@ function createDocMysqlStore() {
       }, options);
     },
 
+    async applyRangeValues(command, options = {}) {
+      await ensureReady();
+
+      return runWithOptionalTransaction(async (connection) => {
+        const current = await findByDocId(command.docId, { connection, forUpdate: true });
+
+        if (!current) {
+          return null;
+        }
+
+        const nextSnapshot = normalizeDocSnapshot(current.snapshotJson, { docId: command.docId });
+        const { sheetId: targetSheetId, sheet: targetSheet } = resolveTargetSheet(nextSnapshot, command.sheetId);
+
+        if (!targetSheetId || !targetSheet) {
+          return null;
+        }
+
+        if (!targetSheet.styles) {
+          targetSheet.styles = {};
+        }
+
+        // validate styleId references and merge style pool
+        const incomingStyles = command.styles || {};
+        for (const [sid, styleDef] of Object.entries(incomingStyles)) {
+          if (targetSheet.styles[sid] !== undefined) {
+            if (createStyleKey(targetSheet.styles[sid]) !== createStyleKey(styleDef)) {
+              const err = new Error(`styleId conflicts with existing style in sheet: ${sid}`);
+              err.code = 4000;
+              throw err;
+            }
+          } else {
+            targetSheet.styles[sid] = JSON.parse(JSON.stringify(styleDef));
+          }
+        }
+
+        const allStyles = { ...incomingStyles, ...targetSheet.styles };
+        const rangeUpdates = [];
+
+        for (const cell of command.cells || []) {
+          const cellKey = `${cell.row}:${cell.col}`;
+          const prev = targetSheet.cells[cellKey] || {};
+          const oldValue = prev.value ?? '';
+          const oldStyleId = typeof prev.styleId === 'string' ? prev.styleId : null;
+
+          const hasValue = 'value' in cell;
+          const hasStyleId = 'styleId' in cell;
+
+          if (hasStyleId && typeof cell.styleId === 'string') {
+            if (allStyles[cell.styleId] === undefined) {
+              const err = new Error(`styleId not found in styles pool: ${cell.styleId}`);
+              err.code = 4000;
+              throw err;
+            }
+          }
+
+          const newValue = hasValue ? (cell.value ?? '') : oldValue;
+          const newStyleId = hasStyleId ? cell.styleId : oldStyleId;
+
+          targetSheet.cells[cellKey] = {
+            row: cell.row,
+            col: cell.col,
+            value: newValue,
+            styleId: newStyleId,
+          };
+
+          if (cell.row > targetSheet.rowCount) targetSheet.rowCount = cell.row;
+          if (cell.col > targetSheet.colCount) targetSheet.colCount = cell.col;
+
+          rangeUpdates.push({
+            row: cell.row,
+            col: cell.col,
+            oldValue,
+            oldStyleId,
+            newValue,
+            newStyleId,
+          });
+        }
+
+        const nextSeq = current.currentSeq + 1;
+        const updatedAt = new Date().toISOString();
+
+        await connection.execute(
+          `UPDATE doc
+          SET snapshot_json = CAST(? AS JSON), current_seq = ?, updated_at = ?
+          WHERE id = ?`,
+          [
+            stringifyJsonValue(nextSnapshot, {}),
+            nextSeq,
+            toMysqlDateValue(updatedAt),
+            current.id,
+          ]
+        );
+
+        const updatedDoc = await findByDocId(command.docId, { connection });
+        return {
+          ...updatedDoc,
+          _targetSheetId: targetSheetId,
+          _rangeUpdates: rangeUpdates,
+          _rangeStyles: targetSheet.styles,
+        };
+      }, options);
+    },
+
     async applySetTitle(command, options = {}) {
       await ensureReady();
 
