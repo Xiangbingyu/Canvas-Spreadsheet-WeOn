@@ -5,6 +5,9 @@ const docLock = require('../infra/redis/lock');
 const docsService = require('./docsService');
 const historyStore = require('../store/historyStore');
 const auditService = require('../audit/auditService');
+const docStateCache = require('../cache/docStateCache');
+const historyCache = require('../cache/historyCache');
+const asyncWriteQueue = require('../infra/asyncWriteQueue');
 
 function createServiceError(code, message, details = null) {
   const error = new Error(message);
@@ -37,6 +40,10 @@ async function applyAddSheet(command = {}) {
   return docLock.withDocLock(normalizedCommand.docId, async () => {
     let updatedDoc = null;
     let seq = 0;
+
+    if (storeConfig.driver === 'mysql') {
+      await asyncWriteQueue.drain();
+    }
 
     const executeMutation = async (connection = null) => {
       const currentDoc = await docsService.getDocStateForWrite(normalizedCommand.docId, {
@@ -81,6 +88,16 @@ async function applyAddSheet(command = {}) {
       await executeMutation();
     }
 
+    await Promise.all([
+      docStateCache.set(normalizedCommand.docId, updatedDoc),
+      historyCache.append({
+        docId: normalizedCommand.docId,
+        clientId: normalizedCommand.clientId,
+        seq,
+        opType: 'add_sheet',
+        targetSheetId: updatedDoc && updatedDoc._addedSheet ? updatedDoc._addedSheet.id : null,
+      }),
+    ]);
     await docsService.invalidateDocCaches(normalizedCommand.docId);
 
     await auditService.recordAuditEvent({

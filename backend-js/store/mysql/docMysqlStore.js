@@ -104,6 +104,25 @@ function findOrCreateStyleId(sheet, style) {
   return styleId;
 }
 
+function mergeStylePatch(baseStyle, stylePatch) {
+  if (stylePatch === undefined) {
+    return baseStyle ? JSON.parse(JSON.stringify(baseStyle)) : null;
+  }
+
+  if (stylePatch === null || typeof stylePatch !== 'object' || Array.isArray(stylePatch)) {
+    return null;
+  }
+
+  const nextStyle = {
+    ...(baseStyle && typeof baseStyle === 'object' && !Array.isArray(baseStyle)
+      ? JSON.parse(JSON.stringify(baseStyle))
+      : {}),
+    ...JSON.parse(JSON.stringify(stylePatch)),
+  };
+
+  return nextStyle;
+}
+
 function resolveTargetSheet(nextSnapshot, preferredSheetId = null) {
   const requestedSheetId = typeof preferredSheetId === 'string' && preferredSheetId
     ? preferredSheetId
@@ -448,7 +467,7 @@ function createDocMysqlStore() {
           const oldStyleId = typeof previousCell.styleId === 'string' ? previousCell.styleId : null;
           const oldStyle = oldStyleId ? JSON.parse(JSON.stringify(targetSheet.styles[oldStyleId] || null)) : null;
           const nextValue = update.value !== undefined ? (update.value ?? '') : oldValue;
-          const nextStyle = update.style !== undefined ? update.style : oldStyle;
+          const nextStyle = mergeStylePatch(oldStyle, update.style);
           const nextStyleIdValue = findOrCreateStyleId(targetSheet, nextStyle);
 
           targetSheet.cells[cellKey] = {

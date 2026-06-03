@@ -1,6 +1,7 @@
 const roomUserStore = require('../store/roomUserStore');
 const roomSocketStore = require('../store/roomSocketStore');
 const userOpStateStore = require('../store/userOpStateStore');
+const setCellAtomicCommit = require('../infra/redis/setCellAtomicCommit');
 
 async function joinRoom(docId, socket, { clientId, name, color }) {
   // 先注册 socket 到新房间，同时取得前一个 (docId, clientId) 信息。
@@ -78,6 +79,14 @@ async function getSocketMembership(socket) {
 }
 
 async function closeRuntimeState() {
+  if (typeof setCellAtomicCommit.close === 'function') {
+    await setCellAtomicCommit.close();
+  }
+
+  if (typeof userOpStateStore.close === 'function') {
+    await userOpStateStore.close();
+  }
+
   if (typeof roomSocketStore.close === 'function') {
     await roomSocketStore.close();
   }

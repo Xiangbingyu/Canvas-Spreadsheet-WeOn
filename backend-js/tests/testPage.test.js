@@ -7,9 +7,14 @@ const projectRoot = path.resolve(__dirname, '..');
 
 async function closeProjectResources() {
   const cacheModulePath = path.join(projectRoot, 'cache', 'index.js');
+  const asyncWriteQueueModulePath = path.join(projectRoot, 'infra', 'asyncWriteQueue.js');
 
   if (require.cache[cacheModulePath]) {
     await require(cacheModulePath).close();
+  }
+
+  if (require.cache[asyncWriteQueueModulePath]) {
+    await require(asyncWriteQueueModulePath).close();
   }
 }
 

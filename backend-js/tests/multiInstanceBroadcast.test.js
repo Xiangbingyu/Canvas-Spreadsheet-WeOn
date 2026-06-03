@@ -339,7 +339,7 @@ test('redis pubsub broadcasts join/add_sheet/set_cell/set_title/import_sheet/und
       && message.data.sheetId === addedSheetId
       && message.data.row === 9
     ));
-    assert.equal(rowInserted.data.canUndo, false);
+    assert.equal(rowInserted.data.canUndo, true);
     assert.equal(rowInserted.data.canRedo, false);
 
     clientA.send({
