@@ -7,6 +7,9 @@ const historyStore = require('../store/historyStore');
 const userOpStateStore = require('../store/userOpStateStore');
 const auditService = require('../audit/auditService');
 const { normalizeDocSnapshot } = require('../domain/entities/doc');
+const docStateCache = require('../cache/docStateCache');
+const historyCache = require('../cache/historyCache');
+const asyncWriteQueue = require('../infra/asyncWriteQueue');
 
 function createServiceError(code, message, details = null) {
   const error = new Error(message);
@@ -41,6 +44,11 @@ async function executeImportSheet(normalizedCommand) {
   return docLock.withDocLock(normalizedCommand.docId, async () => {
     let updatedDoc = null;
     let seq = 0;
+    let nextOpState = null;
+
+    if (storeConfig.driver === 'mysql') {
+      await asyncWriteQueue.drain();
+    }
 
     const executeMutation = async (connection = null) => {
       updatedDoc = await docsService.applyImportSheet({
@@ -65,12 +73,13 @@ async function executeImportSheet(normalizedCommand) {
         payloadJson: normalizedCommand.snapshot,
       }, { connection });
 
-      await userOpStateStore.saveState({
+      nextOpState = {
         docId: normalizedCommand.docId,
         clientId: normalizedCommand.clientId,
         undoStackJson: [],
         redoStackJson: [],
-      }, { connection });
+      };
+      await userOpStateStore.saveState(nextOpState, { connection });
     };
 
     if (storeConfig.driver === 'mysql') {
@@ -79,6 +88,16 @@ async function executeImportSheet(normalizedCommand) {
       await executeMutation();
     }
 
+    if (nextOpState && typeof userOpStateStore.syncRuntimeState === 'function') {
+      await userOpStateStore.syncRuntimeState(nextOpState);
+    }
+
+    // importSheet is a full replacement — invalidate memory caches before repopulating
+    await Promise.all([
+      historyCache.invalidateByDocId(normalizedCommand.docId),
+      docStateCache.invalidate(normalizedCommand.docId),
+    ]);
+    await docStateCache.set(normalizedCommand.docId, updatedDoc);
     await docsService.invalidateDocCaches(normalizedCommand.docId);
 
     await auditService.recordAuditEvent({

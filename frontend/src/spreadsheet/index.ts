@@ -24,7 +24,6 @@ export type {
   SelectedCell,
   SelectionState,
   SetSelectedCellPayload,
-  UpdateCellPayload,
   RootState,
   AppDispatch,
 } from './store/index'

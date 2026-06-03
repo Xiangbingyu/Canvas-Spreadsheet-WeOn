@@ -42,6 +42,49 @@ async function teardownTestStore() {
   await closePool();
 }
 
+async function closeProjectResources() {
+  const cacheModulePath = path.join(projectRoot, 'cache', 'index.js');
+  const roomServiceModulePath = path.join(projectRoot, 'service', 'roomService.js');
+  const idempotencyServiceModulePath = path.join(projectRoot, 'idempotency', 'idempotencyService.js');
+  const lockModulePath = path.join(projectRoot, 'infra', 'redis', 'lock.js');
+  const asyncWriteQueueModulePath = path.join(projectRoot, 'infra', 'asyncWriteQueue.js');
+
+  if (require.cache[cacheModulePath]) {
+    await require(cacheModulePath).close();
+  }
+
+  if (require.cache[roomServiceModulePath]) {
+    await require(roomServiceModulePath).closeRuntimeState();
+  }
+
+  if (require.cache[idempotencyServiceModulePath]) {
+    await require(idempotencyServiceModulePath).close();
+  }
+
+  if (require.cache[lockModulePath]) {
+    await require(lockModulePath).close();
+  }
+
+  if (require.cache[asyncWriteQueueModulePath]) {
+    await require(asyncWriteQueueModulePath).close();
+  }
+}
+
+function clearBackendRequireCache() {
+  for (const modulePath of Object.keys(require.cache)) {
+    const keepMysqlModules = modulePath.includes(`${path.sep}db${path.sep}mysql${path.sep}`);
+
+    if (
+      modulePath.startsWith(projectRoot) &&
+      !modulePath.includes(`${path.sep}node_modules${path.sep}`) &&
+      !keepMysqlModules &&
+      modulePath !== __filename
+    ) {
+      delete require.cache[modulePath];
+    }
+  }
+}
+
 async function getFreePort() {
   const server = http.createServer();
   server.listen(0);
@@ -50,6 +93,22 @@ async function getFreePort() {
   server.close();
   await once(server, 'close');
   return port;
+}
+
+async function waitForAsync(assertion, { timeoutMs = 5000, intervalMs = 100 } = {}) {
+  const start = Date.now();
+  let lastError = null;
+
+  while (Date.now() - start < timeoutMs) {
+    try {
+      return await assertion();
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+  }
+
+  throw lastError || new Error('waitForAsync timed out');
 }
 
 function waitForServerReady(child, port, timeoutMs = 8000) {
@@ -733,6 +792,139 @@ test('redis OT rebases stale baseSeq set_cell across instances on the same cell'
     await clientB.close();
     await serverA.stop();
     await serverB.stop();
+  }
+});
+
+test('docsService ignores mixed live seq and snapshot cache entries', async () => {
+  const docsService = require('../service/docsService');
+  const docSnapshotCache = require('../cache/docSnapshotCache');
+  const docStateCache = require('../cache/docStateCache');
+
+  const freshDoc = await docsService.getDocState('doc_sys_001');
+  const staleSnapshot = JSON.parse(JSON.stringify(freshDoc));
+
+  await docSnapshotCache.set('doc_sys_001', staleSnapshot);
+  await docStateCache.set('doc_sys_001', { currentSeq: staleSnapshot.currentSeq + 1 });
+
+  const reloadedDoc = await docsService.getDocState('doc_sys_001');
+  const cachedSnapshot = await docSnapshotCache.get('doc_sys_001');
+
+  assert.equal(reloadedDoc.currentSeq, freshDoc.currentSeq);
+  assert.deepEqual(reloadedDoc.snapshot, freshDoc.snapshot);
+  assert.deepEqual(cachedSnapshot, reloadedDoc);
+});
+
+test('set_cell retries once after atomic commit seq mismatch and then succeeds', async () => {
+  const restoreEnv = (key, value) => {
+    if (value === undefined) {
+      delete process.env[key];
+      return;
+    }
+    process.env[key] = value;
+  };
+  const originalEnv = {
+    STORE_DRIVER: process.env.STORE_DRIVER,
+    CACHE_DRIVER: process.env.CACHE_DRIVER,
+    RUNTIME_STATE_DRIVER: process.env.RUNTIME_STATE_DRIVER,
+    DOC_LOCK_DRIVER: process.env.DOC_LOCK_DRIVER,
+  };
+
+  process.env.STORE_DRIVER = 'mysql';
+  process.env.CACHE_DRIVER = 'redis';
+  process.env.RUNTIME_STATE_DRIVER = 'redis';
+  process.env.DOC_LOCK_DRIVER = 'redis';
+
+  await closeProjectResources();
+  clearBackendRequireCache();
+  await resetMysqlDatabase({
+    closePoolAfterReset: false,
+    silent: true,
+  });
+  await resetRedisTestKeys();
+
+  const atomicCommitModule = require('../infra/redis/setCellAtomicCommit');
+  const originalCommit = atomicCommitModule.commitSetCellAtomically;
+  let commitAttempts = 0;
+
+  atomicCommitModule.commitSetCellAtomically = async (payload) => {
+    commitAttempts += 1;
+    if (commitAttempts === 1) {
+      throw new Error('SEQ_MISMATCH');
+    }
+    return originalCommit(payload);
+  };
+
+  try {
+    const cellService = require('../service/cellService');
+    const docsService = require('../service/docsService');
+
+    const result = await cellService.applySetCell({
+      docId: 'doc_sys_001',
+      clientId: 'redis-retry-user',
+      sheetId: DEFAULT_SHEET_ID,
+      row: 41,
+      col: 2,
+      value: 'retry-once-success',
+    });
+
+    assert.equal(result.row, 41);
+    assert.equal(result.col, 2);
+    assert.equal(result.value, 'retry-once-success');
+    assert.equal(commitAttempts, 2);
+
+    const docState = await docsService.getDocState('doc_sys_001');
+    assert.equal(getActiveSheetSnapshot(docState.snapshot).cells['41:2'].value, 'retry-once-success');
+  } finally {
+    atomicCommitModule.commitSetCellAtomically = originalCommit;
+    await closeProjectResources();
+    restoreEnv('STORE_DRIVER', originalEnv.STORE_DRIVER);
+    restoreEnv('CACHE_DRIVER', originalEnv.CACHE_DRIVER);
+    restoreEnv('RUNTIME_STATE_DRIVER', originalEnv.RUNTIME_STATE_DRIVER);
+    restoreEnv('DOC_LOCK_DRIVER', originalEnv.DOC_LOCK_DRIVER);
+    clearBackendRequireCache();
+  }
+});
+
+test('redis atomic set_cell also persists user_op_state to mysql', async () => {
+  const portA = await getFreePort();
+  const serverA = await startServerInstance({ port: portA, serverId: 'redis-user-op-persist-a' });
+  const clientA = await connect(serverA.wsUrl);
+
+  try {
+    await joinRoom(clientA, 'doc_sys_001', 'redis-user-op-persist-user');
+
+    clientA.send({
+      type: 'set_cell',
+      sheetId: DEFAULT_SHEET_ID,
+      docId: 'doc_sys_001',
+      clientId: 'redis-user-op-persist-user',
+      row: 40,
+      col: 2,
+      value: 'persist-user-op-state',
+    });
+
+    await clientA.waitFor((message) => (
+      message.type === 'cell_updated'
+      && message.data.docId === 'doc_sys_001'
+      && message.data.row === 40
+      && message.data.col === 2
+      && message.data.value === 'persist-user-op-state'
+    ));
+
+    const userOpStateMysqlStore = require('../store/mysql/userOpStateMysqlStore')();
+    await waitForAsync(async () => {
+      const persistedState = await userOpStateMysqlStore.getState('doc_sys_001', 'redis-user-op-persist-user');
+      assert.ok(persistedState);
+      assert.equal(persistedState.redoStackJson.length, 0);
+      assert.equal(persistedState.undoStackJson.length, 1);
+      assert.equal(persistedState.undoStackJson[0].opType, 'set_cell');
+      assert.equal(persistedState.undoStackJson[0].row, 40);
+      assert.equal(persistedState.undoStackJson[0].col, 2);
+      assert.equal(persistedState.undoStackJson[0].newValue, 'persist-user-op-state');
+    });
+  } finally {
+    await clientA.close();
+    await serverA.stop();
   }
 });
 

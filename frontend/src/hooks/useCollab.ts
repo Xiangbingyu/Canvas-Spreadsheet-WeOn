@@ -1,47 +1,53 @@
-import { useEffect, useRef, useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useDispatch, useSelector } from 'react-redux'
 import { message as antMessage } from 'antd'
-import { CollabClient } from '../spreadsheet/collab/CollabClient'
-import type { CollabCallbacks, ConflictInfo } from '../spreadsheet/collab/CollabClient'
-import type {
-  Snapshot,
-  CellUpdated,
-  TitleUpdated,
-  CursorUpdate,
-  SheetImported,
-  SheetAdded,
-} from '../spreadsheet/model/collabProtocol'
+import type { WorkbookSnapshot } from '@/services/httpType'
 import {
-  setWorksheet,
-  updateCell,
-  setDocTitle,
-  setOnlineUsers,
-  setUserCursor,
-  setCurrentSeq,
-  setConnectionStatus,
-  setSelf,
-  setLastEditTime,
-  importWorkbook as importWorkbookAction,
+  CollabClient,
+  type CollabCallbacks,
+  type ConflictInfo,
+} from '@/spreadsheet/collab/CollabClient'
+import type {
+  CellUpdated,
+  BatchCellUpdated,
+  CursorUpdate,
+  SheetAdded,
+  SheetImported,
+  Snapshot,
+  TitleUpdated,
+} from '@/spreadsheet/model/collabProtocol'
+import type { Style } from '@/spreadsheet/model/types'
+import {
   applySheetAdded,
+  importWorkbook,
+  setConnectionStatus,
+  setCurrentSeq,
+  setDocTitle,
+  setLastEditTime,
+  setOnlineUsers,
+  setSelf,
+  setUserCursor,
+  setWorksheet,
   store,
+  updateCell,
+  type AppDispatch,
+  type RootState,
 } from '@/spreadsheet/store'
 import {
-  insertRow,
+  deleteCol,
   deleteRow,
   insertCol,
-  deleteCol,
+  insertRow,
   updateRange,
   setRangeValues as setRangeValuesAction,
 } from '@/spreadsheet/store/workSheetStore'
-import type { WorkbookSnapshotPayload } from '@/spreadsheet/store/workbookStore'
-import type { WorkbookSnapshot } from '@/services/httpType'
 import {
   fromHttpDocWorkbookSnapshot,
   fromServerSnapshot,
   toServerWorkbookSnapshotFromPayload,
+  type WorkbookImportSnapshot,
 } from '@/spreadsheet/utils/fromServerSnapshot'
-import type { Style } from '@/spreadsheet/model/types'
-import type { AppDispatch, RootState } from '@/spreadsheet/store'
+
 
 /**
  * 远端 set_range_values 回写时走局部重绘的变更格数上限。
@@ -72,14 +78,35 @@ interface UseCollabOptions {
   onRemoteRangeApplied?: (cells: Array<{ row: number; col: number }>) => void
 }
 
-export function useCollab({
-  url,
-  docId,
-  clientId,
-  userName,
-  userColor,
-  onRemoteRangeApplied,
-}: UseCollabOptions) {
+
+/** 乐观更新：workbook 快照写入 store，并按 reducer 解析后的 activeSheetId 同步 workSheet */
+function applyWorkbookSnapshot(dispatch: AppDispatch, workbook: WorkbookImportSnapshot) {
+  dispatch(importWorkbook(workbook))
+  const { activeSheetId, sheets } = store.getState().workbook
+  const activeSheet = sheets[activeSheetId]
+  if (activeSheet) {
+    dispatch(setWorksheet(activeSheet))
+  }
+}
+
+function applyCollabSeqMeta(
+  dispatch: AppDispatch,
+  data: { seq: number } & Record<string, unknown>
+): void {
+  dispatch(setCurrentSeq(data.seq))
+  if (typeof data.timestamp === 'number') dispatch(setLastEditTime(data.timestamp))
+}
+
+/** batch_cell_updated / range 回包：style 字段 → updateRange 的 style 语义 */
+function styleFromServerPayload(
+  style: Record<string, unknown> | null | undefined
+): Style | null | undefined {
+  if (style === null) return null
+  if (style) return style as Style
+  return undefined
+}
+
+export function useCollab({ url, docId, clientId, userName, userColor }: UseCollabOptions) {
   const dispatch = useDispatch()
   const sheetId = useSelector((s: RootState) => s.workSheet.sheetId)
   const clientRef = useRef<CollabClient | null>(null)
@@ -94,7 +121,8 @@ export function useCollab({
   const callbacks = useMemo<CollabCallbacks>(
     () => ({
       onSnapshot(snapshot: Snapshot, currentSeq: number) {
-        dispatch(setWorksheet(fromServerSnapshot(snapshot)))
+        const workbook = fromHttpDocWorkbookSnapshot(snapshot as WorkbookSnapshot)
+        applyWorkbookSnapshot(dispatch, workbook)
         dispatch(setCurrentSeq(currentSeq))
       },
 
@@ -109,9 +137,26 @@ export function useCollab({
             style: data.style ? (data.style as Style) : undefined,
           })
         )
-        dispatch(setCurrentSeq(data.seq))
-        const raw = data as Record<string, unknown>
-        if (typeof raw.timestamp === 'number') dispatch(setLastEditTime(raw.timestamp))
+        applyCollabSeqMeta(dispatch, data as { seq: number } & Record<string, unknown>)
+      },
+
+      onBatchCellUpdated(data: BatchCellUpdated['data']) {
+        const sheet = store.getState().workSheet
+        dispatch(
+          updateRange({
+            sheetId: data.sheetId,
+            updates: data.updates.map((u) => ({
+              row: u.row,
+              col: u.col,
+              value:
+                'value' in (u as Record<string, unknown>)
+                  ? u.value
+                  : (sheet.cells[`${u.row}:${u.col}`]?.value ?? ''),
+              style: styleFromServerPayload(u.style),
+            })),
+          })
+        )
+        applyCollabSeqMeta(dispatch, data as { seq: number } & Record<string, unknown>)
       },
 
       onTitleUpdated(data: TitleUpdated['data']) {
@@ -122,7 +167,7 @@ export function useCollab({
       onSheetImported(data: SheetImported['data']) {
         // 服务端 import_sheet 确认：以服务端快照为准校正本地（乐观更新后的对齐）
         const workbook = fromHttpDocWorkbookSnapshot(data.snapshot as unknown as WorkbookSnapshot)
-        applyLocalWorkbookImport(dispatch, workbook)
+        applyWorkbookSnapshot(dispatch, workbook)
         dispatch(setCurrentSeq(data.seq))
       },
 
@@ -178,9 +223,7 @@ export function useCollab({
             style: data.style ? (data.style as Style) : undefined,
           })
         )
-        dispatch(setCurrentSeq(data.seq))
-        const raw = data as Record<string, unknown>
-        if (typeof raw.timestamp === 'number') dispatch(setLastEditTime(raw.timestamp))
+        applyCollabSeqMeta(dispatch, data as { seq: number } & Record<string, unknown>)
       },
 
       onRedoApplied(data) {
@@ -194,9 +237,7 @@ export function useCollab({
             style: data.style ? (data.style as Style) : undefined,
           })
         )
-        dispatch(setCurrentSeq(data.seq))
-        const raw = data as Record<string, unknown>
-        if (typeof raw.timestamp === 'number') dispatch(setLastEditTime(raw.timestamp))
+        applyCollabSeqMeta(dispatch, data as { seq: number } & Record<string, unknown>)
       },
 
       onCursor(data: CursorUpdate['data']) {
@@ -245,7 +286,7 @@ export function useCollab({
         if (status === 'connected') {
           dispatch(setSelf({ name: userName ?? '', color: userColor ?? '#3b82f6' }))
         }
-        if (status === 'failed') {
+        if (status === 'disconnected') {
           antMessage.error('连接失败，请检查网络后刷新页面重试')
         }
       },
@@ -301,8 +342,8 @@ export function useCollab({
      * 2. 再发 WS import_sheet → 服务端持久化并广播
      * @returns 是否已发送到协同（false 表示仅本地更新）
      */
-    importWorkbook: (workbook: WorkbookSnapshotPayload, eventId?: string): boolean => {
-      applyLocalWorkbookImport(dispatch, workbook)
+    importWorkbook: (workbook: WorkbookImportSnapshot, eventId?: string): boolean => {
+      applyWorkbookSnapshot(dispatch, workbook)
 
       const client = clientRef.current
       if (!client) return false

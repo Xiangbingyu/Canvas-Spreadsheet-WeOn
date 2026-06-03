@@ -17,7 +17,11 @@ export function SpreadsheetPage() {
   const userId = useMemo(() => allocateClientId(), [])
 
   useEffect(() => {
+    if (!routeDocId) return
+
     let cancelled = false
+    // 先绑定路由 docId，避免 navigate 后 WS 仍连旧文档
+    dispatch(setDocSession({ docId: routeDocId, clientId: userId }))
 
     async function load() {
       try {

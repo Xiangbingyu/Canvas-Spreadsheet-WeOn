@@ -8,6 +8,9 @@ const userOpStateStore = require('../store/userOpStateStore');
 const auditService = require('../audit/auditService');
 const collabConfig = require('../config/collabConfig');
 const { normalizeBaseSeq, rebaseBatchSetCellCommand } = require('./cellOtService');
+const docStateCache = require('../cache/docStateCache');
+const historyCache = require('../cache/historyCache');
+const asyncWriteQueue = require('../infra/asyncWriteQueue');
 
 function createServiceError(code, message, details = null) {
   const error = new Error(message);
@@ -139,6 +142,7 @@ async function applyBatchSetCell(command = {}) {
     let updatedDoc = null;
     let seq = 0;
     let trimmedUndoStack = [];
+    let nextOpState = null;
     let effectiveCommand = normalizedCommand;
     let rebaseResult = {
       enabled: false,
@@ -150,11 +154,21 @@ async function applyBatchSetCell(command = {}) {
     let finalUpdates = [];
     let targetSheetId = normalizedCommand.sheetId;
 
+    if (storeConfig.driver === 'mysql') {
+      await asyncWriteQueue.drain();
+    }
+
     const executeMutation = async (connection = null) => {
-      const currentDoc = await docsService.getDocStateForWrite(normalizedCommand.docId, {
-        connection,
-        forUpdate: Boolean(connection),
-      });
+      let currentDoc;
+      if (storeConfig.driver === 'mysql') {
+        currentDoc = await docsService.getLiveDocRecord(normalizedCommand.docId);
+      }
+      if (!currentDoc) {
+        currentDoc = await docsService.getDocStateForWrite(normalizedCommand.docId, {
+          connection,
+          forUpdate: Boolean(connection),
+        });
+      }
 
       if (!currentDoc) {
         throw createServiceError(ERROR_CODES.DOCUMENT_NOT_FOUND, `document not found: ${normalizedCommand.docId}`);
@@ -243,12 +257,13 @@ async function applyBatchSetCell(command = {}) {
       }));
       trimmedUndoStack = trimUndoStack(undoStack);
 
-      await userOpStateStore.saveState({
+      nextOpState = {
         docId: normalizedCommand.docId,
         clientId: normalizedCommand.clientId,
         undoStackJson: trimmedUndoStack,
         redoStackJson: [],
-      }, { connection });
+      };
+      await userOpStateStore.saveState(nextOpState, { connection });
     };
 
     if (storeConfig.driver === 'mysql') {
@@ -257,6 +272,21 @@ async function applyBatchSetCell(command = {}) {
       await executeMutation();
     }
 
+    if (nextOpState && typeof userOpStateStore.syncRuntimeState === 'function') {
+      await userOpStateStore.syncRuntimeState(nextOpState);
+    }
+
+    await Promise.all([
+      docStateCache.set(normalizedCommand.docId, updatedDoc),
+      historyCache.append({
+        docId: normalizedCommand.docId,
+        clientId: normalizedCommand.clientId,
+        seq,
+        baseSeq: rebaseResult.baseSeq,
+        opType: 'batch_set_cell',
+        targetSheetId,
+      }),
+    ]);
     await docsService.invalidateDocCaches(normalizedCommand.docId);
 
     await auditService.recordAuditEvent({

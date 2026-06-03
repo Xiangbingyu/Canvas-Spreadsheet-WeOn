@@ -6,6 +6,7 @@ import { updateCell, updateRange } from '@/spreadsheet/store/workSheetStore'
 import type { CommitCellFn } from '@/hooks/useSpreadsheetInteraction'
 import type { RootState } from '@/spreadsheet/store'
 import type { Style } from '@/spreadsheet/model/types'
+import { generateStyleId, isEmptyStyle } from '@/spreadsheet/utils/generateStyleId'
 
 type SetCellFn = (
   row: number,
@@ -58,19 +59,43 @@ export function useCommitBatch(setBatchCells?: BatchSetCellFn): BatchCommitFn {
         ? (updates) => {
             if (updates.length === 0) return
             const sheetId = store.getState().workSheet.sheetId
-            const targets = updates.map((u) => ({ row: u.row, col: u.col }))
-            // batch_set_cell 是「一批坐标 + 一个统一 patch」：value 只能整批共享。
-            // 仅当整批 value 完全一致时才带 value（批量改内容/撤回回放场景）；
-            // 否则只带 style（批量改样式场景），由后端「只传 style 保留各格原值」语义守住内容，
-            // 避免把起始格的值覆盖到整个选区。
             const allSameValue = updates.every((u) => u.value === updates[0].value)
-            const patch: { value?: string; style?: Record<string, unknown> | null } = {
-              style: (updates[0].style ?? null) as unknown as Record<string, unknown> | null,
+
+            // batch_set_cell 只能表达「一批坐标 + 一个统一 patch」。
+            // 当最终样式并不一致时，按最终样式分组发送，避免把第一格的完整样式覆盖到整组选区。
+            const groupedUpdates = new Map<string, Array<(typeof updates)[number]>>()
+            for (const update of updates) {
+              const styleKey =
+                update.style === undefined
+                  ? '__style_undefined__'
+                  : isEmptyStyle(update.style)
+                    ? '__style_empty__'
+                    : generateStyleId(update.style)
+              const valueKey = allSameValue ? '__shared_value__' : update.value
+              const groupKey = `${styleKey}::${valueKey}`
+              const group = groupedUpdates.get(groupKey)
+              if (group) {
+                group.push(update)
+              } else {
+                groupedUpdates.set(groupKey, [update])
+              }
             }
-            if (allSameValue) {
-              patch.value = updates[0].value
+
+            for (const grouped of groupedUpdates.values()) {
+              const targets = grouped.map((u) => ({ row: u.row, col: u.col }))
+              const patch: { value?: string; style?: Record<string, unknown> | null } = {}
+
+              if (allSameValue) {
+                patch.value = grouped[0].value
+              }
+              if (grouped[0].style !== undefined) {
+                patch.style = isEmptyStyle(grouped[0].style)
+                  ? null
+                  : (grouped[0].style as unknown as Record<string, unknown>)
+              }
+
+              setBatchCells(sheetId, targets, patch)
             }
-            setBatchCells(sheetId, targets, patch)
           }
         : (updates) => {
             const sheetId = store.getState().workSheet.sheetId

@@ -30,23 +30,11 @@ function isStructureTransformEntry(historyEntry) {
   return historyEntry && STRUCTURE_OP_TYPES.has(historyEntry.opType);
 }
 
-function getSheetSnapshot(doc, sheetId) {
-  const snapshot = doc && doc.snapshotJson ? doc.snapshotJson : {};
-  const sheets = snapshot.sheets || {};
-  return sheetId && sheets[sheetId] ? sheets[sheetId] : null;
-}
-
-function clampPosition(value, upperBound) {
-  const normalizedUpperBound = Number.isInteger(upperBound) && upperBound > 0 ? upperBound : 1;
-  return Math.max(1, Math.min(value, normalizedUpperBound));
-}
-
 function transformCellReferenceThroughHistory({
   sheetId,
   row,
   col,
   historyEntries,
-  currentDoc,
 }) {
   let nextRow = row;
   let nextCol = col;
@@ -86,13 +74,6 @@ function transformCellReferenceThroughHistory({
         nextCol -= 1;
       }
     }
-  }
-
-  const currentSheet = getSheetSnapshot(currentDoc, sheetId);
-
-  if (currentSheet) {
-    nextRow = clampPosition(nextRow, currentSheet.rowCount);
-    nextCol = clampPosition(nextCol, currentSheet.colCount);
   }
 
   return {
@@ -171,7 +152,6 @@ async function rebaseSetCellCommand({
     row: command.row,
     col: command.col,
     historyEntries,
-    currentDoc,
   });
 
   return {
@@ -264,7 +244,6 @@ async function rebaseBatchSetCellCommand({
           row: update.row,
           col: update.col,
           historyEntries,
-          currentDoc,
         });
 
         return {

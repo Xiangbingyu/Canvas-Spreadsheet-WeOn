@@ -8,7 +8,7 @@ import {
   parseExcelFromBuffer,
   type ParseExcelProgress,
 } from '@/spreadsheet/excel/excelImport'
-import type { WorkbookSnapshotPayload } from '@/spreadsheet/store/workbookStore'
+import type { WorkbookImportSnapshot } from '@/spreadsheet/utils/fromServerSnapshot'
 
 export type ImportExcelMeta = {
   fileName: string
@@ -18,7 +18,7 @@ type ImportExcelModalProps = {
   open: boolean
   onClose: () => void
   /** 解析完成后：POST /docs 创建新文档 */
-  onImport: (workbook: WorkbookSnapshotPayload, meta: ImportExcelMeta) => Promise<void>
+  onImport: (workbook: WorkbookImportSnapshot, meta: ImportExcelMeta) => Promise<void>
 }
 
 const INITIAL_PROGRESS: ParseExcelProgress = {

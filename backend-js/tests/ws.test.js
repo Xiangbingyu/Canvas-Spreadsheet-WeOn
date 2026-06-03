@@ -41,6 +41,7 @@ async function closeProjectResources() {
   const roomServiceModulePath = path.join(projectRoot, 'service', 'roomService.js');
   const idempotencyServiceModulePath = path.join(projectRoot, 'idempotency', 'idempotencyService.js');
   const lockModulePath = path.join(projectRoot, 'infra', 'redis', 'lock.js');
+  const asyncWriteQueueModulePath = path.join(projectRoot, 'infra', 'asyncWriteQueue.js');
 
   if (require.cache[cacheModulePath]) {
     await require(cacheModulePath).close();
@@ -56,6 +57,10 @@ async function closeProjectResources() {
 
   if (require.cache[lockModulePath]) {
     await require(lockModulePath).close();
+  }
+
+  if (require.cache[asyncWriteQueueModulePath]) {
+    await require(asyncWriteQueueModulePath).close();
   }
 }
 
@@ -2314,6 +2319,89 @@ test('batch_set_cell preserves existing style when only value is provided', asyn
   }
 });
 
+test('batch_set_cell merges partial style patches per cell instead of replacing heterogeneous backgrounds', async () => {
+  const srv = await createTestServer();
+  const c = await connect(srv.wsUrl);
+  try {
+    const joinAck = await joinDoc(c, 'doc_sys_001', 'u_batch_partial_style_merge');
+
+    let base = c.received.length;
+    c.send({
+      type: 'set_cell',
+      docId: 'doc_sys_001',
+      clientId: 'u_batch_partial_style_merge',
+      sheetId: DEFAULT_SHEET_ID,
+      row: 10,
+      col: 1,
+      value: 'red-bg',
+      style: { backgroundColor: '#ff0000', color: '#000000' },
+    });
+    await c.waitFor(base + 2);
+
+    base = c.received.length;
+    c.send({
+      type: 'set_cell',
+      docId: 'doc_sys_001',
+      clientId: 'u_batch_partial_style_merge',
+      sheetId: DEFAULT_SHEET_ID,
+      row: 10,
+      col: 2,
+      value: 'white-bg',
+      style: { backgroundColor: '#ffffff', color: '#000000' },
+    });
+    await c.waitFor(base + 2);
+
+    const setupReply = c.received[base];
+
+    base = c.received.length;
+    c.send({
+      type: 'batch_set_cell',
+      docId: 'doc_sys_001',
+      clientId: 'u_batch_partial_style_merge',
+      sheetId: DEFAULT_SHEET_ID,
+      baseSeq: setupReply.data.seq || joinAck.data.currentSeq,
+      updates: [
+        { row: 10, col: 1 },
+        { row: 10, col: 2 },
+      ],
+      style: { color: '#0000ff' },
+    });
+    await c.waitFor(base + 2);
+
+    const reply = c.received[base];
+    assert.equal(reply.type, 'batch_cell_updated');
+    assert.deepEqual(reply.data.updates, [
+      {
+        row: 10,
+        col: 1,
+        value: 'red-bg',
+        style: { backgroundColor: '#ff0000', color: '#0000ff' },
+      },
+      {
+        row: 10,
+        col: 2,
+        value: 'white-bg',
+        style: { backgroundColor: '#ffffff', color: '#0000ff' },
+      },
+    ]);
+
+    const { getDocState } = require('../service/docsService');
+    const docState = await getDocState('doc_sys_001');
+    const sheet = docState.snapshot.sheets[DEFAULT_SHEET_ID];
+    assert.deepEqual(sheet.styles[sheet.cells['10:1'].styleId], {
+      backgroundColor: '#ff0000',
+      color: '#0000ff',
+    });
+    assert.deepEqual(sheet.styles[sheet.cells['10:2'].styleId], {
+      backgroundColor: '#ffffff',
+      color: '#0000ff',
+    });
+  } finally {
+    await c.close();
+    await srv.close();
+  }
+});
+
 test('batch_set_cell transforms each target through structure changes and dedupes collisions', async () => {
   const srv = await createTestServer();
   const c = await connect(srv.wsUrl);
@@ -2727,6 +2815,54 @@ test('delayed set_cell is transformed through insert_row and insert_col in seque
     const sheet = docState.snapshot.sheets[DEFAULT_SHEET_ID];
     assert.equal(sheet.cells['1:2'].value, 'current-B1-after-shifts');
     assert.equal(sheet.cells['2:3'].value, 'delayed-through-two-transforms');
+  } finally {
+    await c.close();
+    await srv.close();
+  }
+});
+
+test('stale set_cell keeps non-structural targets without collapsing to current sheet bounds', async () => {
+  const srv = await createTestServer();
+  const c = await connect(srv.wsUrl);
+  try {
+    const joinAck = await joinDoc(c, 'doc_sys_001', 'u_ot_expand_without_structure');
+    const staleBaseSeq = joinAck.data.currentSeq;
+    const operations = [
+      { row: 1, col: 1, value: 'A1' },
+      { row: 1, col: 2, value: 'B1' },
+      { row: 1, col: 3, value: 'C1' },
+      { row: 2, col: 1, value: 'A2' },
+      { row: 2, col: 3, value: 'C2' },
+    ];
+
+    for (const operation of operations) {
+      const base = c.received.length;
+      c.send({
+        type: 'set_cell',
+        sheetId: DEFAULT_SHEET_ID,
+        docId: 'doc_sys_001',
+        clientId: 'u_ot_expand_without_structure',
+        row: operation.row,
+        col: operation.col,
+        value: operation.value,
+        baseSeq: staleBaseSeq,
+      });
+      await c.waitFor(base + 2);
+
+      const reply = c.received[base];
+      assert.equal(reply.type, 'cell_updated');
+      assert.equal(reply.data.row, operation.row);
+      assert.equal(reply.data.col, operation.col);
+    }
+
+    const { getDocState } = require('../service/docsService');
+    const docState = await getDocState('doc_sys_001');
+    const sheet = docState.snapshot.sheets[DEFAULT_SHEET_ID];
+    assert.equal(sheet.cells['1:1'].value, 'A1');
+    assert.equal(sheet.cells['1:2'].value, 'B1');
+    assert.equal(sheet.cells['1:3'].value, 'C1');
+    assert.equal(sheet.cells['2:1'].value, 'A2');
+    assert.equal(sheet.cells['2:3'].value, 'C2');
   } finally {
     await c.close();
     await srv.close();

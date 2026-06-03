@@ -24,4 +24,5 @@ module.exports = {
   docMetaTtlMs: normalizePositiveNumber(process.env.DOC_META_CACHE_TTL_MS, 10 * 60 * 1000),
   userDocsListTtlMs: normalizePositiveNumber(process.env.USER_DOCS_LIST_CACHE_TTL_MS, 60 * 1000),
   memoryMaxEntries: normalizePositiveNumber(process.env.CACHE_MEMORY_MAX_ENTRIES, 1000),
+  historyTtlMs: normalizePositiveNumber(process.env.HISTORY_CACHE_TTL_MS, 30 * 60 * 1000),
 };

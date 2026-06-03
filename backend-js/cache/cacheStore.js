@@ -58,6 +58,12 @@ function createMemoryCacheStore() {
       evictOldestIfNeeded();
     },
 
+    async setMany(entriesToSet = []) {
+      for (const entry of entriesToSet) {
+        await this.set(entry.key, entry.value, { ttlMs: entry.ttlMs ?? null });
+      }
+    },
+
     async delete(key) {
       entries.delete(key);
     },
@@ -135,6 +141,28 @@ function createRedisCacheStore() {
       }
 
       await client.set(key, serializedValue);
+    },
+
+    async setMany(entriesToSet = []) {
+      await ensureReady();
+
+      if (isClosing || !client.isOpen || entriesToSet.length === 0) {
+        return;
+      }
+
+      const transaction = client.multi();
+
+      for (const entry of entriesToSet) {
+        const serializedValue = JSON.stringify(entry.value === undefined ? null : entry.value);
+
+        if (Number.isFinite(entry.ttlMs) && entry.ttlMs > 0) {
+          transaction.set(entry.key, serializedValue, { PX: entry.ttlMs });
+        } else {
+          transaction.set(entry.key, serializedValue);
+        }
+      }
+
+      await transaction.exec();
     },
 
     async delete(key) {

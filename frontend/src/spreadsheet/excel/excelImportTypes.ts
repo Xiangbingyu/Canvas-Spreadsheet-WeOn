@@ -1,6 +1,6 @@
 import type { WorksheetData } from '@/spreadsheet/model/types'
 
-/** Excel 多表导入结果，与 workbookStore WorkbookSnapshotPayload 结构一致 */
+/** Excel 多表导入结果，与 fromServerSnapshot.WorkbookImportSnapshot 一致 */
 export type ExcelImportWorkbook = {
   activeSheetId: string
   sheetOrder: string[]

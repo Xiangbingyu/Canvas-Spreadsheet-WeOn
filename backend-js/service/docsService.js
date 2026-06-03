@@ -1,6 +1,8 @@
 const docSnapshotCache = require('../cache/docSnapshotCache');
 const docMetaCache = require('../cache/docMetaCache');
+const docStateCache = require('../cache/docStateCache');
 const userDocsListCache = require('../cache/userDocsListCache');
+const storeConfig = require('../config/storeConfig');
 const idempotencyService = require('../idempotency/idempotencyService');
 const { createDocRequestKey } = require('../idempotency/idempotencyKeys');
 const { ERROR_CODES } = require('../protocol/errorCodes');
@@ -130,9 +132,48 @@ async function primeDocCaches(docRecord, options = {}) {
   const docMeta = options.docMeta || toDocMeta(docRecord);
 
   await Promise.all([
+    docStateCache.set(docRecord.docId, docRecord),
     docSnapshotCache.set(docRecord.docId, docView),
     docMetaCache.set(docRecord.docId, docMeta),
   ]);
+}
+
+async function getLiveDocRecord(docId) {
+  if (storeConfig.driver !== 'mysql') {
+    return null;
+  }
+
+  const [liveSeq, liveSnapshot] = await Promise.all([
+    docStateCache.get(docId),
+    docSnapshotCache.get(docId),
+  ]);
+
+  if (!liveSnapshot) {
+    return null;
+  }
+
+  if (
+    liveSeq
+    && Number.isInteger(liveSeq.currentSeq)
+    && Number.isInteger(liveSnapshot.currentSeq)
+    && liveSeq.currentSeq !== liveSnapshot.currentSeq
+  ) {
+    await Promise.all([
+      docSnapshotCache.invalidate(docId),
+      docMetaCache.invalidate(docId),
+    ]);
+    return null;
+  }
+
+  return {
+    docId: liveSnapshot.docId,
+    title: liveSnapshot.title,
+    currentSeq: liveSeq?.currentSeq ?? liveSnapshot.currentSeq,
+    createdBy: liveSnapshot.createdBy,
+    createdAt: liveSnapshot.createdAt,
+    updatedAt: liveSnapshot.updatedAt,
+    snapshotJson: liveSnapshot.snapshot,
+  };
 }
 
 async function getValidRememberedCreateDocResponse(record) {
@@ -146,6 +187,14 @@ async function getValidRememberedCreateDocResponse(record) {
 
 async function getDocMeta(docId) {
   const normalizedDocId = normalizeDocId(docId);
+  const liveDoc = await getLiveDocRecord(normalizedDocId);
+
+  if (liveDoc) {
+    const docMeta = toDocMeta(liveDoc);
+    await primeDocCaches(liveDoc, { docMeta, docView: toDocView(liveDoc) });
+    return docMeta;
+  }
+
   const cachedMeta = await docMetaCache.get(normalizedDocId);
 
   if (cachedMeta) {
@@ -347,7 +396,12 @@ async function listDocsByUser(input = {}) {
     return cachedList;
   }
 
-  const allDocs = await docStore.list();
+  const allDocs = await Promise.all(
+    (await docStore.list()).map(async (doc) => {
+      const liveDoc = await getLiveDocRecord(doc.docId);
+      return liveDoc || doc;
+    })
+  );
   const createdDocs = [];
   const participatedDocs = [];
 
@@ -436,6 +490,14 @@ function normalizeDocId(docId) {
 // 3. store 命中后同时回填 snapshot/meta 缓存
 async function getDocState(docId) {
   const normalizedDocId = normalizeDocId(docId);
+  const liveDoc = await getLiveDocRecord(normalizedDocId);
+
+  if (liveDoc) {
+    const docView = toDocView(liveDoc);
+    await primeDocCaches(liveDoc, { docView, docMeta: toDocMeta(liveDoc) });
+    return docView;
+  }
+
   const cachedDoc = await docSnapshotCache.get(normalizedDocId);
 
   if (cachedDoc) {
@@ -499,6 +561,7 @@ module.exports = {
   getDocState,
   getDocStateForWrite,
   getDocMeta,
+  getLiveDocRecord,
   applySetCell,
   applyBatchSetCell,
   applyRangeValues,

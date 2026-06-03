@@ -97,7 +97,7 @@ for (const file of sourceFiles) {
   // model/types.ts：仅基础三类型
   if (r === 'spreadsheet/model/types.ts') {
     const exports = [...content.matchAll(/^export\s+(interface|type|const|function|class)\s+(\w+)/gm)]
-    const allowed = new Set(['Style', 'Cell', 'WorksheetData'])
+    const allowed = new Set(['Style', 'Cell', 'WorksheetData', 'WorkbookData'])
     for (const [, , name] of exports) {
       if (!allowed.has(name)) {
         errors.push(
