@@ -4,7 +4,7 @@ import { useDispatch } from 'react-redux'
 import { useNavigate, useParams } from 'react-router-dom'
 import { SpreadsheetWorkspace } from '@/components/spreadsheetLayout/SpreadsheetWorkspace'
 import API, { ApiError } from '@/services/httpAPI'
-import { initFromDoc, setDocTitle, setWorksheet } from '@/spreadsheet/store'
+import { initFromDoc, setDocTitle, setWorksheet, store } from '@/spreadsheet/store'
 import { setDocSession } from '@/spreadsheet/store/userStore'
 import { allocateClientId } from '@/spreadsheet/utils/allocateClientId'
 import { fromHttpDocWorkbookSnapshot } from '@/spreadsheet/utils/fromServerSnapshot'
@@ -17,7 +17,11 @@ export function SpreadsheetPage() {
   const userId = useMemo(() => allocateClientId(), [])
 
   useEffect(() => {
+    if (!routeDocId) return
+
     let cancelled = false
+    // 先绑定路由 docId，避免 navigate 后 WS 仍连旧文档
+    dispatch(setDocSession({ docId: routeDocId, clientId: userId }))
 
     async function load() {
       try {
@@ -26,7 +30,8 @@ export function SpreadsheetPage() {
         const workbook = fromHttpDocWorkbookSnapshot(doc.snapshot)
         const docTitle = doc.title?.trim() || '未命名表格'
         dispatch(initFromDoc({ docTitle, ...workbook }))
-        const activeSheet = workbook.sheets[workbook.activeSheetId]
+        const { activeSheetId, sheets } = store.getState().workbook
+        const activeSheet = sheets[activeSheetId]
         if (activeSheet) {
           dispatch(setWorksheet(activeSheet))
         }

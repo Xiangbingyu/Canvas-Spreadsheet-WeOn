@@ -8,8 +8,6 @@ import {
   type SetSelectedCellPayload,
 } from './selectStore'
 import { setWorksheet, workSheetReducer } from './workSheetStore'
-import type { UpdateCellPayload } from '@/spreadsheet/utils/applyUpdateCell'
-
 import {
   collabReducer,
   setDocTitle,
@@ -72,4 +70,4 @@ export {
 }
 export { workSheetReducer, workbookReducer, selectionReducer, collabReducer, clipboardReducer }
 
-export type { UpdateCellPayload, SelectedCell, SelectionState, SetSelectedCellPayload }
+export type { SelectedCell, SelectionState, SetSelectedCellPayload }

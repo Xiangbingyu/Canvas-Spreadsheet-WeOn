@@ -15,8 +15,6 @@ import {
   updateRange as updateWorkbookRange,
 } from './workbookStore'
 
-export type { UpdateCellPayload } from '@/spreadsheet/utils/applyUpdateCell'
-
 // 初始化工作表
 const initialWorksheet: WorksheetData = {
   sheetId: '01',

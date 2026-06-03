@@ -6,9 +6,11 @@ import { CreateBlankSheetModal } from '@/components/startUI/CreateBlankSheetModa
 import API, { ApiError } from '@/services/httpAPI'
 import type { RootState } from '@/spreadsheet/store'
 import { buildDocShareUrl } from '@/spreadsheet/utils/shareLink'
-import type { WorkbookSnapshotPayload } from '@/spreadsheet/store/workbookStore'
 import { deriveDocTitleFromFileName } from '@/spreadsheet/utils/deriveDocTitleFromFileName'
-import { toServerWorkbookSnapshotFromPayload } from '@/spreadsheet/utils/fromServerSnapshot'
+import {
+  toServerWorkbookSnapshotFromPayload,
+  type WorkbookImportSnapshot,
+} from '@/spreadsheet/utils/fromServerSnapshot'
 import { ExportExcelModal } from './ExportExcelModal'
 import { ImportExcelModal } from './ImportExcelModal'
 import type { ImportExcelMeta } from './ImportExcelModal'
@@ -65,7 +67,7 @@ export function Menubar({ onSetTitle }: MenubarProps) {
     }
   }
 
-  async function handleImportExcel(workbook: WorkbookSnapshotPayload, meta: ImportExcelMeta) {
+  async function handleImportExcel(workbook: WorkbookImportSnapshot, meta: ImportExcelMeta) {
     setImportingDoc(true)
     try {
       const title = deriveDocTitleFromFileName(meta.fileName)

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useDispatch, useSelector } from 'react-redux'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import { DisplayNameModal } from '@/components/CollabStatus/DisplayNameModal'
 import { FormulaBar } from '@/components/FormulaBar/FormulaBar'
 import { Loading } from '@/components/Loading/Loading'
@@ -29,8 +29,11 @@ const COLLAB_WS_URL =
 export function SpreadsheetWorkspace() {
   const dispatch = useDispatch()
   const navigate = useNavigate()
+  const { docId: routeDocId = '' } = useParams()
   const [userName, setUserName] = useState('')
-  const docId = useSelector((s: RootState) => s.collab.docId)
+  const sessionDocId = useSelector((s: RootState) => s.collab.docId)
+  /** 路由优先：导入后 navigate 时 collab.docId 可能尚未 GET 完成 */
+  const docId = routeDocId || sessionDocId
   const nameModalOpen = !!docId && !userName.trim()
   const clientId = useSelector((s: RootState) => s.collab.clientId)
   const connectionStatus = useSelector((s: RootState) => s.collab.connectionStatus)

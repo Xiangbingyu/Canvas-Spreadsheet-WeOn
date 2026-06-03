@@ -1,55 +1,50 @@
-import { useEffect, useRef, useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useDispatch, useSelector } from 'react-redux'
 import { message as antMessage } from 'antd'
-import { CollabClient } from '../spreadsheet/collab/CollabClient'
-import type { CollabCallbacks, ConflictInfo } from '../spreadsheet/collab/CollabClient'
-import type {
-  Snapshot,
-  CellUpdated,
-  TitleUpdated,
-  CursorUpdate,
-  SheetImported,
-  SheetAdded,
-} from '../spreadsheet/model/collabProtocol'
+import type { WorkbookSnapshot } from '@/services/httpType'
 import {
-  setWorksheet,
-  updateCell,
-  setDocTitle,
-  setOnlineUsers,
-  setUserCursor,
-  setCurrentSeq,
-  setConnectionStatus,
-  setSelf,
-  setLastEditTime,
-  importWorkbook as importWorkbookAction,
+  CollabClient,
+  type CollabCallbacks,
+  type ConflictInfo,
+} from '@/spreadsheet/collab/CollabClient'
+import type {
+  CellUpdated,
+  CursorUpdate,
+  SheetAdded,
+  SheetImported,
+  Snapshot,
+  TitleUpdated,
+} from '@/spreadsheet/model/collabProtocol'
+import type { Style } from '@/spreadsheet/model/types'
+import {
   applySheetAdded,
+  importWorkbook,
+  setConnectionStatus,
+  setCurrentSeq,
+  setDocTitle,
+  setLastEditTime,
+  setOnlineUsers,
+  setSelf,
+  setUserCursor,
+  setWorksheet,
   store,
+  updateCell,
+  type AppDispatch,
+  type RootState,
 } from '@/spreadsheet/store'
 import {
-  insertRow,
+  deleteCol,
   deleteRow,
   insertCol,
-  deleteCol,
+  insertRow,
   updateRange,
 } from '@/spreadsheet/store/workSheetStore'
-import type { WorkbookSnapshotPayload } from '@/spreadsheet/store/workbookStore'
-import type { WorkbookSnapshot } from '@/services/httpType'
 import {
   fromHttpDocWorkbookSnapshot,
   fromServerSnapshot,
   toServerWorkbookSnapshotFromPayload,
+  type WorkbookImportSnapshot,
 } from '@/spreadsheet/utils/fromServerSnapshot'
-import type { Style } from '@/spreadsheet/model/types'
-import type { AppDispatch, RootState } from '@/spreadsheet/store'
-
-/** 乐观更新：先把 workbook 写入本地 Redux（Canvas 立即刷新） */
-function applyLocalWorkbookImport(dispatch: AppDispatch, workbook: WorkbookSnapshotPayload) {
-  dispatch(importWorkbookAction(workbook))
-  const activeSheet = workbook.sheets[workbook.activeSheetId]
-  if (activeSheet) {
-    dispatch(setWorksheet(activeSheet))
-  }
-}
 
 interface UseCollabOptions {
   url: string
@@ -57,6 +52,16 @@ interface UseCollabOptions {
   clientId: string
   userName?: string
   userColor?: string
+}
+
+/** 乐观更新：workbook 快照写入 store，并按 reducer 解析后的 activeSheetId 同步 workSheet */
+function applyWorkbookSnapshot(dispatch: AppDispatch, workbook: WorkbookImportSnapshot) {
+  dispatch(importWorkbook(workbook))
+  const { activeSheetId, sheets } = store.getState().workbook
+  const activeSheet = sheets[activeSheetId]
+  if (activeSheet) {
+    dispatch(setWorksheet(activeSheet))
+  }
 }
 
 export function useCollab({ url, docId, clientId, userName, userColor }: UseCollabOptions) {
@@ -68,7 +73,8 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
   const callbacks = useMemo<CollabCallbacks>(
     () => ({
       onSnapshot(snapshot: Snapshot, currentSeq: number) {
-        dispatch(setWorksheet(fromServerSnapshot(snapshot)))
+        const workbook = fromHttpDocWorkbookSnapshot(snapshot as WorkbookSnapshot)
+        applyWorkbookSnapshot(dispatch, workbook)
         dispatch(setCurrentSeq(currentSeq))
       },
 
@@ -96,7 +102,7 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
       onSheetImported(data: SheetImported['data']) {
         // 服务端 import_sheet 确认：以服务端快照为准校正本地（乐观更新后的对齐）
         const workbook = fromHttpDocWorkbookSnapshot(data.snapshot as unknown as WorkbookSnapshot)
-        applyLocalWorkbookImport(dispatch, workbook)
+        applyWorkbookSnapshot(dispatch, workbook)
         dispatch(setCurrentSeq(data.seq))
       },
 
@@ -218,7 +224,7 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
         if (status === 'connected') {
           dispatch(setSelf({ name: userName ?? '', color: userColor ?? '#3b82f6' }))
         }
-        if (status === 'failed') {
+        if (status === 'disconnected') {
           antMessage.error('连接失败，请检查网络后刷新页面重试')
         }
       },
@@ -274,8 +280,8 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
      * 2. 再发 WS import_sheet → 服务端持久化并广播
      * @returns 是否已发送到协同（false 表示仅本地更新）
      */
-    importWorkbook: (workbook: WorkbookSnapshotPayload, eventId?: string): boolean => {
-      applyLocalWorkbookImport(dispatch, workbook)
+    importWorkbook: (workbook: WorkbookImportSnapshot, eventId?: string): boolean => {
+      applyWorkbookSnapshot(dispatch, workbook)
 
       const client = clientRef.current
       if (!client) return false

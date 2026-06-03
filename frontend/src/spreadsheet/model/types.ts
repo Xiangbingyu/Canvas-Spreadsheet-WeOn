@@ -27,3 +27,11 @@ export interface WorksheetData {
   styles: Record<string, Style> // 键: 样式ID, 值: 具体的样式对象
   cells: Record<string, Cell> // 键: "r:c"坐标字符串, 值: 单元格数据
 }
+
+/** 工作簿数据结构（Redux workbook slice 与领域层共用） */
+export interface WorkbookData {
+  docTitle: string
+  activeSheetId: string
+  sheetOrder: string[]
+  sheets: Record<string, WorksheetData>
+}
