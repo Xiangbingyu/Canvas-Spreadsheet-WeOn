@@ -125,6 +125,8 @@ export class CollabClient {
   private connectAttemptId = 0
   private reconnectDebounceTimer: ReturnType<typeof setTimeout> | null = null
   private pageHidden = false
+  private lastMessageTime = 0
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null
 
   private onSend?: (msg: Record<string, unknown>) => void
   private readCellValue?: CellValueReader
@@ -175,6 +177,8 @@ export class CollabClient {
       }
       this.retryCount = 0
       this.storageWarned = false
+      this.lastMessageTime = Date.now()
+      this.startHeartbeat()
       this.callbacks.onConnectionChange('connected')
       this.join()
       this.flushSendQueue()
@@ -186,6 +190,7 @@ export class CollabClient {
     }
 
     this.ws.onmessage = (event) => {
+      this.lastMessageTime = Date.now()
       let msg: WsResponse
       try {
         msg = JSON.parse(event.data as string)
@@ -197,6 +202,7 @@ export class CollabClient {
     }
 
     this.ws.onclose = () => {
+      this.stopHeartbeat()
       if (!this.destroyed) {
         this.callbacks.onConnectionChange('disconnected')
         // P2-2: 未确认的消息写入离线队列，防止丢失
@@ -218,6 +224,7 @@ export class CollabClient {
     this.destroyed = true
     this.clearReconnectTimer()
     this.clearReconnectDebounce()
+    this.stopHeartbeat()
     this.pendingOps.clear()
     this.pendingMessages.clear()
     this.replayTrackers = []
@@ -607,6 +614,25 @@ export class CollabClient {
     }
   }
 
+  /** 心跳：10 秒无消息 → 主动断开触发服务端清理（解决 DevTools 离线不触发 onclose） */
+  private startHeartbeat(): void {
+    this.stopHeartbeat()
+    this.heartbeatTimer = setInterval(() => {
+      if (Date.now() - this.lastMessageTime > 10_000) {
+        console.log('[heartbeat] no message for 10s, closing ws to trigger server cleanup')
+        this.ws?.close()
+        this.stopHeartbeat()
+      }
+    }, 5000)
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer)
+      this.heartbeatTimer = null
+    }
+  }
+
   private clearReconnectDebounce(): void {
     if (this.reconnectDebounceTimer) {
       clearTimeout(this.reconnectDebounceTimer)
@@ -668,6 +694,18 @@ export class CollabClient {
     if (this.seq > 0) {
       if (msg.type === 'set_cell') {
         const m = msg as Record<string, unknown>
+        console.log(
+          '[P2-3] send offline save: ws.readyState:',
+          this.ws?.readyState,
+          'seq:',
+          this.seq,
+          'row:',
+          m.row,
+          'col:',
+          m.col,
+          'value:',
+          m.value
+        )
         const ok = OfflineQueue.enqueue({
           type: 'set_cell',
           docId: this.docId,
@@ -723,6 +761,15 @@ export class CollabClient {
   private replayOfflineQueue(): void {
     const ops = OfflineQueue.dequeueAll()
     if (ops.length === 0) return
+
+    console.log(
+      '[P2-3] replayOfflineQueue:',
+      ops.length,
+      'ops, replayBaseSeq:',
+      this.seq,
+      'ops:',
+      JSON.stringify(ops)
+    )
 
     // P2-3: 清理旧的追踪和定时器
     this.replayBaseSeq = this.seq
@@ -798,6 +845,17 @@ export class CollabClient {
   /** P2-3: cell_updated 回执时标记 tracker 已确认 */
   private trackReplayAck(data: CellUpdated['data']): void {
     const tracker = this.replayTrackers.find((t) => t.row === data.row && t.col === data.col)
+    console.log(
+      '[P2-3] trackReplayAck:',
+      data.row,
+      data.col,
+      'found:',
+      !!tracker,
+      'resolved:',
+      tracker?.resolved,
+      'trackers:',
+      this.replayTrackers.length
+    )
     if (!tracker || tracker.resolved) return
     tracker.resolved = true
     // 全部收齐 → 立即判断
@@ -812,6 +870,12 @@ export class CollabClient {
 
   /** P2-3: 收集冲突并回调 */
   private resolveConflicts(): void {
+    console.log(
+      '[P2-3] resolveConflicts: trackers:',
+      this.replayTrackers.length,
+      'trackers:',
+      JSON.stringify(this.replayTrackers)
+    )
     const conflicts: ConflictInfo[] = []
     for (const t of this.replayTrackers) {
       if (t.isConflict) {
