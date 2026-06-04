@@ -15,6 +15,7 @@
     "build": "pnpm --filter frontend build",
     "lint": "pnpm --filter frontend lint",
     "check:fe:agents": "pnpm --filter frontend check:agents",
+    "test:be": "pnpm --filter backend-js test:ci",
     "preview": "pnpm --filter frontend preview",
     "start:be": "pnpm --filter backend-js start",
     "prepare": "husky"

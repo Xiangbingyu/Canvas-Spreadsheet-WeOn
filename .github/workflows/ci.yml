@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend (lint / agents / build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: ESLint
+        run: pnpm lint
+
+      - name: AGENTS boundary check
+        run: pnpm check:fe:agents
+
+      - name: Production build
+        run: pnpm build
+
+  backend:
+    name: Backend (memory tests)
+    runs-on: ubuntu-latest
+    env:
+      NODE_ENV: test
+      STORE_DRIVER: memory
+      CACHE_DRIVER: memory
+      RUNTIME_STATE_DRIVER: memory
+      COLLAB_BROADCAST_DRIVER: memory
+      IDEMPOTENCY_DRIVER: memory
+      DOC_LOCK_DRIVER: memory
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run CI tests (memory driver, no Redis/MySQL)
+        run: pnpm test:be
