@@ -1,5 +1,7 @@
 # Canvas-Spreadsheet-WeOn
 
+[![CI](https://github.com/Xiangbingyu/Canvas-Spreadsheet-WeOn/actions/workflows/ci.yml/badge.svg)](https://github.com/Xiangbingyu/Canvas-Spreadsheet-WeOn/actions/workflows/ci.yml)
+
 前后端放在同一仓库（monorepo）中统一管理。
 
 ## 目录结构
@@ -61,6 +63,22 @@ pnpm dev
 | `pnpm dev:be` | 仅后端          |
 | `pnpm build`  | 构建前端        |
 | `pnpm lint`   | ESLint 检查前端 |
+| `pnpm test:be`| 后端 CI 测试（memory，无需 Redis/MySQL） |
+
+## 持续集成（CI）
+
+推送或 PR 到 `main` / `develop` 时，GitHub Actions 会自动执行：
+
+- **前端**：`pnpm lint` → `pnpm check:fe:agents` → `pnpm build`
+- **后端**：`pnpm test:be`（HTTP + WebSocket 测试，memory 驱动）
+
+配置见 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)。本地可手动跑同样检查：
+
+```bash
+pnpm lint && pnpm check:fe:agents && pnpm build && pnpm test:be
+```
+
+答辩材料中的「CI 通过」：打开仓库 **Actions** 页，复制最近一次全绿运行的链接，或截图放入 PPT。
 
 ## 前端路径别名
 
