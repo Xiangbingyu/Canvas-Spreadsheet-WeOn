@@ -66,6 +66,7 @@ export interface ConflictInfo {
   myValue: string
   myTimestamp: number
   remoteValue: string
+  remoteUserName: string
   styleConflicts: Array<{ key: string; myValue: unknown; remoteValue: unknown }>
   mergedStyle: Record<string, unknown> | null
 }
@@ -96,6 +97,8 @@ export interface CollabClientOptions {
   onSend?: (msg: Record<string, unknown>) => void
   /** P2-3: 读取当前单元格值（用于回放前保存远端值） */
   readCellValue?: CellValueReader
+  /** P2-3: 获取除自己外的在线用户名 */
+  getRemoteUserName?: () => string
 }
 
 export class CollabClient {
@@ -128,6 +131,7 @@ export class CollabClient {
 
   private onSend?: (msg: Record<string, unknown>) => void
   private readCellValue?: CellValueReader
+  private getRemoteUserName?: () => string
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private destroyed = false
 
@@ -141,6 +145,7 @@ export class CollabClient {
     this.baseReconnectInterval = options.reconnectInterval ?? 1000
     this.onSend = options.onSend
     this.readCellValue = options.readCellValue
+    this.getRemoteUserName = options.getRemoteUserName
 
     // P2-2: 监听页面可见性，后台暂停重连
     if (typeof document !== 'undefined') {
@@ -881,6 +886,7 @@ export class CollabClient {
           myValue: t.myValue,
           myTimestamp: t.myTimestamp,
           remoteValue: t.remoteValue,
+          remoteUserName: this.getRemoteUserName?.() ?? '在线协作方',
           styleConflicts: [],
           mergedStyle: null,
         })

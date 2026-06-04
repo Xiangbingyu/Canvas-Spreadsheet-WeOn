@@ -58,7 +58,9 @@ export function ConflictDialog({ conflicts, onResolve, onClose }: Props) {
                 <div>
                   你的: &ldquo;{c.myValue}&rdquo; ({formatTime(c.myTimestamp)})
                 </div>
-                <div>别人的: &ldquo;{c.remoteValue || '未知'}&rdquo;</div>
+                <div>
+                  {c.remoteUserName || '在线协作方'}: &ldquo;{c.remoteValue || '未知'}&rdquo;
+                </div>
               </div>
 
               {c.styleConflicts.length > 0 && (
@@ -69,7 +71,9 @@ export function ConflictDialog({ conflicts, onResolve, onClose }: Props) {
                       <span className="text-gray-600">{sc.key}:</span>{' '}
                       <span className="text-blue-600">你的 {String(sc.myValue)}</span>
                       {' vs '}
-                      <span className="text-red-600">别人的 {String(sc.remoteValue)}</span>
+                      <span className="text-red-600">
+                        {c.remoteUserName || '在线协作方'} {String(sc.remoteValue)}
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -96,7 +100,7 @@ export function ConflictDialog({ conflicts, onResolve, onClose }: Props) {
                       setChoices((prev) => ({ ...prev, [`${c.row}:${c.col}`]: false }))
                     }
                   />
-                  保留别人的
+                  保留对方的
                 </label>
               </div>
             </div>
@@ -107,13 +111,13 @@ export function ConflictDialog({ conflicts, onResolve, onClose }: Props) {
           <button
             className="rounded bg-gray-100 px-3 py-1.5 text-[13px] text-gray-700 hover:bg-gray-200"
             onClick={() => {
-              // 全部保留别人的
+              // 全部保留对方的
               const allRemote: Record<string, boolean> = {}
               for (const c of conflicts) allRemote[`${c.row}:${c.col}`] = false
               setChoices(allRemote)
             }}
           >
-            全部保留别人的
+            全部保留对方的
           </button>
           <button
             className="rounded bg-blue-500 px-3 py-1.5 text-[13px] text-white hover:bg-blue-600"
