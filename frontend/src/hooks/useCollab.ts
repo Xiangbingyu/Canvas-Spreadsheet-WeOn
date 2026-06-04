@@ -108,6 +108,13 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
           })
         )
         applyCollabSeqMeta(dispatch, data as { seq: number } & Record<string, unknown>)
+        // 通知在线方：别人改了我的格子
+        if (data.clientId !== clientId) {
+          const users = store.getState().collab.users
+          const user = users.find((u) => u.clientId === data.clientId)
+          const name = user?.name || data.clientId
+          antMessage.info(`${name} 修改了 ${String.fromCharCode(64 + data.col)}${data.row}`)
+        }
       },
 
       onBatchCellUpdated(data: BatchCellUpdated['data']) {
@@ -259,7 +266,7 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
         setConflicts(list)
       },
     }),
-    [dispatch, userName, userColor]
+    [dispatch, userName, userColor, clientId]
   )
 
   const connect = useCallback(() => {
