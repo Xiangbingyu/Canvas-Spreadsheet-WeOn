@@ -125,8 +125,6 @@ export class CollabClient {
   private connectAttemptId = 0
   private reconnectDebounceTimer: ReturnType<typeof setTimeout> | null = null
   private pageHidden = false
-  private lastMessageTime = 0
-  private heartbeatTimer: ReturnType<typeof setInterval> | null = null
 
   private onSend?: (msg: Record<string, unknown>) => void
   private readCellValue?: CellValueReader
@@ -177,8 +175,7 @@ export class CollabClient {
       }
       this.retryCount = 0
       this.storageWarned = false
-      this.lastMessageTime = Date.now()
-      this.startHeartbeat()
+      this.exposeForDemo()
       this.callbacks.onConnectionChange('connected')
       this.join()
       this.flushSendQueue()
@@ -190,7 +187,6 @@ export class CollabClient {
     }
 
     this.ws.onmessage = (event) => {
-      this.lastMessageTime = Date.now()
       let msg: WsResponse
       try {
         msg = JSON.parse(event.data as string)
@@ -202,7 +198,6 @@ export class CollabClient {
     }
 
     this.ws.onclose = () => {
-      this.stopHeartbeat()
       if (!this.destroyed) {
         this.callbacks.onConnectionChange('disconnected')
         // P2-2: 未确认的消息写入离线队列，防止丢失
@@ -224,7 +219,6 @@ export class CollabClient {
     this.destroyed = true
     this.clearReconnectTimer()
     this.clearReconnectDebounce()
-    this.stopHeartbeat()
     this.pendingOps.clear()
     this.pendingMessages.clear()
     this.replayTrackers = []
@@ -614,16 +608,16 @@ export class CollabClient {
     }
   }
 
-  /** 心跳：10 秒无消息 → 主动断开触发服务端清理（解决 DevTools 离线不触发 onclose） */
-  private startHeartbeat(): void {
-    this.stopHeartbeat()
-    this.heartbeatTimer = setInterval(() => {
-      if (Date.now() - this.lastMessageTime > 10_000) {
-        console.log('[heartbeat] no message for 10s, closing ws to trigger server cleanup')
-        this.ws?.close()
-        this.stopHeartbeat()
-      }
-    }, 5000)
+  /** 暴露实例到 window 方便演示时手动测试 */
+  private exposeForDemo(): void {
+    if (typeof window !== 'undefined') {
+      ;(window as Record<string, unknown>).__collabClient = this
+    }
+  }
+
+  /** Demo: 手动断开 WS（触发服务端 onclose → presence 广播） */
+  forceDisconnect(): void {
+    this.ws?.close()
   }
 
   private stopHeartbeat(): void {
