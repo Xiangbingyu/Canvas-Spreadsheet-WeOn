@@ -780,13 +780,10 @@ export class CollabClient {
     }
   }
 
-  /** P2-3: cell_updated 回执时记录 replayed op 的 seq */
+  /** P2-3: cell_updated 回执时记录 replayed op 的 seq（按 row/col 匹配，不依赖服务端回显 eventId） */
   private trackReplayAck(data: CellUpdated['data']): void {
-    const raw = data as Record<string, unknown>
-    const eventId = raw.eventId as string | undefined
-    if (!eventId) return
-    const tracker = this.replayTrackers.find((t) => t.eventId === eventId)
-    if (!tracker) return
+    const tracker = this.replayTrackers.find((t) => t.row === data.row && t.col === data.col)
+    if (!tracker || tracker.resolvedSeq !== undefined) return
     tracker.resolvedSeq = data.seq
     // 全部收齐 → 立即判断
     if (this.replayTrackers.every((t) => t.resolvedSeq !== undefined)) {
