@@ -75,9 +75,9 @@ interface ReplayTracker {
   col: number
   myValue: string
   myTimestamp: number
-  eventId: string
-  /** 记录该 op 被分配的第一个 seq，用于检测间隙 */
-  resolvedSeq?: number
+  /** 离线期间服务端 seq 前进了 → 可能有人改过 → 预标冲突 */
+  isConflict: boolean
+  resolved: boolean
 }
 
 // ===== CollabClient =====
@@ -711,11 +711,15 @@ export class CollabClient {
     }
   }
 
+  // P2-3: 记录 replay 开始时的基础 seq，用于单操作冲突检测
+  private replayBaseSeq = 0
+
   private replayOfflineQueue(): void {
     const ops = OfflineQueue.dequeueAll()
     if (ops.length === 0) return
 
     // P2-3: 清理旧的追踪和定时器
+    this.replayBaseSeq = this.seq
     this.replayTrackers = []
     if (this.replayConflictTimer) {
       clearTimeout(this.replayConflictTimer)
@@ -730,12 +734,15 @@ export class CollabClient {
       }
       if (op.type === 'set_cell') {
         const eventId = crypto.randomUUID()
+        // 离线期间服务端 seq 前进 → 有人编辑过 → 预标冲突
+        const isConflict = this.replayBaseSeq > op.baseSeq
         this.replayTrackers.push({
           row: op.row,
           col: op.col,
           myValue: op.value,
           myTimestamp: op.timestamp || Date.now(),
-          eventId,
+          isConflict,
+          resolved: false,
         })
         this.send({
           type: 'set_cell',
@@ -780,13 +787,13 @@ export class CollabClient {
     }
   }
 
-  /** P2-3: cell_updated 回执时记录 replayed op 的 seq（按 row/col 匹配，不依赖服务端回显 eventId） */
+  /** P2-3: cell_updated 回执时标记 tracker 已确认 */
   private trackReplayAck(data: CellUpdated['data']): void {
     const tracker = this.replayTrackers.find((t) => t.row === data.row && t.col === data.col)
-    if (!tracker || tracker.resolvedSeq !== undefined) return
-    tracker.resolvedSeq = data.seq
+    if (!tracker || tracker.resolved) return
+    tracker.resolved = true
     // 全部收齐 → 立即判断
-    if (this.replayTrackers.every((t) => t.resolvedSeq !== undefined)) {
+    if (this.replayTrackers.every((t) => t.resolved)) {
       if (this.replayConflictTimer) {
         clearTimeout(this.replayConflictTimer)
         this.replayConflictTimer = null
@@ -795,32 +802,22 @@ export class CollabClient {
     }
   }
 
-  /** P2-3: 收集冲突并回调 */
+  /** P2-3: 收集冲突并回调。离线期间服务端 seq 前进 + 我们有离线编辑 = 冲突 */
   private resolveConflicts(): void {
-    if (this.replayTrackers.length === 0) return
     const conflicts: ConflictInfo[] = []
-    // 按 seq 排序，检测间隙
-    const sorted = [...this.replayTrackers]
-      .filter((t) => t.resolvedSeq !== undefined)
-      .sort((a, b) => (a.resolvedSeq ?? 0) - (b.resolvedSeq ?? 0))
-
-    for (let i = 1; i < sorted.length; i++) {
-      const prev = sorted[i - 1]
-      const curr = sorted[i]
-      // seq 间距 > 1 → 中间有操作插入 → 当前格可能冲突
-      if ((curr.resolvedSeq ?? 0) - (prev.resolvedSeq ?? 0) > 1) {
+    for (const t of this.replayTrackers) {
+      if (t.isConflict) {
         conflicts.push({
-          row: curr.row,
-          col: curr.col,
-          myValue: curr.myValue,
-          myTimestamp: curr.myTimestamp,
-          remoteValue: '', // 服务端未回传别人的值，弹窗显示"未知"
+          row: t.row,
+          col: t.col,
+          myValue: t.myValue,
+          myTimestamp: t.myTimestamp,
+          remoteValue: '',
           styleConflicts: [],
           mergedStyle: null,
         })
       }
     }
-
     this.replayTrackers = []
     if (conflicts.length > 0) {
       this.callbacks.onConflict?.(conflicts)
