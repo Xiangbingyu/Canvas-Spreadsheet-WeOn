@@ -275,7 +275,7 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
       getRemoteUserName: () => {
         const { users, clientId: selfId } = store.getState().collab
         const other = users.find((u) => u.clientId !== selfId)
-        return other?.name || ''
+        return other?.name || undefined
       },
     })
     clientRef.current = client
