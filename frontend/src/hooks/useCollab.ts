@@ -264,7 +264,15 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
 
   const connect = useCallback(() => {
     if (clientRef.current) return
-    const client = new CollabClient({ url, docId, clientId, userName, userColor, callbacks })
+    const client = new CollabClient({
+      url,
+      docId,
+      clientId,
+      userName,
+      userColor,
+      callbacks,
+      readCellValue: (row, col) => store.getState().workSheet.cells[`${row}:${col}`]?.value ?? '',
+    })
     clientRef.current = client
     client.connect()
   }, [url, docId, clientId, userName, userColor, callbacks])
@@ -379,20 +387,30 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
     conflicts,
     resolveConflicts: (decisions: Array<{ row: number; col: number; keepMine: boolean }>) => {
       for (const d of decisions) {
-        if (d.keepMine && conflicts) {
-          const c = conflicts.find((x) => x.row === d.row && x.col === d.col)
-          if (c) {
-            clientRef.current?.setCell(
-              c.row,
-              c.col,
-              c.myValue,
-              c.mergedStyle as Record<string, unknown> | null,
-              store.getState().workSheet.sheetId,
-              clientRef.current.currentSeq
-            )
-          }
+        if (!conflicts) continue
+        const c = conflicts.find((x) => x.row === d.row && x.col === d.col)
+        if (!c) continue
+        if (d.keepMine) {
+          // 保留我的：重新发一次我的值覆盖远端
+          clientRef.current?.setCell(
+            c.row,
+            c.col,
+            c.myValue,
+            c.mergedStyle as Record<string, unknown> | null,
+            store.getState().workSheet.sheetId,
+            clientRef.current.currentSeq
+          )
+        } else {
+          // 保留别人的：发远端值覆盖我的 replay
+          clientRef.current?.setCell(
+            c.row,
+            c.col,
+            c.remoteValue,
+            null,
+            store.getState().workSheet.sheetId,
+            clientRef.current.currentSeq
+          )
         }
-        // 保留别人的：不动（远端值已在 store 中）
       }
       setConflicts(null)
     },

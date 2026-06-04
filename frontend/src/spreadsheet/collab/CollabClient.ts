@@ -74,11 +74,13 @@ interface ReplayTracker {
   row: number
   col: number
   myValue: string
+  remoteValue: string
   myTimestamp: number
-  /** 离线期间服务端 seq 前进了 → 可能有人改过 → 预标冲突 */
   isConflict: boolean
   resolved: boolean
 }
+
+export type CellValueReader = (row: number, col: number) => string
 
 // ===== CollabClient =====
 
@@ -92,6 +94,8 @@ export interface CollabClientOptions {
   reconnectInterval?: number
   /** 拦截 send，消息不发 WebSocket 而是交给此回调（LocalStubServer 用） */
   onSend?: (msg: Record<string, unknown>) => void
+  /** P2-3: 读取当前单元格值（用于回放前保存远端值） */
+  readCellValue?: CellValueReader
 }
 
 export class CollabClient {
@@ -123,6 +127,7 @@ export class CollabClient {
   private pageHidden = false
 
   private onSend?: (msg: Record<string, unknown>) => void
+  private readCellValue?: CellValueReader
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private destroyed = false
 
@@ -135,6 +140,7 @@ export class CollabClient {
     this.callbacks = options.callbacks
     this.baseReconnectInterval = options.reconnectInterval ?? 1000
     this.onSend = options.onSend
+    this.readCellValue = options.readCellValue
 
     // P2-2: 监听页面可见性，后台暂停重连
     if (typeof document !== 'undefined') {
@@ -734,12 +740,14 @@ export class CollabClient {
       }
       if (op.type === 'set_cell') {
         const eventId = crypto.randomUUID()
-        // 离线期间服务端 seq 前进 → 有人编辑过 → 预标冲突
         const isConflict = this.replayBaseSeq > op.baseSeq
+        // 补发前读当前格子的值 = join_ack 快照后的远端值
+        const remoteValue = this.readCellValue?.(op.row, op.col) ?? ''
         this.replayTrackers.push({
           row: op.row,
           col: op.col,
           myValue: op.value,
+          remoteValue,
           myTimestamp: op.timestamp || Date.now(),
           isConflict,
           resolved: false,
@@ -802,7 +810,7 @@ export class CollabClient {
     }
   }
 
-  /** P2-3: 收集冲突并回调。离线期间服务端 seq 前进 + 我们有离线编辑 = 冲突 */
+  /** P2-3: 收集冲突并回调 */
   private resolveConflicts(): void {
     const conflicts: ConflictInfo[] = []
     for (const t of this.replayTrackers) {
@@ -812,7 +820,7 @@ export class CollabClient {
           col: t.col,
           myValue: t.myValue,
           myTimestamp: t.myTimestamp,
-          remoteValue: '',
+          remoteValue: t.remoteValue,
           styleConflicts: [],
           mergedStyle: null,
         })
