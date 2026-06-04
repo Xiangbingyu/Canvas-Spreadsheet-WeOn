@@ -620,9 +620,18 @@ export class CollabClient {
     }
   }
 
-  /** Demo: 手动断开 WS（触发服务端 onclose → presence 广播） */
-  forceDisconnect(): void {
+  /** Demo: 模拟离线（断开且不重连） */
+  goOffline(): void {
+    this.destroyed = true
     this.ws?.close()
+    this.callbacks.onConnectionChange('disconnected')
+  }
+
+  /** Demo: 从离线恢复 */
+  goOnline(): void {
+    this.destroyed = false
+    this.retryCount = 0
+    this.connect()
   }
 
   private stopHeartbeat(): void {
