@@ -785,8 +785,8 @@ export class CollabClient {
         continue
       }
       if (op.type === 'set_cell') {
-        // 过滤太新的 op：5 秒内的很可能是 flushPending 刷的，不是真正的离线编辑
-        if (Date.now() - (op.timestamp || 0) < 5000) continue
+        // 过滤无效 op：无时间戳(旧数据)或 5 秒内新产生的(flushPending 假离线)
+        if (!op.timestamp || Date.now() - op.timestamp < 5000) continue
         const eventId = crypto.randomUUID()
         const isConflict = this.replayBaseSeq > op.baseSeq
         // 补发前读当前格子的值 = join_ack 快照后的远端值
