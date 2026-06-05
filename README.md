@@ -2,42 +2,121 @@
 
 [![CI](https://github.com/Xiangbingyu/Canvas-Spreadsheet-WeOn/actions/workflows/ci.yml/badge.svg)](https://github.com/Xiangbingyu/Canvas-Spreadsheet-WeOn/actions/workflows/ci.yml)
 
-前后端放在同一仓库（monorepo）中统一管理。
+可演示、可协作、可编辑的在线电子表格。支持上传 Excel → Canvas 渲染 → 单元格编辑 → 样式修改 → 撤销重做 → 多人实时协同。
+
+前后端 monorepo 统一管理（`frontend/` + `backend-js/`）。
 
 ## 目录结构
 
 ```
 Canvas-Spreadsheet-WeOn/
-├── package.json           # 根脚本：一键启动前后端
-├── pnpm-workspace.yaml    # pnpm 工作区定义
-├── docs/                  # 需求、接口
-├── frontend/              # React + Vite + TypeScript
-└── backend-js/            # Express + WebSocket
+├── package.json              # 根脚本：pnpm dev 一键启动前后端
+├── pnpm-workspace.yaml       # pnpm 工作区
+├── .nvmrc                    # Node 版本锁定
+│
+├── frontend/                 # 前端：React + Vite + Canvas
+│   ├── src/
+│   │   ├── pages/            # 页面组装（StartPage、SpreadsheetPage）
+│   │   ├── components/       # UI（Menubar、Toolbar、GrideCanvas、协同状态等）
+│   │   ├── hooks/            # 交互、协同、历史等 React Hooks
+│   │   ├── services/         # HTTP 客户端（httpAPI、httpType）
+│   │   └── spreadsheet/      # 核心业务
+│   │       ├── model/        # 领域类型
+│   │       ├── store/        # Redux 状态（workbook、选区、协同态）
+│   │       ├── render/       # Canvas 渲染（视口、分层绘制）
+│   │       ├── interaction/  # 命中检测、选区、编辑交互
+│   │       ├── collab/       # WebSocket 协同客户端
+│   │       ├── history/      # Undo / Redo 历史栈
+│   │       └── excel/        # Excel 导入 / 导出
+│   └── .env.example
+│
+├── backend-js/               # 后端：Express + WebSocket
+│   ├── server.js             # HTTP + WS 入口
+│   ├── routes/               # REST 路由（docs、health）
+│   ├── ws/                   # WebSocket 消息分发与 handlers
+│   ├── service/              # 业务服务（协同、单元格、undo/redo 等）
+│   ├── store/                # 持久化（memory / mysql 可切换）
+│   ├── cache/                # 文档快照与元数据缓存
+│   ├── protocol/             # 消息类型、校验、错误码
+│   └── public/api-test.html  # 接口手动测试页
+│
+└── docs/                     # 项目文档（见下节）
 ```
 
-## 环境要求
+## 文档
+
+| 文档 | 内容 |
+| ---- | ---- |
+| [README.md](README.md) | 如何启动、核心能力、演示链接 |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构图 + 关键链路说明（渲染、编辑、协同、undo） |
+| [docs/COLLAB.md](docs/COLLAB.md) | 协同协议与一致性策略（对应课题要求的 PROTOCOL.md） |
+| [docs/PERF.md](docs/PERF.md) | 性能指标与优化记录（可选） |
+| [docs/接口文档.md](docs/接口文档.md) | HTTP / WebSocket 接口约定 |
+| [docs/课题任务.md](docs/课题任务.md) | 课题背景、P0/P1 验收标准 |
+
+## 演示链接
+
+| 环境     | 地址                  | 说明                   |
+| -------- | --------------------- | ---------------------- |
+| 本地前端 | http://localhost:5173 | 执行 `pnpm dev` 后访问 |
+| 本地后端 | http://localhost:3000 | REST API + WebSocket   |
+
+> 本地前端默认通过 Vite 代理连接本机后端。若需前端连远程后端，在 `frontend/.env` 中配置 `VITE_API_BASE_URL` 与 `VITE_WS_URL`（见 `frontend/.env.example`），然后执行 `pnpm dev:fe`。
+
+## 核心能力
+
+围绕「**上传 → 渲染 → 编辑 → 样式 → 撤销重做 → 协同**」形成完整闭环：
+
+**文档与工作表**
+
+- 文档列表、新建空白表格、修改标题、分享链接协作
+- 多工作表（Sheet 标签切换与新建），数据持久化，刷新不丢失
+
+**Excel 导入与导出**
+
+- 上传 `.xlsx` 解析为在线表格（Web Worker 后台解析，不阻塞页面）
+- 导出当前文档（含多工作表与基础样式）为 `.xlsx`
+
+**Canvas 表格编辑**
+
+- Canvas 绘制网格与单元格，视口虚拟化，大表流畅滚动
+- 单元格选中、双击/公式栏编辑，兼容中文输入法
+- 工具栏修改样式：加粗、斜体、下划线、字号、字体颜色、背景色、水平对齐
+- 右键增删行列，支持复制粘贴
+
+**撤销与重做**
+
+- 工具栏与快捷键（Ctrl/⌘ + Z、Ctrl/⌘ + Shift + Z）撤销/重做
+- 覆盖文字修改、样式变更、行列结构变更
+
+**多人实时协同**
+
+- 至少两人同时编辑同一文档，修改实时同步
+- 展示在线成员与协作者选区；断线自动重连与离线操作补发
+- 并发修改冲突时以服务端顺序统一结果
+
+**简单公式（基础）**
+
+- 支持以 `=` 开头的简单公式输入与解析
+
+## 快速开始
+
+### 环境要求
 
 | 工具    | 版本                   |
 | ------- | ---------------------- |
 | Node.js | 22.12.0（见 `.nvmrc`） |
 | pnpm    | ≥ 10                   |
 
-安装 Node 后建议执行：
+### 启动步骤
+
+在**仓库根目录**执行（不要分别在子目录 `npm install`）：
 
 ```bash
-corepack enable
-corepack prepare pnpm@10.33.4 --activate
-```
-
-## 快速开始
-
-在**仓库根目录**执行（不要分别在子目录用 npm install）：
-
-```bash
-# 1. 安装全部依赖
+# 1. 安装依赖
 pnpm install
 
-# 2. 复制环境变量示例（首次）
+# 2. 复制环境变量（首次）
 cp frontend/.env.example frontend/.env
 cp backend-js/.env.example backend-js/.env
 
@@ -45,102 +124,21 @@ cp backend-js/.env.example backend-js/.env
 pnpm dev
 ```
 
-| 服务     | 地址                  |
-| -------- | --------------------- |
-| 前端     | http://localhost:5173 |
-| 后端 API | http://localhost:3000 |
+启动后访问 http://localhost:5173 。开发模式下 HTTP/WS 经 Vite 代理转发到 `localhost:3000`，无需额外处理跨域。
 
-开发时前端通过 Vite proxy 转发 `/docs` `/health` `/ws` 到后端，无需处理跨域。
+### 常用命令
 
-## 常用命令
-
-在根目录执行：
-
-| 命令          | 说明            |
-| ------------- | --------------- |
-| `pnpm dev`    | 同时启动前后端  |
-| `pnpm dev:fe` | 仅前端          |
-| `pnpm dev:be` | 仅后端          |
-| `pnpm build`  | 构建前端        |
-| `pnpm lint`   | ESLint 检查前端 |
-| `pnpm test:be`| 后端 CI 测试（memory，无需 Redis/MySQL） |
-
-## 持续集成（CI）
-
-推送或 PR 到 `main` / `develop` 时，GitHub Actions 会自动执行：
-
-- **前端**：`pnpm lint` → `pnpm check:fe:agents` → `pnpm build`
-- **后端**：`pnpm test:be`（HTTP + WebSocket 测试，memory 驱动）
-
-配置见 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)。本地可手动跑同样检查：
-
-```bash
-pnpm lint && pnpm check:fe:agents && pnpm build && pnpm test:be
-```
-
-答辩材料中的「CI 通过」：打开仓库 **Actions** 页，复制最近一次全绿运行的链接，或截图放入 PPT。
-
-## 前端路径别名
-
-`frontend` 已配置 `@` 指向 `src` 目录，例如：
-
-```ts
-import { Menubar } from '@/components/Menubar/Menubar'
-import type { Cell } from '@/spreadsheet/model/types'
-```
-
-配置位置：`frontend/vite.config.ts`、`frontend/tsconfig.app.json`。
+| 命令           | 说明                                          |
+| -------------- | --------------------------------------------- |
+| `pnpm dev`     | 同时启动前后端                                |
+| `pnpm dev:fe`  | 仅前端                                        |
+| `pnpm dev:be`  | 仅后端                                        |
+| `pnpm build`   | 构建前端                                      |
+| `pnpm lint`    | ESLint 检查前端                               |
+| `pnpm test:be` | 后端 CI 测试（memory 驱动，无需 Redis/MySQL） |
 
 ## 技术栈
 
-**前端**：React 19 · Vite · TypeScript · Tailwind CSS · Redux Toolkit
+**前端**：React 19 · Vite · TypeScript · Redux Toolkit · Tailwind CSS · Ant Design · Canvas
 
-**后端**：Node.js · Express · ws
-
-## 常见错误：EADDRINUSE（端口被占用）
-
-### 现象
-
-终端里后端报错类似：
-
-```text
-Error: listen EADDRINUSE: address already in use :::3000
-Failed running 'server.js'
-```
-
-前端可能已正常（http://localhost:5173），但**后端起不来**。
-
-### 原因
-
-**3000** 端口已被其他进程占用。常见情况：
-
-- 上次 `pnpm dev` / `pnpm dev:be` 没有关干净
-- 本机其他程序占用了 3000
-
-### 处理办法（二选一）
-
-**方式 1：释放 3000 端口（推荐）**
-
-Windows PowerShell：
-
-```powershell
-# 查看占用 3000 的进程
-netstat -ano | findstr :3000
-
-# 结束进程（将 <PID> 换成上一步最后一列的数字）
-taskkill /PID <PID> /F
-```
-
-然后重新执行：
-
-```bash
-pnpm dev
-```
-
-**方式 2：改用其他后端端口**
-
-1. 在 `backend-js/.env` 中设置，例如：`PORT=3001`
-2. 同步修改 `frontend/vite.config.ts` 里 proxy 的 `target`，把 `localhost:3000` 改为 `localhost:3001`
-3. 再执行 `pnpm dev`
-
-> 只改后端端口而不改 Vite proxy，前端请求仍会打到旧端口，可能出现 404 或 WebSocket 连不上。
+**后端**：Node.js · Express · WebSocket（ws）· MySQL / Redis（可选，默认 memory 驱动）
