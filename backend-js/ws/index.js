@@ -57,6 +57,12 @@ function createWebSocketServer(server) {
     // 每个连接分配唯一 ID，供 join 幂等控制使用
     socket._connId = ++nextConnId;
 
+    // WebSocket 心跳：标记存活，收到 pong 后恢复
+    socket._isAlive = true
+    socket.on('pong', () => {
+      socket._isAlive = true
+    })
+
     socket.on('message', (rawMessage) => {
       let message;
 
@@ -111,7 +117,21 @@ function createWebSocketServer(server) {
     });
   });
 
+  // 心跳检测：定期 ping，无响应的死连接会被终止并触发 presence 广播
+  const heartbeatMs = wsConfig.heartbeatIntervalSeconds * 1000
+  const heartbeatInterval = setInterval(() => {
+    wss.clients.forEach((socket) => {
+      if (!socket._isAlive) {
+        socket.terminate()
+        return
+      }
+      socket._isAlive = false
+      socket.ping()
+    })
+  }, heartbeatMs)
+
   wss.on('close', () => {
+    clearInterval(heartbeatInterval)
     void closeResources();
   });
 

@@ -159,6 +159,22 @@ export class CollabClient {
         }
       })
     }
+    // 监听浏览器网络状态 (DevTools Network Offline / 断网)
+    if (typeof window !== 'undefined') {
+      window.addEventListener('offline', () => {
+        this.callbacks.onConnectionChange('disconnected')
+      })
+      window.addEventListener('online', () => {
+        if (this.destroyed) return
+        if (this.ws) {
+          this.ws.onclose = null
+          this.ws.close()
+          this.ws = null
+        }
+        this.retryCount = 0
+        this.connect()
+      })
+    }
   }
 
   // ============================
@@ -616,14 +632,20 @@ export class CollabClient {
   /** 暴露实例到 window 方便演示时手动测试 */
   private exposeForDemo(): void {
     if (typeof window !== 'undefined') {
-      ;(window as Record<string, unknown>).__collabClient = this
+      ;(window as unknown as Record<string, unknown>).__collabClient = this
     }
   }
 
   /** Demo: 模拟离线（断开且不重连） */
   goOffline(): void {
     this.destroyed = true
-    this.ws?.close()
+    this.clearReconnectTimer()
+    this.clearReconnectDebounce()
+    if (this.ws) {
+      // 显式传入 close code 1000 + reason，确保服务端收到 close 帧后广播 presence
+      this.ws.close(1000, 'Manual offline')
+      this.ws = null
+    }
     this.callbacks.onConnectionChange('disconnected')
   }
 
@@ -632,13 +654,6 @@ export class CollabClient {
     this.destroyed = false
     this.retryCount = 0
     this.connect()
-  }
-
-  private stopHeartbeat(): void {
-    if (this.heartbeatTimer) {
-      clearInterval(this.heartbeatTimer)
-      this.heartbeatTimer = null
-    }
   }
 
   private clearReconnectDebounce(): void {
@@ -695,25 +710,19 @@ export class CollabClient {
       return value === undefined ? null : value
     })
     if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(data)
-      return
+      // 浏览器 DevTools Network Offline 时 ws.readyState 仍可能是 OPEN，但消息实际无法到达服务端
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        this.callbacks.onConnectionChange('disconnected')
+        // 不 return，继续走下面的离线队列逻辑
+      } else {
+        this.ws.send(data)
+        return
+      }
     }
     // 首次握手期 → 内存队列；曾经连上过 → localStorage 持久化
     if (this.seq > 0) {
       if (msg.type === 'set_cell') {
         const m = msg as Record<string, unknown>
-        console.log(
-          '[P2-3] send offline save: ws.readyState:',
-          this.ws?.readyState,
-          'seq:',
-          this.seq,
-          'row:',
-          m.row,
-          'col:',
-          m.col,
-          'value:',
-          m.value
-        )
         const ok = OfflineQueue.enqueue({
           type: 'set_cell',
           docId: this.docId,
@@ -743,6 +752,22 @@ export class CollabClient {
         if (!ok2) this.warnStorageFull()
         return
       }
+      if (
+        msg.type === 'insert_row' ||
+        msg.type === 'delete_row' ||
+        msg.type === 'insert_col' ||
+        msg.type === 'delete_col'
+      ) {
+        const m = msg as Record<string, unknown>
+        OfflineQueue.enqueueRowCol({
+          type: msg.type,
+          docId: this.docId,
+          sheetId: (m.sheetId as string) ?? '',
+          index: ((m.row ?? m.col) as number) ?? 1,
+          timestamp: Date.now(),
+        })
+        return
+      }
     }
     this.sendQueue.push(data)
   }
@@ -769,15 +794,6 @@ export class CollabClient {
   private replayOfflineQueue(): void {
     const ops = OfflineQueue.dequeueAll()
     if (ops.length === 0) return
-
-    console.log(
-      '[P2-3] replayOfflineQueue:',
-      ops.length,
-      'ops, replayBaseSeq:',
-      this.seq,
-      'ops:',
-      JSON.stringify(ops)
-    )
 
     // P2-3: 清理旧的追踪和定时器
     this.replayBaseSeq = this.seq
@@ -832,6 +848,21 @@ export class CollabClient {
           ...(op.value !== undefined ? { value: op.value } : {}),
           ...(op.style !== undefined ? { style: op.style } : {}),
         })
+      } else if (
+        op.type === 'insert_row' ||
+        op.type === 'delete_row' ||
+        op.type === 'insert_col' ||
+        op.type === 'delete_col'
+      ) {
+        if (!op.timestamp || Date.now() - op.timestamp < 5000) continue
+        const isRow = op.type === 'insert_row' || op.type === 'delete_row'
+        this.send({
+          type: op.type,
+          docId: this.docId,
+          clientId: this.clientId,
+          sheetId: op.sheetId,
+          [isRow ? 'row' : 'col']: op.index,
+        })
       }
     }
 
@@ -846,8 +877,10 @@ export class CollabClient {
     for (const op of remaining) {
       if (op.type === 'set_cell') {
         OfflineQueue.enqueue(op)
-      } else {
+      } else if (op.type === 'batch_set_cell') {
         OfflineQueue.enqueueBatch(op)
+      } else {
+        OfflineQueue.enqueueRowCol(op)
       }
     }
   }
@@ -855,17 +888,6 @@ export class CollabClient {
   /** P2-3: cell_updated 回执时标记 tracker 已确认 */
   private trackReplayAck(data: CellUpdated['data']): void {
     const tracker = this.replayTrackers.find((t) => t.row === data.row && t.col === data.col)
-    console.log(
-      '[P2-3] trackReplayAck:',
-      data.row,
-      data.col,
-      'found:',
-      !!tracker,
-      'resolved:',
-      tracker?.resolved,
-      'trackers:',
-      this.replayTrackers.length
-    )
     if (!tracker || tracker.resolved) return
     tracker.resolved = true
     // 全部收齐 → 立即判断
@@ -880,12 +902,6 @@ export class CollabClient {
 
   /** P2-3: 收集冲突并回调 */
   private resolveConflicts(): void {
-    console.log(
-      '[P2-3] resolveConflicts: trackers:',
-      this.replayTrackers.length,
-      'trackers:',
-      JSON.stringify(this.replayTrackers)
-    )
     const conflicts: ConflictInfo[] = []
     for (const t of this.replayTrackers) {
       if (t.isConflict) {

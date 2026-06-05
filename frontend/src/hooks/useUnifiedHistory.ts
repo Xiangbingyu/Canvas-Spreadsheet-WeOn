@@ -241,37 +241,26 @@ export function useUnifiedHistory(
 
       const sheetId = reduxStore.getState().workSheet.sheetId
 
+      const online = collabClient?.isConnected && (navigator?.onLine ?? true)
+
       if (action === 'delete_row') {
         const data = readRowData(index)
         op = { type: 'delete_row', index, data }
-        // 优先走 WS 协同链路，否则本地 dispatch
-        if (collabClient) {
-          collabClient.deleteRow(sheetId, index)
-        } else {
-          dispatch(deleteRow({ row: index }))
-        }
+        if (!online) dispatch(deleteRow({ row: index }))
+        collabClient?.deleteRow(sheetId, index)
       } else if (action === 'insert_row') {
         op = { type: 'insert_row', index }
-        if (collabClient) {
-          collabClient.insertRow(sheetId, index)
-        } else {
-          dispatch(insertRow({ row: index }))
-        }
+        if (!online) dispatch(insertRow({ row: index }))
+        collabClient?.insertRow(sheetId, index)
       } else if (action === 'delete_col') {
         const data = readColData(index)
         op = { type: 'delete_col', index, data }
-        if (collabClient) {
-          collabClient.deleteCol(sheetId, index)
-        } else {
-          dispatch(deleteCol({ col: index }))
-        }
+        if (!online) dispatch(deleteCol({ col: index }))
+        collabClient?.deleteCol(sheetId, index)
       } else {
         op = { type: 'insert_col', index }
-        if (collabClient) {
-          collabClient.insertCol(sheetId, index)
-        } else {
-          dispatch(insertCol({ col: index }))
-        }
+        if (!online) dispatch(insertCol({ col: index }))
+        collabClient?.insertCol(sheetId, index)
       }
 
       historyRef.current.push(op)
