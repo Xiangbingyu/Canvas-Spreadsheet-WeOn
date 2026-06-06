@@ -1,8 +1,5 @@
 /**
  * 工作簿 store（文档级真源）
- *
- * - state 形状见 model/types WorkbookData
- * - workSheetStore 只镜像当前激活的一张 WorksheetData；改格请 dispatch 本 slice 的 updateCell / updateRange
  */
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit'
 import type { Style, WorkbookData, WorksheetData } from '@/spreadsheet/model/types'

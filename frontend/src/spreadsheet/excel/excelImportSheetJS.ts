@@ -1,25 +1,24 @@
 /**
- * Excel 解析核心逻辑（仅在 Web Worker 中调用，内含 xlsx）
+ * SheetJS 读取 Excel（仅 .xls）：只导入单元格值，不解析样式
  */
 
 import * as XLSX from 'xlsx'
-import type { WorksheetData } from '@/spreadsheet/model/types'
-import { findOrCreateStyleId } from '@/spreadsheet/utils/generateStyleId'
-import {
-  buildCellStyleIndexMap,
-  resolveImportedCellStyle,
-  type XlsxWorkbookWithStyles,
-} from './excelImportStyle'
-import type { ExcelImportWorkbook, ParseExcelProgress } from './excelImportTypes'
+import type { WorkbookData, WorksheetData } from '@/spreadsheet/model/types'
 
 const DEFAULT_ROW_COUNT = 1000
 const DEFAULT_COL_COUNT = 1000
 const BUILD_CHUNK_ROWS = 200
 
+type ParseProgressReporter = (progress: {
+  phase: 'reading' | 'converting' | 'building' | 'done'
+  percent: number
+  message: string
+}) => void
+
 const SHEET_TO_JSON_OPTIONS: XLSX.Sheet2JSONOpts = {
-  header: 1,
-  defval: '',
-  raw: false,
+  header: 1, // 输出数组行，不用首行当对象键名
+  defval: '', // 空单元格填 ''
+  raw: false, // 用格式化后的显示文本
   rawNumbers: false,
   blankrows: false,
   skipHidden: false,
@@ -29,9 +28,6 @@ const READ_WORKBOOK_OPTIONS: XLSX.ParsingOptions = {
   type: 'array',
   cellDates: false,
   cellText: true,
-  cellNF: true,
-  cellStyles: true,
-  bookFiles: true,
 }
 
 function cellValueToString(value: unknown): string {
@@ -43,15 +39,11 @@ function buildWorksheetFromRows(
   rows: unknown[][],
   sheetId: string,
   sheetName: string,
-  workbook: XlsxWorkbookWithStyles,
-  worksheet: XLSX.WorkSheet,
-  styleIndexMap: Map<string, number>,
-  reportProgress: (progress: ParseExcelProgress) => void,
+  reportProgress: ParseProgressReporter,
   progressBase: number,
   progressSpan: number
 ): WorksheetData {
   const cells: WorksheetData['cells'] = {}
-  const styles: WorksheetData['styles'] = {}
   let maxRow = 0
   let maxCol = 0
   const totalRows = rows.length
@@ -68,80 +60,54 @@ function buildWorksheetFromRows(
       const colNum = c + 1
       maxRow = Math.max(maxRow, rowNum)
       maxCol = Math.max(maxCol, colNum)
-
-      const cellAddr = XLSX.utils.encode_cell({ r: r, c: c })
-      const xlsxCell = worksheet[cellAddr] as XLSX.CellObject | undefined
-      const importedStyle = resolveImportedCellStyle(
-        workbook,
-        rowNum,
-        colNum,
-        styleIndexMap,
-        xlsxCell?.s
-      )
-      const styleId = findOrCreateStyleId(styles, importedStyle)
-
-      const cell = { row: rowNum, col: colNum, value }
-      if (styleId) {
-        cells[`${rowNum}:${colNum}`] = { ...cell, styleId }
-      } else {
-        cells[`${rowNum}:${colNum}`] = cell
-      }
+      cells[`${rowNum}:${colNum}`] = { row: rowNum, col: colNum, value }
     }
 
     if (totalRows > 0 && (r % BUILD_CHUNK_ROWS === 0 || r === totalRows - 1)) {
       const ratio = (r + 1) / totalRows
-      const percent = Math.round(progressBase + ratio * progressSpan)
       reportProgress({
         phase: 'building',
-        percent,
+        percent: Math.round(progressBase + ratio * progressSpan),
         message: `正在写入「${sheetName}」${r + 1} / ${totalRows} 行…`,
       })
     }
   }
 
   const parsedRow = maxRow > 0 ? maxRow : totalRows
-  const parsedCol = maxCol
-
   return {
     sheetId,
     sheetName: sheetName || 'Sheet1',
     defaultRowHeight: 25,
     defaultColWidth: 100,
     rowCount: Math.max(DEFAULT_ROW_COUNT, parsedRow),
-    colCount: Math.max(DEFAULT_COL_COUNT, parsedCol),
-    styles,
+    colCount: Math.max(DEFAULT_COL_COUNT, maxCol),
+    styles: {},
     cells,
   }
 }
 
-/** 在 Worker 线程中解析 Excel buffer → 多 sheet workbook 快照 */
-export function parseExcelBufferCore(
+/** .xls buffer → WorkbookData（仅值） */
+export function parseSheetJsBuffer(
   buffer: ArrayBuffer,
-  reportProgress: (progress: ParseExcelProgress) => void
-): ExcelImportWorkbook {
-  if (!buffer.byteLength) {
-    throw new Error('文件为空或无法读取')
-  }
-
+  reportProgress: ParseProgressReporter
+): WorkbookData {
   reportProgress({
     phase: 'reading',
     percent: 5,
-    message: '正在读取工作簿…',
+    message: '正在读取 .xls 工作簿（仅导入值）…',
   })
 
   let workbook: XLSX.WorkBook
   try {
     workbook = XLSX.read(buffer, READ_WORKBOOK_OPTIONS)
   } catch {
-    throw new Error('无法解析 Excel 文件，请确认文件未损坏')
+    throw new Error('无法解析 .xls 文件，请确认文件未损坏')
   }
 
   const sheetNames = workbook.SheetNames
   if (sheetNames.length === 0) {
     throw new Error('未找到可导入的工作表')
   }
-
-  const styledWorkbook = workbook as XlsxWorkbookWithStyles
 
   const sheets: Record<string, WorksheetData> = {}
   const sheetOrder: string[] = []
@@ -153,8 +119,6 @@ export function parseExcelBufferCore(
     const sheetName = sheetNames[index]
     const worksheet = workbook.Sheets[sheetName]
     if (!worksheet) continue
-
-    const styleIndexMap = buildCellStyleIndexMap(styledWorkbook, index)
 
     const sheetId = `import_${String(index + 1).padStart(3, '0')}`
     const progressBase =
@@ -178,9 +142,6 @@ export function parseExcelBufferCore(
       rows,
       sheetId,
       sheetName,
-      styledWorkbook,
-      worksheet,
-      styleIndexMap,
       reportProgress,
       progressBase,
       progressSpan * 0.85
@@ -192,11 +153,7 @@ export function parseExcelBufferCore(
     throw new Error('未找到可导入的工作表')
   }
 
-  reportProgress({
-    phase: 'done',
-    percent: 100,
-    message: '解析完成',
-  })
+  reportProgress({ phase: 'done', percent: 100, message: '解析完成' })
 
   return {
     activeSheetId: sheetOrder[0],

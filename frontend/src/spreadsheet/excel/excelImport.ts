@@ -1,32 +1,36 @@
 /**
- * Excel 导入门面：主线程通过 Web Worker 调用 excelImportCore
+ * Excel 导入门面：主线程通过 Web Worker 解析
+ * - .xlsx：ExcelJS（值 + 样式）
+ * - .xls：SheetJS（仅值）
  */
 
-import {
-  ExcelParseError,
-  type ExcelImportWorkbook,
-  type ExcelImportWorkerRequest,
-  type ExcelImportWorkerResponse,
-  type ParseExcelOptions,
-} from './excelImportTypes'
+import type { WorkbookData } from '@/spreadsheet/model/types'
 
-export {
-  ExcelParseError,
-  type ExcelImportWorkbook,
-  type ParseExcelOptions,
-  type ParseExcelProgress,
-  type ParseExcelPhase,
-} from './excelImportTypes'
+export class ExcelParseError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options)
+    this.name = 'ExcelParseError'
+  }
+}
 
 /**
  * 将 Excel 二进制内容解析为多 sheet workbook 快照（在 Web Worker 中执行）。
  *
  * @param buffer - 由 `file.arrayBuffer()` 得到的 ArrayBuffer（会 transfer 到 Worker）
+ * @param fileName - 用于区分 .xls（仅值）与 .xlsx（ExcelJS 含样式）
  */
 export function parseExcelFromBuffer(
   buffer: ArrayBuffer,
-  options?: ParseExcelOptions
-): Promise<ExcelImportWorkbook> {
+  fileName: string,
+  options?: {
+    onProgress?: (progress: {
+      phase: 'reading' | 'converting' | 'building' | 'done'
+      percent: number
+      message: string
+    }) => void
+    signal?: AbortSignal
+  }
+): Promise<WorkbookData> {
   const { onProgress, signal } = options ?? {}
 
   if (!buffer.byteLength) {
@@ -60,7 +64,18 @@ export function parseExcelFromBuffer(
 
     signal?.addEventListener('abort', onAbort)
 
-    worker.onmessage = (event: MessageEvent<ExcelImportWorkerResponse>) => {
+    worker.onmessage = (
+      event: MessageEvent<
+        | {
+            type: 'progress'
+            phase: 'reading' | 'converting' | 'building' | 'done'
+            percent: number
+            message: string
+          }
+        | { type: 'done'; workbook: WorkbookData }
+        | { type: 'error'; message: string }
+      >
+    ) => {
       const msg = event.data
       if (msg.type === 'progress') {
         onProgress?.({
@@ -85,7 +100,6 @@ export function parseExcelFromBuffer(
       })
     }
 
-    const request: ExcelImportWorkerRequest = { type: 'parse', buffer }
-    worker.postMessage(request, [buffer])
+    worker.postMessage({ type: 'parse', buffer, fileName }, [buffer])
   })
 }

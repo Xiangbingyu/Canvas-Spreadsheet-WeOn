@@ -2,9 +2,12 @@ import { useState } from 'react'
 import { Modal, Radio, Space, Typography, message } from 'antd'
 import { useSelector } from 'react-redux'
 import type { RootState } from '@/spreadsheet/store'
-import { exportWorkbookToExcel, canPickExportDirectory } from '@/spreadsheet/excel/excelExport'
-import { sanitizeExcelFileName } from '@/spreadsheet/excel/excelExportCore'
-import type { ExcelExportScope } from '@/spreadsheet/excel/excelExportTypes'
+import {
+  exportWorkbookToExcel,
+  canPickExportDirectory,
+  type ExcelExportScope,
+} from '@/spreadsheet/excel/excelExport'
+import { sanitizeExcelFileName } from '@/spreadsheet/excel/excelExportExcelJS'
 
 type ExportExcelModalProps = {
   open: boolean

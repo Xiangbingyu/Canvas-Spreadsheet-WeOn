@@ -1,24 +1,52 @@
 /**
- * Excel 导入 Web Worker：在后台线程执行 xlsx 解析，避免阻塞主线程
+ * Excel 导入 Web Worker（后台线程解析，避免阻塞主线程）
+ *
+ * - .xlsx / .xlsm：ExcelJS（值 + 样式）
+ * - .xls：SheetJS（仅值）
  */
 
-import { parseExcelBufferCore } from './excelImportCore'
-import type { ExcelImportWorkerRequest, ExcelImportWorkerResponse } from './excelImportTypes'
+import type { WorkbookData } from '@/spreadsheet/model/types'
+import { parseXlsxBufferWithExcelJS } from './excelImportExcelJS'
+import { parseSheetJsBuffer } from './excelImportSheetJS'
 
-self.onmessage = (event: MessageEvent<ExcelImportWorkerRequest>) => {
+function isLegacyXlsFileName(fileName: string): boolean {
+  const lower = fileName.toLowerCase()
+  return lower.endsWith('.xls') && !lower.endsWith('.xlsx') && !lower.endsWith('.xlsm')
+}
+//解析Excel文件核心逻辑
+async function parseExcelBuffer(
+  buffer: ArrayBuffer,
+  fileName: string,
+  reportProgress: (progress: {
+    phase: 'reading' | 'converting' | 'building' | 'done'
+    percent: number
+    message: string
+  }) => void
+): Promise<WorkbookData> {
+  if (!buffer.byteLength) {
+    throw new Error('文件为空或无法读取')
+  }
+  //判断是否是.xls文件
+  if (isLegacyXlsFileName(fileName)) {
+    return parseSheetJsBuffer(buffer, reportProgress)
+  }
+
+  return parseXlsxBufferWithExcelJS(buffer, reportProgress)
+}
+
+self.onmessage = async (
+  event: MessageEvent<{ type: 'parse'; buffer: ArrayBuffer; fileName: string }>
+) => {
   const { data } = event
   if (data.type !== 'parse') return
 
   try {
-    const workbook = parseExcelBufferCore(data.buffer, (progress) => {
-      const msg: ExcelImportWorkerResponse = { type: 'progress', ...progress }
-      self.postMessage(msg)
+    const workbook = await parseExcelBuffer(data.buffer, data.fileName, (progress) => {
+      self.postMessage({ type: 'progress', ...progress })
     })
-    const done: ExcelImportWorkerResponse = { type: 'done', workbook }
-    self.postMessage(done)
+    self.postMessage({ type: 'done', workbook })
   } catch (error) {
     const message = error instanceof Error ? error.message : '工作表转换失败'
-    const err: ExcelImportWorkerResponse = { type: 'error', message }
-    self.postMessage(err)
+    self.postMessage({ type: 'error', message })
   }
 }

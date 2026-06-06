@@ -3,11 +3,7 @@ import { Modal, Typography, Upload, message } from 'antd'
 import type { UploadFile, UploadProps } from 'antd'
 import { Loading } from '@/components/Loading/Loading'
 import { ApiError } from '@/services/httpAPI'
-import {
-  ExcelParseError,
-  parseExcelFromBuffer,
-  type ParseExcelProgress,
-} from '@/spreadsheet/excel/excelImport'
+import { ExcelParseError, parseExcelFromBuffer } from '@/spreadsheet/excel/excelImport'
 import type { WorkbookImportSnapshot } from '@/spreadsheet/utils/fromServerSnapshot'
 
 export type ImportExcelMeta = {
@@ -17,20 +13,17 @@ export type ImportExcelMeta = {
 type ImportExcelModalProps = {
   open: boolean
   onClose: () => void
-  /** 解析完成后：POST /docs 创建新文档 */
   onImport: (workbook: WorkbookImportSnapshot, meta: ImportExcelMeta) => Promise<void>
-}
-
-const INITIAL_PROGRESS: ParseExcelProgress = {
-  phase: 'reading',
-  percent: 0,
-  message: '准备导入…',
 }
 
 export function ImportExcelModal({ open, onClose, onImport }: ImportExcelModalProps) {
   const [fileList, setFileList] = useState<UploadFile[]>([])
   const [importing, setImporting] = useState(false)
-  const [progress, setProgress] = useState<ParseExcelProgress>(INITIAL_PROGRESS)
+  const [progress, setProgress] = useState<{
+    phase: 'reading' | 'converting' | 'building' | 'done'
+    percent: number
+    message: string
+  }>({ phase: 'reading', percent: 0, message: '准备导入…' })
   const abortRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
@@ -48,11 +41,11 @@ export function ImportExcelModal({ open, onClose, onImport }: ImportExcelModalPr
     abortRef.current?.abort()
     abortRef.current = null
     setImporting(false)
-    setProgress(INITIAL_PROGRESS)
+    setProgress({ phase: 'reading', percent: 0, message: '准备导入…' })
   }
 
   const uploadProps: UploadProps = {
-    accept: '.xlsx,.xls,.csv',
+    accept: '.xlsx,.xls',
     maxCount: 1,
     beforeUpload: () => false,
     fileList,
@@ -84,14 +77,14 @@ export function ImportExcelModal({ open, onClose, onImport }: ImportExcelModalPr
     const controller = new AbortController()
     abortRef.current = controller
     setImporting(true)
-    setProgress(INITIAL_PROGRESS)
+    setProgress({ phase: 'reading', percent: 0, message: '准备导入…' })
 
     try {
       setProgress({ phase: 'reading', percent: 2, message: '正在读取文件…' })
       const buffer = await file.arrayBuffer()
       assertNotAborted(controller.signal)
 
-      const workbook = await parseExcelFromBuffer(buffer, {
+      const workbook = await parseExcelFromBuffer(buffer, file.name, {
         signal: controller.signal,
         onProgress: setProgress,
       })

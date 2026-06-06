@@ -1,8 +1,20 @@
 /**
- * Excel 导出门面：组装 workbook → 选择文件夹 → 写入 .xlsx
+ * Excel 导出门面：筛选范围 → 生成 .xlsx → 保存
  */
-import { buildXlsxWorkbook, sanitizeExcelFileName, xlsxWorkbookToBuffer } from './excelExportCore'
-import type { ExcelExportResult, ExcelExportWorkbookInput } from './excelExportTypes'
+import type { WorksheetData } from '@/spreadsheet/model/types'
+import { sanitizeExcelFileName, workbookDataToXlsxBuffer } from './excelExportExcelJS'
+
+export type ExcelExportScope = 'current' | 'all'
+
+export type ExcelExportWorkbookInput = {
+  title: string
+  scope: ExcelExportScope
+  activeSheetId: string
+  sheetOrder: string[]
+  sheets: Record<string, WorksheetData>
+}
+
+export type ExcelExportResult = 'saved' | 'cancelled'
 
 type WindowWithDirectoryPicker = Window & {
   showDirectoryPicker?: () => Promise<FileSystemDirectoryHandle>
@@ -21,30 +33,31 @@ async function pickExportDirectory(): Promise<FileSystemDirectoryHandle> {
   return w.showDirectoryPicker()
 }
 
+/** scope === 'current' 只导出当前表，'all' 导出全部 */
 function pickSheetsForExport(input: ExcelExportWorkbookInput): {
   sheetOrder: string[]
-  sheets: ExcelExportWorkbookInput['sheets']
+  sheets: Record<string, WorksheetData>
 } {
   if (input.scope === 'all') {
     return { sheetOrder: input.sheetOrder, sheets: input.sheets }
   }
 
-  const activeId = input.activeSheetId
-  const sheet = input.sheets[activeId]
+  const sheet = input.sheets[input.activeSheetId]
   if (!sheet) {
     return { sheetOrder: [], sheets: {} }
   }
-  return { sheetOrder: [activeId], sheets: { [activeId]: sheet } }
+  return { sheetOrder: [input.activeSheetId], sheets: { [input.activeSheetId]: sheet } }
 }
 
-/** 生成 .xlsx 二进制 */
-export function buildExcelExportBuffer(input: ExcelExportWorkbookInput): ArrayBuffer {
+/** 生成 .xlsx 二进制（筛选范围 → ExcelJS 五步流程） */
+export async function buildExcelExportBuffer(
+  input: ExcelExportWorkbookInput
+): Promise<ArrayBuffer> {
   const { sheetOrder, sheets } = pickSheetsForExport(input)
-  const wb = buildXlsxWorkbook(sheetOrder, sheets)
-  return xlsxWorkbookToBuffer(wb)
+  return workbookDataToXlsxBuffer(sheetOrder, sheets)
 }
 
-/** 使用 File System Access API 写入用户选择的文件夹；不支持时降级为浏览器下载 */
+/** 写入用户选择的文件夹；不支持 File System Access API 时降级为浏览器下载 */
 export async function saveExcelExportToDirectory(
   buffer: ArrayBuffer,
   title: string
@@ -60,7 +73,6 @@ export async function saveExcelExportToDirectory(
     return 'saved'
   }
 
-  // 降级：触发浏览器下载（无法选文件夹）
   const blob = new Blob([buffer], {
     type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   })
@@ -73,10 +85,12 @@ export async function saveExcelExportToDirectory(
   return 'saved'
 }
 
-/** 一键导出：组装 buffer + 保存到所选文件夹 */
+/** 一键导出 */
 export async function exportWorkbookToExcel(
   input: ExcelExportWorkbookInput
 ): Promise<ExcelExportResult> {
-  const buffer = buildExcelExportBuffer(input)
+  // 0. 按 scope 筛选 → 1-5. 生成 xlsx（见 excelExportExcelJS.ts）
+  const buffer = await buildExcelExportBuffer(input)
+  // 6. 选择文件夹保存 / 浏览器下载
   return saveExcelExportToDirectory(buffer, input.title)
 }
