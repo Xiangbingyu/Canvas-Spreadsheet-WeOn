@@ -28,9 +28,8 @@ export interface WorksheetData {
   cells: Record<string, Cell> // 键: "r:c"坐标字符串, 值: 单元格数据
 }
 
-/** 工作簿数据结构（Redux workbook slice 与领域层共用） */
+/** 工作簿数据结构 */
 export interface WorkbookData {
-  docTitle: string
   activeSheetId: string
   sheetOrder: string[]
   sheets: Record<string, WorksheetData>

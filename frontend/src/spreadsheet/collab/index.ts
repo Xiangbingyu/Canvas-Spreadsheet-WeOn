@@ -1,9 +1,6 @@
 export { CollabClient } from './CollabClient'
 export type { CollabCallbacks, CollabClientOptions, ConflictInfo } from './CollabClient'
 export type {
-  Snapshot,
-  Cell,
-  CellStyle,
   UserInfo,
   WsRequest,
   WsResponse,

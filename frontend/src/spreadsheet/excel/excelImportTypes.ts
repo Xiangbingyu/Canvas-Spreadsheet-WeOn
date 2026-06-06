@@ -1,11 +1,7 @@
-import type { WorksheetData } from '@/spreadsheet/model/types'
+import type { WorkbookData } from '@/spreadsheet/model/types'
 
-/** Excel 多表导入结果，与 fromServerSnapshot.WorkbookImportSnapshot 一致 */
-export type ExcelImportWorkbook = {
-  activeSheetId: string
-  sheetOrder: string[]
-  sheets: Record<string, WorksheetData>
-}
+/** Excel 多表导入结果，与 WorkbookData 一致 */
+export type ExcelImportWorkbook = WorkbookData
 
 export type ParseExcelPhase = 'reading' | 'converting' | 'building' | 'done'
 

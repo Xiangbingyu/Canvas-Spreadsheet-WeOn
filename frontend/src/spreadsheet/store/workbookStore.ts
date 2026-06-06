@@ -10,7 +10,6 @@ import { createEmptySheet, generateNextSheetId } from '@/spreadsheet/utils/creat
 import { applyUpdateCellToWorksheet } from '@/spreadsheet/utils/applyUpdateCell'
 
 const initialState: WorkbookData = {
-  docTitle: '',
   activeSheetId: '',
   sheetOrder: [],
   sheets: {},
@@ -21,15 +20,10 @@ const workbookSlice = createSlice({
   initialState,
   reducers: {
     initFromDoc(state, action: PayloadAction<WorkbookData>) {
-      const { docTitle, activeSheetId, sheetOrder, sheets } = action.payload
-      state.docTitle = docTitle
+      const { activeSheetId, sheetOrder, sheets } = action.payload
       state.activeSheetId = activeSheetId
       state.sheetOrder = sheetOrder
       state.sheets = sheets
-    },
-
-    setDocTitle(state, action: PayloadAction<string>) {
-      state.docTitle = action.payload
     },
 
     switchSheet(
@@ -97,14 +91,7 @@ const workbookSlice = createSlice({
       }
     },
 
-    importWorkbook(
-      state,
-      action: PayloadAction<{
-        activeSheetId: string
-        sheetOrder: string[]
-        sheets: Record<string, WorksheetData>
-      }>
-    ) {
+    importWorkbook(state, action: PayloadAction<WorkbookData>) {
       const { activeSheetId, sheetOrder, sheets } = action.payload
       if (sheetOrder.length === 0 || Object.keys(sheets).length === 0) return
 
@@ -158,7 +145,6 @@ const workbookSlice = createSlice({
 
 export const {
   initFromDoc,
-  setDocTitle,
   switchSheet,
   addSheet,
   applySheetAdded,

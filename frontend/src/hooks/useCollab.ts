@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useDispatch, useSelector } from 'react-redux'
 import { message as antMessage } from 'antd'
-import type { WorkbookSnapshot } from '@/services/httpType'
 import {
   CollabClient,
   type CollabCallbacks,
@@ -13,10 +12,9 @@ import type {
   CursorUpdate,
   SheetAdded,
   SheetImported,
-  Snapshot,
   TitleUpdated,
 } from '@/spreadsheet/model/collabProtocol'
-import type { Style } from '@/spreadsheet/model/types'
+import type { Style, WorkbookData } from '@/spreadsheet/model/types'
 import {
   applySheetAdded,
   importWorkbook,
@@ -41,9 +39,9 @@ import {
   updateRange,
 } from '@/spreadsheet/store/workSheetStore'
 import {
-  fromHttpDocWorkbookSnapshot,
-  fromServerSnapshot,
-  toServerWorkbookSnapshotFromPayload,
+  wireWorkbookToWorkbook,
+  wireSheetToWorksheet,
+  workbookToWireWorkbook,
   type WorkbookImportSnapshot,
 } from '@/spreadsheet/utils/fromServerSnapshot'
 
@@ -90,8 +88,8 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
 
   const callbacks = useMemo<CollabCallbacks>(
     () => ({
-      onSnapshot(snapshot: Snapshot, currentSeq: number) {
-        const workbook = fromHttpDocWorkbookSnapshot(snapshot as WorkbookSnapshot)
+      onSnapshot(snapshot: WorkbookData, currentSeq: number) {
+        const workbook = wireWorkbookToWorkbook(snapshot)
         applyWorkbookSnapshot(dispatch, workbook)
         dispatch(setCurrentSeq(currentSeq))
       },
@@ -136,7 +134,7 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
 
       onSheetImported(data: SheetImported['data']) {
         // 服务端 import_sheet 确认：以服务端快照为准校正本地（乐观更新后的对齐）
-        const workbook = fromHttpDocWorkbookSnapshot(data.snapshot as unknown as WorkbookSnapshot)
+        const workbook = wireWorkbookToWorkbook(data.snapshot)
         applyWorkbookSnapshot(dispatch, workbook)
         dispatch(setCurrentSeq(data.seq))
       },
@@ -145,9 +143,7 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
         dispatch(
           applySheetAdded({
             sheetOrder: data.sheetOrder,
-            sheet: fromServerSnapshot(
-              data.sheet as unknown as Parameters<typeof fromServerSnapshot>[0]
-            ),
+            sheet: wireSheetToWorksheet(data.sheet as Parameters<typeof wireSheetToWorksheet>[0]),
           })
         )
         const { activeSheetId, sheets } = store.getState().workbook
@@ -311,10 +307,7 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
 
       const client = clientRef.current
       if (!client) return false
-      client.importSheet(
-        toServerWorkbookSnapshotFromPayload(workbook) as unknown as Snapshot,
-        eventId
-      )
+      client.importSheet(workbookToWireWorkbook(workbook), eventId)
       return true
     },
     sendCursor: (sheetId: string, row: number, col: number) =>

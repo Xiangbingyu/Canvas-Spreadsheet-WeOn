@@ -2,12 +2,7 @@
 // 消息字段对齐: docs/接口文档.md v1
 // 数据结构对齐: @/spreadsheet/model/types.ts
 
-import type { Cell, Style } from '@/spreadsheet/model/types'
-import type { WorkbookSnapshot } from '@/services/httpType'
-
-export type Snapshot = WorkbookSnapshot
-export type CellStyle = Style
-export type { Cell }
+import type { WorkbookData } from '@/spreadsheet/model/types'
 
 export type ClientMessageType =
   | 'join'
@@ -87,7 +82,7 @@ export interface ImportSheetRequest {
   type: 'import_sheet'
   docId: string
   clientId: string
-  snapshot: Snapshot
+  snapshot: WorkbookData
   eventId?: string
 }
 
@@ -197,7 +192,7 @@ export interface JoinAck {
     docId: string
     clientId: string
     currentSeq: number
-    snapshot: Snapshot
+    snapshot: WorkbookData
     users: UserInfo[]
   }
 }
@@ -253,7 +248,7 @@ export interface SheetImported {
     docId: string
     clientId: string
     seq: number
-    snapshot: Snapshot
+    snapshot: WorkbookData
     canUndo: boolean
     canRedo: boolean
   }

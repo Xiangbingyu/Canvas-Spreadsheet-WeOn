@@ -8,7 +8,7 @@ import type { RootState } from '@/spreadsheet/store'
 import { buildDocShareUrl } from '@/spreadsheet/utils/shareLink'
 import { deriveDocTitleFromFileName } from '@/spreadsheet/utils/deriveDocTitleFromFileName'
 import {
-  toServerWorkbookSnapshotFromPayload,
+  workbookToWireWorkbook,
   type WorkbookImportSnapshot,
 } from '@/spreadsheet/utils/fromServerSnapshot'
 import { ExportExcelModal } from './ExportExcelModal'
@@ -74,7 +74,7 @@ export function Menubar({ onSetTitle }: MenubarProps) {
       const doc = await API.createDoc({
         title,
         createdBy: clientId,
-        snapshot: toServerWorkbookSnapshotFromPayload(workbook),
+        snapshot: workbookToWireWorkbook(workbook),
         eventId: `evt_import_${crypto.randomUUID()}`,
       })
       setImportOpen(false)

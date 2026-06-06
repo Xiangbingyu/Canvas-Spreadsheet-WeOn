@@ -14,15 +14,15 @@ import type {
   ColDeleted,
   RangeValuesUpdated,
   UserInfo,
-  Snapshot,
 } from '../model/collabProtocol'
+import type { WorkbookData } from '../model/types'
 import { OfflineQueue, type StoredOp } from './offlineQueue'
 
 // ===== 回调接口 =====
 
 export interface CollabCallbacks {
   /** join_ack 返回全量快照 */
-  onSnapshot: (snapshot: Snapshot, currentSeq: number) => void
+  onSnapshot: (snapshot: WorkbookData, currentSeq: number) => void
   /** 单元格被更新（别人或自己的操作被服务端确认） */
   onCellUpdated: (data: CellUpdated['data']) => void
   /** batch_set_cell 批量更新（统一 patch 或逐格 updates） */
@@ -285,7 +285,7 @@ export class CollabClient {
     })
   }
 
-  importSheet(snapshot: Snapshot, eventId?: string): void {
+  importSheet(snapshot: WorkbookData, eventId?: string): void {
     this.send({
       type: 'import_sheet',
       docId: this.docId,
