@@ -80,11 +80,28 @@ function styleFromServerPayload(
   return undefined
 }
 
+function toCellLabel(row: number, col: number): string {
+  let label = ''
+  let c = col
+  while (c > 0) {
+    c--
+    label = String.fromCharCode(65 + (c % 26)) + label
+    c = Math.floor(c / 26)
+  }
+  return `${label}${row}`
+}
+
 export function useCollab({ url, docId, clientId, userName, userColor }: UseCollabOptions) {
   const dispatch = useDispatch()
   const sheetId = useSelector((s: RootState) => s.workSheet.sheetId)
   const clientRef = useRef<CollabClient | null>(null)
   const [conflicts, setConflicts] = useState<ConflictInfo[] | null>(null)
+
+  // Bug 4: 追踪刚重连/新加入的用户，为他们的回放操作显示通知
+  const prevOnlineIdsRef = useRef<Set<string>>(new Set())
+  const recentlyJoinedRef = useRef<
+    Map<string, { name: string; timer: ReturnType<typeof setTimeout> }>
+  >(new Map())
 
   const callbacks = useMemo<CollabCallbacks>(
     () => ({
@@ -106,6 +123,13 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
           })
         )
         applyCollabSeqMeta(dispatch, data as { seq: number } & Record<string, unknown>)
+        // Bug 4: 刚重连用户回放离线操作时显示通知
+        if (data.clientId !== clientId) {
+          const joined = recentlyJoinedRef.current.get(data.clientId)
+          if (joined) {
+            antMessage.info(`${joined.name} 修改了 ${toCellLabel(data.row, data.col)}`)
+          }
+        }
       },
 
       onBatchCellUpdated(data: BatchCellUpdated['data']) {
@@ -125,6 +149,14 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
           })
         )
         applyCollabSeqMeta(dispatch, data as { seq: number } & Record<string, unknown>)
+        // Bug 4: 刚重连用户批量回放通知
+        if (data.clientId !== clientId && data.updates.length > 0) {
+          const joined = recentlyJoinedRef.current.get(data.clientId)
+          if (joined) {
+            const cells = data.updates.map((u) => toCellLabel(u.row, u.col)).join('、')
+            antMessage.info(`${joined.name} 批量修改了 ${cells}`)
+          }
+        }
       },
 
       onTitleUpdated(data: TitleUpdated['data']) {
@@ -184,6 +216,10 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
           })
         )
         applyCollabSeqMeta(dispatch, data as { seq: number } & Record<string, unknown>)
+        if (data.clientId !== clientId) {
+          const joined = recentlyJoinedRef.current.get(data.clientId)
+          if (joined) antMessage.info(`${joined.name} 撤销了 ${toCellLabel(data.row, data.col)}`)
+        }
       },
 
       onRedoApplied(data) {
@@ -198,6 +234,10 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
           })
         )
         applyCollabSeqMeta(dispatch, data as { seq: number } & Record<string, unknown>)
+        if (data.clientId !== clientId) {
+          const joined = recentlyJoinedRef.current.get(data.clientId)
+          if (joined) antMessage.info(`${joined.name} 重做了 ${toCellLabel(data.row, data.col)}`)
+        }
       },
 
       onCursor(data: CursorUpdate['data']) {
@@ -214,24 +254,58 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
       onRowInserted(data) {
         dispatch(insertRow({ row: data.row }))
         dispatch(setCurrentSeq(data.seq))
+        if (data.clientId !== clientId) {
+          const joined = recentlyJoinedRef.current.get(data.clientId)
+          if (joined) antMessage.info(`${joined.name} 在第 ${data.row} 行前插入了一行`)
+        }
       },
 
       onRowDeleted(data) {
         dispatch(deleteRow({ row: data.row }))
         dispatch(setCurrentSeq(data.seq))
+        if (data.clientId !== clientId) {
+          const joined = recentlyJoinedRef.current.get(data.clientId)
+          if (joined) antMessage.info(`${joined.name} 删除了第 ${data.row} 行`)
+        }
       },
 
       onColInserted(data) {
         dispatch(insertCol({ col: data.col }))
         dispatch(setCurrentSeq(data.seq))
+        if (data.clientId !== clientId) {
+          const joined = recentlyJoinedRef.current.get(data.clientId)
+          const colLabel = String.fromCharCode(64 + data.col)
+          if (joined) antMessage.info(`${joined.name} 在 ${colLabel} 列前插入了一列`)
+        }
       },
 
       onColDeleted(data) {
         dispatch(deleteCol({ col: data.col }))
         dispatch(setCurrentSeq(data.seq))
+        if (data.clientId !== clientId) {
+          const joined = recentlyJoinedRef.current.get(data.clientId)
+          const colLabel = String.fromCharCode(64 + data.col)
+          if (joined) antMessage.info(`${joined.name} 删除了 ${colLabel} 列`)
+        }
       },
 
       onPresence(users) {
+        const prevIds = prevOnlineIdsRef.current
+        const currentIds = new Set(users.map((u) => u.clientId))
+        // 检测新加入/重连的用户（在 presence 列表里但之前不在）
+        for (const u of users) {
+          if (!prevIds.has(u.clientId) && u.clientId !== clientId) {
+            const joined = recentlyJoinedRef.current
+            if (joined.has(u.clientId)) {
+              clearTimeout(joined.get(u.clientId)!.timer)
+            }
+            const timer = setTimeout(() => {
+              joined.delete(u.clientId)
+            }, 5000)
+            joined.set(u.clientId, { name: u.name, timer })
+          }
+        }
+        prevOnlineIdsRef.current = currentIds
         dispatch(setOnlineUsers(users))
       },
 
@@ -246,21 +320,31 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
         if (status === 'connected') {
           dispatch(setSelf({ name: userName ?? '', color: userColor ?? '#3b82f6' }))
         }
-        if (status === 'disconnected') {
-          antMessage.error('连接失败，请检查网络后刷新页面重试')
-        }
       },
 
       onConflict(list) {
         setConflicts(list)
       },
     }),
-    [dispatch, userName, userColor]
+    [dispatch, userName, userColor, clientId]
   )
 
   const connect = useCallback(() => {
     if (clientRef.current) return
-    const client = new CollabClient({ url, docId, clientId, userName, userColor, callbacks })
+    const client = new CollabClient({
+      url,
+      docId,
+      clientId,
+      userName,
+      userColor,
+      callbacks,
+      readCellValue: (row, col) => store.getState().workSheet.cells[`${row}:${col}`]?.value ?? '',
+      getRemoteUserName: () => {
+        const { users, clientId: selfId } = store.getState().collab
+        const other = users.find((u) => u.clientId !== selfId)
+        return other?.name || '在线协作方'
+      },
+    })
     clientRef.current = client
     client.connect()
   }, [url, docId, clientId, userName, userColor, callbacks])
@@ -372,20 +456,30 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
     conflicts,
     resolveConflicts: (decisions: Array<{ row: number; col: number; keepMine: boolean }>) => {
       for (const d of decisions) {
-        if (d.keepMine && conflicts) {
-          const c = conflicts.find((x) => x.row === d.row && x.col === d.col)
-          if (c) {
-            clientRef.current?.setCell(
-              c.row,
-              c.col,
-              c.myValue,
-              c.mergedStyle as Record<string, unknown> | null,
-              store.getState().workSheet.sheetId,
-              clientRef.current.currentSeq
-            )
-          }
+        if (!conflicts) continue
+        const c = conflicts.find((x) => x.row === d.row && x.col === d.col)
+        if (!c) continue
+        if (d.keepMine) {
+          // 保留我的：重新发一次我的值覆盖远端
+          clientRef.current?.setCell(
+            c.row,
+            c.col,
+            c.myValue,
+            c.mergedStyle as Record<string, unknown> | null,
+            store.getState().workSheet.sheetId,
+            clientRef.current.currentSeq
+          )
+        } else {
+          // 保留别人的：发远端值覆盖我的 replay
+          clientRef.current?.setCell(
+            c.row,
+            c.col,
+            c.remoteValue,
+            null,
+            store.getState().workSheet.sheetId,
+            clientRef.current.currentSeq
+          )
         }
-        // 保留别人的：不动（远端值已在 store 中）
       }
       setConflicts(null)
     },

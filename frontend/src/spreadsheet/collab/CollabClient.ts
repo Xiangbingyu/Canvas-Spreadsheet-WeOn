@@ -66,6 +66,7 @@ export interface ConflictInfo {
   myValue: string
   myTimestamp: number
   remoteValue: string
+  remoteUserName: string
   styleConflicts: Array<{ key: string; myValue: unknown; remoteValue: unknown }>
   mergedStyle: Record<string, unknown> | null
 }
@@ -74,11 +75,13 @@ interface ReplayTracker {
   row: number
   col: number
   myValue: string
+  remoteValue: string
   myTimestamp: number
-  eventId: string
-  /** 记录该 op 被分配的第一个 seq，用于检测间隙 */
-  resolvedSeq?: number
+  isConflict: boolean
+  resolved: boolean
 }
+
+export type CellValueReader = (row: number, col: number) => string
 
 // ===== CollabClient =====
 
@@ -92,6 +95,10 @@ export interface CollabClientOptions {
   reconnectInterval?: number
   /** 拦截 send，消息不发 WebSocket 而是交给此回调（LocalStubServer 用） */
   onSend?: (msg: Record<string, unknown>) => void
+  /** P2-3: 读取当前单元格值（用于回放前保存远端值） */
+  readCellValue?: CellValueReader
+  /** P2-3: 获取除自己外的在线用户名 */
+  getRemoteUserName?: () => string
 }
 
 export class CollabClient {
@@ -123,6 +130,8 @@ export class CollabClient {
   private pageHidden = false
 
   private onSend?: (msg: Record<string, unknown>) => void
+  private readCellValue?: CellValueReader
+  private getRemoteUserName?: () => string
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private destroyed = false
 
@@ -135,6 +144,8 @@ export class CollabClient {
     this.callbacks = options.callbacks
     this.baseReconnectInterval = options.reconnectInterval ?? 1000
     this.onSend = options.onSend
+    this.readCellValue = options.readCellValue
+    this.getRemoteUserName = options.getRemoteUserName
 
     // P2-2: 监听页面可见性，后台暂停重连
     if (typeof document !== 'undefined') {
@@ -146,6 +157,22 @@ export class CollabClient {
           this.clearReconnectTimer()
           this.connect()
         }
+      })
+    }
+    // 监听浏览器网络状态 (DevTools Network Offline / 断网)
+    if (typeof window !== 'undefined') {
+      window.addEventListener('offline', () => {
+        this.callbacks.onConnectionChange('disconnected')
+      })
+      window.addEventListener('online', () => {
+        if (this.destroyed) return
+        if (this.ws) {
+          this.ws.onclose = null
+          this.ws.close()
+          this.ws = null
+        }
+        this.retryCount = 0
+        this.connect()
       })
     }
   }
@@ -169,6 +196,7 @@ export class CollabClient {
       }
       this.retryCount = 0
       this.storageWarned = false
+      this.exposeForDemo()
       this.callbacks.onConnectionChange('connected')
       this.join()
       this.flushSendQueue()
@@ -601,6 +629,33 @@ export class CollabClient {
     }
   }
 
+  /** 暴露实例到 window 方便演示时手动测试 */
+  private exposeForDemo(): void {
+    if (typeof window !== 'undefined') {
+      ;(window as unknown as Record<string, unknown>).__collabClient = this
+    }
+  }
+
+  /** Demo: 模拟离线（断开且不重连） */
+  goOffline(): void {
+    this.destroyed = true
+    this.clearReconnectTimer()
+    this.clearReconnectDebounce()
+    if (this.ws) {
+      // 显式传入 close code 1000 + reason，确保服务端收到 close 帧后广播 presence
+      this.ws.close(1000, 'Manual offline')
+      this.ws = null
+    }
+    this.callbacks.onConnectionChange('disconnected')
+  }
+
+  /** Demo: 从离线恢复 */
+  goOnline(): void {
+    this.destroyed = false
+    this.retryCount = 0
+    this.connect()
+  }
+
   private clearReconnectDebounce(): void {
     if (this.reconnectDebounceTimer) {
       clearTimeout(this.reconnectDebounceTimer)
@@ -655,8 +710,14 @@ export class CollabClient {
       return value === undefined ? null : value
     })
     if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(data)
-      return
+      // 浏览器 DevTools Network Offline 时 ws.readyState 仍可能是 OPEN，但消息实际无法到达服务端
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        this.callbacks.onConnectionChange('disconnected')
+        // 不 return，继续走下面的离线队列逻辑
+      } else {
+        this.ws.send(data)
+        return
+      }
     }
     // 首次握手期 → 内存队列；曾经连上过 → localStorage 持久化
     if (this.seq > 0) {
@@ -691,6 +752,22 @@ export class CollabClient {
         if (!ok2) this.warnStorageFull()
         return
       }
+      if (
+        msg.type === 'insert_row' ||
+        msg.type === 'delete_row' ||
+        msg.type === 'insert_col' ||
+        msg.type === 'delete_col'
+      ) {
+        const m = msg as Record<string, unknown>
+        OfflineQueue.enqueueRowCol({
+          type: msg.type,
+          docId: this.docId,
+          sheetId: (m.sheetId as string) ?? '',
+          index: ((m.row ?? m.col) as number) ?? 1,
+          timestamp: Date.now(),
+        })
+        return
+      }
     }
     this.sendQueue.push(data)
   }
@@ -711,11 +788,15 @@ export class CollabClient {
     }
   }
 
+  // P2-3: 记录 replay 开始时的基础 seq，用于单操作冲突检测
+  private replayBaseSeq = 0
+
   private replayOfflineQueue(): void {
     const ops = OfflineQueue.dequeueAll()
     if (ops.length === 0) return
 
     // P2-3: 清理旧的追踪和定时器
+    this.replayBaseSeq = this.seq
     this.replayTrackers = []
     if (this.replayConflictTimer) {
       clearTimeout(this.replayConflictTimer)
@@ -729,13 +810,20 @@ export class CollabClient {
         continue
       }
       if (op.type === 'set_cell') {
+        // 过滤无效 op：无时间戳(旧数据)或 5 秒内新产生的(flushPending 假离线)
+        if (!op.timestamp || Date.now() - op.timestamp < 5000) continue
         const eventId = crypto.randomUUID()
+        const isConflict = this.replayBaseSeq > op.baseSeq
+        // 补发前读当前格子的值 = join_ack 快照后的远端值
+        const remoteValue = this.readCellValue?.(op.row, op.col) ?? ''
         this.replayTrackers.push({
           row: op.row,
           col: op.col,
           myValue: op.value,
+          remoteValue,
           myTimestamp: op.timestamp || Date.now(),
-          eventId,
+          isConflict,
+          resolved: false,
         })
         this.send({
           type: 'set_cell',
@@ -760,6 +848,21 @@ export class CollabClient {
           ...(op.value !== undefined ? { value: op.value } : {}),
           ...(op.style !== undefined ? { style: op.style } : {}),
         })
+      } else if (
+        op.type === 'insert_row' ||
+        op.type === 'delete_row' ||
+        op.type === 'insert_col' ||
+        op.type === 'delete_col'
+      ) {
+        if (!op.timestamp || Date.now() - op.timestamp < 5000) continue
+        const isRow = op.type === 'insert_row' || op.type === 'delete_row'
+        this.send({
+          type: op.type,
+          docId: this.docId,
+          clientId: this.clientId,
+          sheetId: op.sheetId,
+          [isRow ? 'row' : 'col']: op.index,
+        })
       }
     }
 
@@ -774,19 +877,21 @@ export class CollabClient {
     for (const op of remaining) {
       if (op.type === 'set_cell') {
         OfflineQueue.enqueue(op)
-      } else {
+      } else if (op.type === 'batch_set_cell') {
         OfflineQueue.enqueueBatch(op)
+      } else {
+        OfflineQueue.enqueueRowCol(op)
       }
     }
   }
 
-  /** P2-3: cell_updated 回执时记录 replayed op 的 seq（按 row/col 匹配，不依赖服务端回显 eventId） */
+  /** P2-3: cell_updated 回执时标记 tracker 已确认 */
   private trackReplayAck(data: CellUpdated['data']): void {
     const tracker = this.replayTrackers.find((t) => t.row === data.row && t.col === data.col)
-    if (!tracker || tracker.resolvedSeq !== undefined) return
-    tracker.resolvedSeq = data.seq
+    if (!tracker || tracker.resolved) return
+    tracker.resolved = true
     // 全部收齐 → 立即判断
-    if (this.replayTrackers.every((t) => t.resolvedSeq !== undefined)) {
+    if (this.replayTrackers.every((t) => t.resolved)) {
       if (this.replayConflictTimer) {
         clearTimeout(this.replayConflictTimer)
         this.replayConflictTimer = null
@@ -797,30 +902,21 @@ export class CollabClient {
 
   /** P2-3: 收集冲突并回调 */
   private resolveConflicts(): void {
-    if (this.replayTrackers.length === 0) return
     const conflicts: ConflictInfo[] = []
-    // 按 seq 排序，检测间隙
-    const sorted = [...this.replayTrackers]
-      .filter((t) => t.resolvedSeq !== undefined)
-      .sort((a, b) => (a.resolvedSeq ?? 0) - (b.resolvedSeq ?? 0))
-
-    for (let i = 1; i < sorted.length; i++) {
-      const prev = sorted[i - 1]
-      const curr = sorted[i]
-      // seq 间距 > 1 → 中间有操作插入 → 当前格可能冲突
-      if ((curr.resolvedSeq ?? 0) - (prev.resolvedSeq ?? 0) > 1) {
+    for (const t of this.replayTrackers) {
+      if (t.isConflict) {
         conflicts.push({
-          row: curr.row,
-          col: curr.col,
-          myValue: curr.myValue,
-          myTimestamp: curr.myTimestamp,
-          remoteValue: '', // 服务端未回传别人的值，弹窗显示"未知"
+          row: t.row,
+          col: t.col,
+          myValue: t.myValue,
+          myTimestamp: t.myTimestamp,
+          remoteValue: t.remoteValue,
+          remoteUserName: this.getRemoteUserName?.() ?? '在线协作方',
           styleConflicts: [],
           mergedStyle: null,
         })
       }
     }
-
     this.replayTrackers = []
     if (conflicts.length > 0) {
       this.callbacks.onConflict?.(conflicts)

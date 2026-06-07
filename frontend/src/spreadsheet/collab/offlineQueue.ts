@@ -23,7 +23,15 @@ export interface QueuedBatchOp {
   style?: Record<string, unknown> | null
 }
 
-export type StoredOp = QueuedOp | QueuedBatchOp
+export interface QueuedRowColOp {
+  type: 'insert_row' | 'delete_row' | 'insert_col' | 'delete_col'
+  docId: string
+  sheetId: string
+  index: number
+  timestamp: number
+}
+
+export type StoredOp = QueuedOp | QueuedBatchOp | QueuedRowColOp
 
 function loadAll(): StoredOp[] {
   try {
@@ -51,6 +59,13 @@ export const OfflineQueue = {
     // 去重：同一 cell 的旧操作被新操作覆盖
     const idx = ops.findIndex((o) => o.type === 'set_cell' && o.row === op.row && o.col === op.col)
     if (idx >= 0) ops.splice(idx, 1)
+    ops.push(op)
+    while (ops.length > MAX_QUEUE_SIZE) ops.shift()
+    return saveAll(ops)
+  },
+
+  enqueueRowCol(op: QueuedRowColOp): boolean {
+    const ops = loadAll()
     ops.push(op)
     while (ops.length > MAX_QUEUE_SIZE) ops.shift()
     return saveAll(ops)
