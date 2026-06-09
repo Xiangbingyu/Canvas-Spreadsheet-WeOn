@@ -47,6 +47,7 @@ export function SpreadsheetWorkspace() {
     setTitle,
     addSheet,
     setBatchCells,
+    setRangeValues,
     getClient,
     sendCursor,
     conflicts,
@@ -107,7 +108,7 @@ export function SpreadsheetWorkspace() {
   }, [docId, clientId, userName, connect, disconnect])
 
   const onCommitCell = useCommitCell(setCell)
-  const onCommitBatch = useCommitBatch(setBatchCells)
+  const onCommitBatch = useCommitBatch(setBatchCells, setRangeValues)
   const { commitWithHistory, commitBatchWithHistory, executeRowColWithHistory, undo, redo } =
     useUnifiedHistory(onCommitCell, onCommitBatch, getClient())
 

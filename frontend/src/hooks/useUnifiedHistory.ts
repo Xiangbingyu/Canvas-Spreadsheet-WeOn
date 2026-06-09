@@ -15,20 +15,12 @@ import {
   type BatchCellOperation,
 } from '@/spreadsheet/history'
 import { insertRow, deleteRow, insertCol, deleteCol } from '@/spreadsheet/store/workSheetStore'
-import { generateStyleId } from '@/spreadsheet/utils/generateStyleId'
 import type { RootState } from '@/spreadsheet/store'
 import type { Style } from '@/spreadsheet/model/types'
 import type { Cell } from '@/spreadsheet/model/types'
 import type { CommitCellFn } from '@/hooks/useSpreadsheetInteraction'
 import type { BatchCommitFn } from '@/hooks/useCommitCell'
 import type { CollabClient } from '@/spreadsheet/collab/CollabClient'
-
-/**
- * 批量回放多组消息时的发送间隔（毫秒）。
- * 后端每条 batch_set_cell 都要抢文档锁并跑一次事务，锁等待超时 3s。
- * 串行间隔发送可错开抢锁时机，避免并发抢锁超时。取值需 < 后端锁 TTL 且足够小不影响体感。
- */
-const GROUP_SEND_GAP_MS = 60
 
 export interface UseUnifiedHistoryResult {
   /** 包装后的提交函数：执行写入并记录历史。替代直接调用 onCommitCell。 */
@@ -46,7 +38,7 @@ export interface UseUnifiedHistoryResult {
 
 /**
  * @param onCommitCell 真实提交（走 WS）。缺省时回放也无处可去，undo/redo 变为 no-op。
- * @param onCommitBatch 批量提交（走 WS batch_set_cell）。缺省时用 onCommitCell 逐个提交。
+ * @param onCommitBatch 批量提交（batch_set_cell / set_range_values）。缺省时用 onCommitCell 逐个提交。
  * @param collabClient 协同客户端，用于发送行列操作到后端。缺省时行列操作只更新本地。
  */
 export function useUnifiedHistory(
@@ -115,82 +107,26 @@ export function useUnifiedHistory(
     commitRef.current?.(row, col, value, style)
   }, [])
 
-  /**
-   * 批量回放一组单元格操作：把每格还原成指定快照（undo→before / redo→after）。
-   * batch_set_cell 协议是「一批坐标 + 一个统一 patch」，无法表达 N 格还原成 N 个不同状态，
-   * 因此先按目标快照分组，每组内状态一致 → 各发一条 batch；
-   * 无批量提交通道（batchCommitRef 缺省）时退回逐格 rawCommit。
-   *
-   * 分组维度按操作类型自适应（P1 关键优化）：
-   * - 纯样式操作（批量内每格 before.value === after.value，内容未变，如 Toolbar 改样式）：
-   *   只按 style 分组（key = styleId）。原样式相同的格子合成一组，
-   *   组数从 N（各格内容不同）降到「样式种类数」（通常为 1）。
-   *   useCommitBatch 检测到组内 value 不全相同时只发 style（后端保留各格原值），
-   *   既正确还原样式、又不误改内容，根治「各格内容不同 + 统一样式 + 撤回」的 doc lock 风暴。
-   * - 含内容变更的操作（如粘贴）：仍按 value+style 分组，必须还原各格 value。
-   *
-   * 多组消息「串行间隔发送」而非同步循环连发：后端 WS 收到一条就立即异步处理、
-   * 每条 batch_set_cell 都要抢同一把文档锁（withDocLock，等待超时仅 3s）。
-   * 同步循环连发 N 条会让后端并发抢锁、部分超时报 5000 + 对应格子还原失败。
-   * 改为按 GROUP_SEND_GAP_MS 间隔逐条发送，错开抢锁时机。单组（最常见）瞬发无延迟。
-   */
+  /** 批量回放：由 useCommitBatch 按快照是否一致选择 batch_set_cell / set_range_values */
   const replayBatch = useCallback(
     (operations: CellOperation[], pick: (op: CellOperation) => CellSnapshot) => {
       if (operations.length === 0) return
 
-      if (!batchCommitRef.current) {
-        batch(() => {
-          for (const op of operations) {
-            const snap = pick(op)
-            rawCommit(op.row, op.col, snap.value, snap.style)
-          }
-        })
-        return
-      }
-
-      // 纯样式操作：整批每格内容都没变（before.value === after.value），
-      // 撤回/重做只需还原 style，不必碰 value → 只按 styleId 分组。
-      const isStyleOnly = operations.every((op) => op.before.value === op.after.value)
-
-      // 按目标快照分组。纯样式按 styleId；含内容变更按 value+styleId。
-      // 使用 generateStyleId 确保 style key 稳定（不依赖属性顺序）。
-      const groups = new Map<
-        string,
-        Array<{ row: number; col: number; value: string; style?: Style }>
-      >()
-      for (const op of operations) {
+      const entries = operations.map((op) => {
         const snap = pick(op)
-        const styleKey = generateStyleId(snap.style ?? {})
-        const key = isStyleOnly ? styleKey : `${snap.value}|${styleKey}`
-        const group = groups.get(key)
-        const entry = { row: op.row, col: op.col, value: snap.value, style: snap.style }
-        if (group) {
-          group.push(entry)
-        } else {
-          groups.set(key, [entry])
-        }
-      }
+        return { row: op.row, col: op.col, value: snap.value, style: snap.style }
+      })
 
-      const groupList = Array.from(groups.values())
-
-      // 单组：直接发送，无需排队（最常见的「整片刷同一样式撤回」走这条）
-      if (groupList.length <= 1) {
-        if (groupList[0]) batchCommitRef.current(groupList[0])
+      if (batchCommitRef.current) {
+        batchCommitRef.current(entries)
         return
       }
 
-      // 多组：串行间隔发送，错开后端抢锁时机，避免并发抢同一把文档锁而超时
-      let index = 0
-      const sendNext = () => {
-        const commit = batchCommitRef.current
-        if (!commit || index >= groupList.length) return
-        commit(groupList[index])
-        index += 1
-        if (index < groupList.length) {
-          setTimeout(sendNext, GROUP_SEND_GAP_MS)
+      batch(() => {
+        for (const e of entries) {
+          rawCommit(e.row, e.col, e.value, e.style)
         }
-      }
-      sendNext()
+      })
     },
     [rawCommit]
   )

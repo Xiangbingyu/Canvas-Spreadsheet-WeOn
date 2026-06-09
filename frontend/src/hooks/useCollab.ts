@@ -431,12 +431,40 @@ export function useCollab({ url, docId, clientId, userName, userColor }: UseColl
       client.setBatchCells(sheetId, client.currentSeq, targets, patch)
     },
     setRangeValues: (
-      cells: Array<{ row: number; col: number; value?: string; styleId?: string | null }>,
+      targetSheetId: string,
+      cells: Array<{ row: number; col: number; value: string; styleId?: string | null }>,
       styles?: Record<string, Record<string, unknown>>
     ) => {
+      // 乐观更新：与 setBatchCells 对称，先 updateRange 再发 WS
+      const sheet = store.getState().workSheet
+      dispatch(
+        updateRange({
+          sheetId: targetSheetId,
+          updates: cells.map((c) => {
+            let style: Style | null | undefined
+            if ('styleId' in c) {
+              if (c.styleId === null) {
+                style = null
+              } else if (c.styleId && styles?.[c.styleId]) {
+                style = styles[c.styleId] as Style
+              } else if (c.styleId && sheet.styles[c.styleId]) {
+                style = sheet.styles[c.styleId]
+              } else {
+                style = null
+              }
+            }
+            return {
+              row: c.row,
+              col: c.col,
+              value: c.value,
+              style,
+            }
+          }),
+        })
+      )
       const client = clientRef.current
       if (!client) return
-      client.setRangeValues(sheetId, client.currentSeq, cells, styles)
+      client.setRangeValues(targetSheetId, client.currentSeq, cells, styles)
     },
     insertRow: (sheetId: string, row: number) => {
       clientRef.current?.insertRow(sheetId, row)

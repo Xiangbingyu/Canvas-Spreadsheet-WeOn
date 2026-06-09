@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js",
+    "dev": "node server.js",
     "test": "node --test tests/**/*.test.js",
     "test:ci": "node --test tests/docs.test.js tests/testPage.test.js tests/ws.test.js",
     "test:ws": "node --test --test-concurrency=1 tests/ws.test.js",
