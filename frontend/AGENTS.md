@@ -89,9 +89,9 @@
 
 ---
 
-### 2.6 `spreadsheet/excel/` — Excel 导入导出
+### 2.6 `spreadsheet/excel/` — Excel 导入
 
-**职责**：`xlsx` 解析 / 导出，产出 `WorksheetData` 或接收 Store 数据写文件。
+**职责**：`xlsx` 解析，产出 `WorksheetData`；导出由后端 `GET /docs/:docId/export` 实现，前端 `services/exportAPI.ts` 触发下载。
 
 | 红线 | 禁止                                                                               |
 | ---- | ---------------------------------------------------------------------------------- |

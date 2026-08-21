@@ -35,6 +35,9 @@ lerna-debug.log*
 # Test / coverage
 coverage/
 
+# 大文件上传临时目录
+backend-js/uploads/
+
 # Claude Code 本地配置（不进 git）
 .claude/
 

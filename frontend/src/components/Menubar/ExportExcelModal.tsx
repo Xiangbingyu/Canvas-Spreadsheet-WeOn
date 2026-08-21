@@ -2,9 +2,7 @@ import { useState } from 'react'
 import { Modal, Radio, Space, Typography, message } from 'antd'
 import { useSelector } from 'react-redux'
 import type { RootState } from '@/spreadsheet/store'
-import { exportWorkbookToExcel, canPickExportDirectory } from '@/spreadsheet/excel/excelExport'
-import { sanitizeExcelFileName } from '@/spreadsheet/excel/excelExportCore'
-import type { ExcelExportScope } from '@/spreadsheet/excel/excelExportTypes'
+import { downloadDocExcel, type ExcelExportScope } from '@/services/exportAPI'
 
 type ExportExcelModalProps = {
   open: boolean
@@ -16,40 +14,27 @@ export function ExportExcelModal({ open, fileName, onClose }: ExportExcelModalPr
   const [scope, setScope] = useState<ExcelExportScope>('all')
   const [exporting, setExporting] = useState(false)
 
+  const docId = useSelector((s: RootState) => s.collab.docId)
   const activeSheetId = useSelector((s: RootState) => s.workbook.activeSheetId)
-  const sheetOrder = useSelector((s: RootState) => s.workbook.sheetOrder)
-  const sheets = useSelector((s: RootState) => s.workbook.sheets)
-
-  const displayFileName = `${sanitizeExcelFileName(fileName)}.xlsx`
 
   const handleExport = async () => {
+    if (!docId) {
+      message.warning('请先打开文档')
+      return
+    }
+
     setExporting(true)
     try {
-      const result = await exportWorkbookToExcel({
-        title: fileName,
+      const savedFileName = await downloadDocExcel({
+        docId,
         scope,
-        activeSheetId,
-        sheetOrder,
-        sheets,
+        activeSheetId: scope === 'current' ? activeSheetId : undefined,
       })
-
-      if (result === 'cancelled') {
-        message.info('已取消导出')
-        return
-      }
-
-      const folderHint = canPickExportDirectory()
-        ? '已保存到所选文件夹'
-        : '已下载到浏览器默认下载目录'
-      message.success(`${folderHint}：${displayFileName}`)
+      message.success(`已下载：${savedFileName}`)
       onClose()
     } catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError') {
-        message.info('已取消导出')
-        return
-      }
       console.error('[Excel export]', error)
-      message.error('导出失败，请重试')
+      message.error(error instanceof Error ? error.message : '导出失败，请重试')
     } finally {
       setExporting(false)
     }
@@ -69,12 +54,12 @@ export function ExportExcelModal({ open, fileName, onClose }: ExportExcelModalPr
     >
       <Space orientation="vertical" size="middle" className="w-full">
         <Typography.Text type="secondary">
-          将表格导出为 .xlsx。导出时将选择保存文件夹，文件名为文档标题。
+          将文档导出为 .xlsx，由服务端根据当前保存的数据生成文件。
         </Typography.Text>
 
         <div>
           <Typography.Text className="mb-2 block text-[13px]">文件名</Typography.Text>
-          <Typography.Text>{displayFileName}</Typography.Text>
+          <Typography.Text>{fileName.trim() || '未命名表格'}.xlsx</Typography.Text>
         </div>
 
         <div>

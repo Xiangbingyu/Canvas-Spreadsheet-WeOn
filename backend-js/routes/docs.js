@@ -3,6 +3,7 @@ const express = require('express')
 const { ERROR_CODES, getHttpStatusByErrorCode } = require('../protocol/errorCodes')
 const { isObject } = require('../protocol/validators')
 const docsService = require('../service/docsService')
+const excelExportService = require('../service/excelExportService')
 const { createHttpError, createHttpSuccess } = require('../utils/response')
 
 const router = express.Router()
@@ -17,6 +18,32 @@ router.get('/', async (req, res) => {
     })
 
     return res.json(createHttpSuccess(docs))
+  } catch (error) {
+    const errorCode = typeof error.code === 'number' ? error.code : ERROR_CODES.INTERNAL_ERROR
+
+    return res
+      .status(getHttpStatusByErrorCode(errorCode))
+      .json(createHttpError(errorCode, error.message || 'internal error', error.details || null))
+  }
+})
+
+router.get('/:docId/export', async (req, res) => {
+  try {
+    const { scope, activeSheetId } = excelExportService.validateExportQuery(req.query)
+    const { buffer, fileName } = await excelExportService.exportDocToExcel(req.params.docId, {
+      scope,
+      activeSheetId,
+    })
+
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    )
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`,
+    )
+    return res.send(buffer)
   } catch (error) {
     const errorCode = typeof error.code === 'number' ? error.code : ERROR_CODES.INTERNAL_ERROR
 

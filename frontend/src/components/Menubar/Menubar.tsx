@@ -14,6 +14,7 @@ import {
 import { ExportExcelModal } from './ExportExcelModal'
 import { ImportExcelModal } from './ImportExcelModal'
 import type { ImportExcelMeta } from './ImportExcelModal'
+import type { LargeExcelUploadMeta } from './ImportExcelModal'
 
 type MenubarProps = {
   /** 提交文档标题（WS set_title）；缺省时标题只读 */
@@ -106,6 +107,26 @@ export function Menubar({ onSetTitle }: MenubarProps) {
     }
   }
 
+  async function handleLargeFileUploaded(meta: LargeExcelUploadMeta) {
+    setImportingDoc(true)
+    try {
+      const docId = meta.result.docId
+      if (!docId) {
+        message.error('上传成功但未返回 docId')
+        return
+      }
+      setImportOpen(false)
+      navigate(`/doc/${encodeURIComponent(docId)}`)
+    } catch (error) {
+      const text =
+        error instanceof ApiError ? `${error.message} (code ${error.code})` : '大文件导入失败'
+      message.error(text)
+      throw error
+    } finally {
+      setImportingDoc(false)
+    }
+  }
+
   return (
     <header className="shrink-0 border-b border-[#dadce0] bg-white">
       <div className="flex items-stretch gap-2 px-3 py-1.5">
@@ -180,6 +201,8 @@ export function Menubar({ onSetTitle }: MenubarProps) {
         open={importOpen}
         onClose={() => setImportOpen(false)}
         onImport={handleImportExcel}
+        onLargeFileUploaded={handleLargeFileUploaded}
+        createdBy={clientId}
       />
       <CreateBlankSheetModal
         open={createModalOpen}
